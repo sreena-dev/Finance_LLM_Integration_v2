@@ -1,0 +1,108 @@
+.tbval { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.tbval__scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.tbval__inner { max-width: 880px; margin: 0 auto; padding: 22px 24px 48px; display: flex; flex-direction: column; gap: 16px; }
+
+.tbval__toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.tbval__title { margin: 0 0 4px; font-size: 16px; font-weight: 630; color: var(--navy-900); }
+.tbval__sub { margin: 0; font-size: 12.5px; color: var(--ink-500); max-width: 560px; }
+
+.tbval__loading { display: flex; align-items: center; gap: 9px; padding: 16px 4px; color: var(--ink-500); font-size: 13px; }
+
+.tbval__phase { display: flex; }
+
+.tbval-narrative { padding: 18px 20px; }
+.tbval-narrative .md { font-size: 13px; line-height: 1.65; }
+
+.tbval__stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.tbval__stat { padding: 10px 12px; background: var(--ink-50); border-radius: var(--radius); display: flex; flex-direction: column; gap: 3px; }
+.tbval__stat-label { font-size: 10.5px; color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.04em; }
+.tbval__stat-value { font-size: 16px; font-weight: 620; color: var(--navy-900); font-variant-numeric: tabular-nums; }
+
+.tbval-note { margin: 0; font-size: 12px; color: var(--ink-500); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ── Collapsible (own copy) ───────────────────────────────────────────── */
+
+.collapse { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.collapse__head { display: flex; align-items: center; gap: 9px; width: 100%; padding: 13px 18px; background: none; border: none; cursor: pointer; text-align: left; }
+.collapse__head:hover { background: var(--ink-50); }
+.collapse__icon { color: var(--ink-400); flex: none; }
+.collapse__title { font-size: 12.5px; font-weight: 600; letter-spacing: 0.025em; text-transform: uppercase; color: var(--ink-600); }
+.collapse__caret { margin-left: auto; display: flex; color: var(--ink-400); }
+.collapse__body { overflow: hidden; }
+.collapse__inner { padding: 4px 18px 18px; }
+
+/* ── Rules list ────────────────────────────────────────────────────────── */
+
+.tbval-rules { display: flex; flex-direction: column; gap: 2px; }
+
+.tbval-rule__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 4px;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: default;
+}
+.tbval-rule__row:not(:disabled) { cursor: pointer; }
+.tbval-rule__row:not(:disabled):hover { background: var(--ink-50); border-radius: var(--radius-sm); }
+
+.tbval-rule__id { font-family: var(--font-mono); font-size: 11px; color: var(--ink-400); flex: none; min-width: 58px; }
+.tbval-rule__msg { flex: 1; font-size: 12.5px; color: var(--ink-700); line-height: 1.5; }
+.tbval-rule__chev { flex: none; color: var(--ink-400); transition: transform 0.18s var(--ease); }
+.tbval-rule__chev.is-open { transform: rotate(180deg); }
+
+.tbval-rule__details {
+  margin: 0 0 6px 68px;
+  padding: 8px 10px;
+  background: var(--ink-50);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--ink-600);
+  max-height: 220px;
+  overflow: auto;
+}
+
+/* ── Shared small primitives (see AuditPanel.css / DocumentPicker.css) ──── */
+
+.tbdocs__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--ink-200);
+  border-top-color: var(--navy-600);
+  border-radius: 99px;
+  animation: spin 0.7s linear infinite;
+  flex: none;
+}
+
+.tbaudit__idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  color: var(--ink-500);
+  font-size: 13px;
+  text-align: center;
+}
+.tbaudit__idle-icon { color: var(--ink-300); }
+
+.tbaudit-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tbaudit-table th {
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ink-500);
+  border-bottom: 1px solid var(--border);
+}
+.tbaudit-table td { padding: 6px 10px; border-bottom: 1px solid var(--ink-100); color: var(--ink-700); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 900px) {
+  .tbval__inner { padding: 16px 14px 36px; }
+}

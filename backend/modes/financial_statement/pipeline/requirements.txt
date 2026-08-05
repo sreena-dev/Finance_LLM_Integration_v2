@@ -1,0 +1,18 @@
+streamlit>=1.32.0
+psycopg2-binary>=2.9.9
+requests>=2.31.0
+python-dotenv>=1.0.0
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+python-multipart>=0.0.9
+
+# Yukta framework integration (minimal deps — see yukta/requirements.txt for the full optional list)
+httpx>=0.27.0
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0
+openinference-semantic-conventions>=0.1.9
+
+# Arize Phoenix tracing (local server + UI; also provides phoenix.otel.register)
+arize-phoenix>=19.0.0

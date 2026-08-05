@@ -1,0 +1,96 @@
+.app { display: flex; height: 100%; overflow: hidden; }
+
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+/* ── Mode header ───────────────────────────────────────────────────────── */
+
+.head {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 32px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.head__text { min-width: 0; }
+
+.head__title {
+  margin: 0 0 3px;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--navy-900);
+}
+
+.head__sub {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-500);
+  max-width: 640px;
+}
+
+.head__meta { display: flex; align-items: center; gap: 10px; flex: none; }
+
+.head__path {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-500);
+  background: var(--ink-50);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+/* ── Body ──────────────────────────────────────────────────────────────── */
+
+.main__body { flex: 1; min-height: 0; position: relative; }
+
+.main__pane { position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0; }
+
+.main__notice { flex: none; padding: 16px 32px 0; }
+.main__notice + * { min-height: 0; }
+
+/* ── Boot / error screens ──────────────────────────────────────────────── */
+
+.boot {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+}
+
+.boot__mark { filter: drop-shadow(0 6px 14px rgba(30, 58, 95, 0.24)); }
+
+.boot__text {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--ink-500);
+}
+
+.boot__panel { width: 100%; max-width: 520px; }
+.boot__panel code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 4px;
+  padding: 2px 6px;
+  display: inline-block;
+  margin-top: 3px;
+}
+
+@media (max-width: 900px) {
+  .app { flex-direction: column; overflow: auto; }
+  .main { min-height: 0; }
+  .head { padding: 14px 16px; flex-direction: column; gap: 10px; }
+  .head__meta { width: 100%; }
+  .main__notice { padding: 14px 16px 0; }
+}

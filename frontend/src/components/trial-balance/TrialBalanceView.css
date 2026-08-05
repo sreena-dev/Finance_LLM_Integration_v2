@@ -1,0 +1,56 @@
+.tb { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+
+.tb__top { flex: none; max-height: 44vh; overflow-y: auto; }
+.tb__top-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 22px 32px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.tb__panel { flex: 1; min-height: 0; }
+
+/* ── Tabs ──────────────────────────────────────────────────────────────── */
+
+.tb__tabs {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--ink-100);
+  border-radius: var(--radius);
+  width: fit-content;
+  align-self: flex-start;
+}
+
+.tb__tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 16px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--ink-600);
+  cursor: pointer;
+  transition: color 0.18s var(--ease);
+}
+.tb__tab.is-on { color: var(--navy-900); }
+
+.tb__tab-bg {
+  position: absolute;
+  inset: 0;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+}
+
+.tb__tab-icon, .tb__tab-text { position: relative; z-index: 1; }
+
+@media (max-width: 900px) {
+  .tb__top-inner { padding: 16px 16px 0; }
+}
