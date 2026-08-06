@@ -40,8 +40,15 @@ def upload_mapped(token, ...) -> dict
 def list_documents() -> list[dict]
 def delete_document(doc_id) -> bool
 def ask(doc_id, question, session_id=None) -> dict
-def audit(doc_id, doc_id_prior=None, ...) -> dict
+def audit(doc_id, doc_id_prior=None, ..., grouping_token=None) -> dict
 def validate(doc_id, doc_id_prior=None, **params) -> dict
+def validate_upload(data, label=None, data_prior=None, ...) -> dict   # raw bytes
+def upload_grouping(filename, data, doc_id=None, doc_id_2=None) -> dict
+def upload_grouping_mapped(token, ...) -> dict
+def upload_pdf(filename, data) -> dict        # optional PDF evidence
+def list_pdfs() -> list[dict]
+def delete_pdf(doc_id) -> bool
+def pdf_status() -> tuple[bool, str | None]   # that sub-feature's own health
 ```
 
 Adapters raise `ModeUnavailableError` for anything the caller could act on; the
@@ -62,7 +69,16 @@ any failure into that mode's `status()` reason. Trial Balance additionally
 splits this per sub-feature — `status()` (and upload/list/delete/`validate`)
 only needs the database to come up; `ask`/`audit` lazily build their own
 pipeline singleton on first call, so a missing `yukta` install degrades only
-those two, not the whole mode.
+those two, not the whole mode. Two of its entry points need even less:
+`validate_upload` and the grouping-file uploads parse with pandas alone, so
+they answer correctly with no database and no `yukta` at all. One needs more:
+PDF evidence has its own database and embedding endpoint, so it gets a third
+loader and reports through `pdf_status()` rather than the mode's `status()`.
+
+Note that all these loaders cache their failure for the process's lifetime — the
+probe runs once. Provisioning a missing database therefore needs a restart to be
+picked up, which is the intended trade for not re-attempting a dead connection
+on every request.
 
 ## Blocking work
 
@@ -73,7 +89,16 @@ the event loop would stall the entire gateway for the duration of a request.
 ## Running
 
 ```bash
-uvicorn app.main:app --reload --port 8090
+uvicorn app.main:app --reload --port 12101
 ```
 
-Interactive API docs: <http://localhost:8090/docs>
+Interactive API docs: <http://localhost:12101/docs>
+
+12101 is this project's reserved port (`ARTHA_BACKEND_PORT` in the root `.env`).
+Containerised, the whole stack comes up with `docker compose up -d --build` —
+see [../DOCKER.md](../DOCKER.md).
+
+Note that a single worker is a correctness requirement, not a default worth
+tuning: Trial Balance's `ask` mode holds conversation memory in an in-process
+`SessionStore`, and each mode's pipeline is imported lazily into whichever
+worker first serves it. Scale with replicas, not `--workers`.
