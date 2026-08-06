@@ -14,9 +14,7 @@ from __future__ import annotations
 import re
 
 from yukta_rag.core.llm import build_llm
-# PATCHED: chat/pipeline.py (the full chat/RAG feature) isn't vendored in this
-# integration — see trial_balance/_sources.py for why.
-from yukta_rag.trial_balance._sources import _dedupe_sources
+from yukta_rag.chat.pipeline import _dedupe_sources
 from yukta_rag.retrieval.retrieval import retrieve_ind_as
 from yukta_rag.agents.tb_agents import (
     TB_STEPS,

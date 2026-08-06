@@ -835,6 +835,10 @@ class AuditPipeline:
                 "method": mapping["method"],
                 "grouping_source": mapping.get("grouping_source"),
                 "n_grouping_override": mapping.get("n_grouping_override", 0),
+                # denominator for n_grouping_override — without it a client-supplied
+                # grouping that classified 5 of 2363 accounts reads the same as one
+                # that classified 5 of 5
+                "n_accounts": len(mapping.get("accounts") or []),
                 "fsli_groups": {k: len(v) for k, v in mapping["fsli_groups"].items()},
                 "mapping_confidence_summary": mapping["mapping_confidence_summary"],
                 "sensitive_summary": mapping["sensitive_summary"],

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 
+from yukta_rag.audit.audit_grouping import code_variants, norm_key
 from yukta_rag.trial_balance.tb_tools import _net, _PUR_ABBREV_RE, classify_tb
 
 # ---------------------------------------------------------------------------
@@ -185,6 +186,20 @@ def sign_flip(opening_net: float | None, closing_net: float) -> bool:
     return (opening_net > 0) != (closing_net > 0)
 
 
+def _variant_lookup(canonical_override: dict[str, str], code) -> str | None:
+    """Look a GL code up under every form it might have been written in.
+
+    Covers the direction ``_assign`` cannot: the trial balance carries
+    ``GAIL/1010010`` while the grouping file listed it bare as ``1010010``, so
+    the override's keys hold the short form and the account's code is the long
+    one. Deterministic across runs — variants are sorted, not set-ordered."""
+    for variant in sorted(code_variants(code)):
+        hit = canonical_override.get(variant)
+        if hit:
+            return hit
+    return None
+
+
 def map_accounts(tb: dict, classification: dict | None = None,
                  grouping_override: dict[str, str] | None = None) -> dict:
     """Enrich every account with FSLI, confidence, sensitive tags and abnormal sign.
@@ -194,7 +209,10 @@ def map_accounts(tb: dict, classification: dict | None = None,
     accounts / management FSLI grouping. When an account's code (or, failing
     that, its name) is a key in this map, that FSLI label wins outright over
     the keyword engine — tagged ``mapping_source: "management_grouping"`` so
-    the report can state which classification source was used.
+    the report can state which classification source was used. Lookups fall
+    back to ``norm_key`` on both sides, so a client file that writes a code as
+    ``1001.0`` or an account name in different case/spacing still applies
+    instead of silently reverting to keyword inference.
 
     Returns ``{accounts: [...], fsli_groups: {...}, mapping_confidence_summary: {...},
     unmapped_accounts: [...], sensitive_summary: {...}}`` for the audit output.
@@ -202,6 +220,11 @@ def map_accounts(tb: dict, classification: dict | None = None,
     classification = classification or classify_tb(tb)
     cat_by_name = {r["name"]: r for r in classification["accounts"]}
     grouping_override = grouping_override or {}
+    canonical_override = {}
+    for k, v in grouping_override.items():
+        canonical = norm_key(k)
+        if canonical:
+            canonical_override[canonical] = v
 
     accounts, unmapped = [], []
     conf_summary = {"high": 0, "medium": 0, "low": 0, "unmapped": 0}
@@ -213,7 +236,11 @@ def map_accounts(tb: dict, classification: dict | None = None,
         cinfo = cat_by_name.get(a["name"], {})
         category = cinfo.get("category")
         net = _net(a, 1)
-        override_fsli = grouping_override.get(a.get("code") or "") or grouping_override.get(a["name"])
+        override_fsli = (grouping_override.get(a.get("code") or "")
+                         or grouping_override.get(a["name"])
+                         or canonical_override.get(norm_key(a.get("code")))
+                         or canonical_override.get(norm_key(a["name"]))
+                         or _variant_lookup(canonical_override, a.get("code")))
         if override_fsli:
             fsli, conf, source = override_fsli, "high", "management_grouping"
             n_grouping_override += 1

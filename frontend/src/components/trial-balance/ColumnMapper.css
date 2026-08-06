@@ -1,7 +1,9 @@
 .colmap-overlay {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  /* Above the run picker (60): uploading from inside the picker can open
+     this mapper, and it must not appear behind the dialog that spawned it. */
+  z-index: 70;
   display: flex;
   align-items: center;
   justify-content: center;

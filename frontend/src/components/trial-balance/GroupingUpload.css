@@ -1,0 +1,91 @@
+.tbgrp {
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tbgrp__head { display: flex; align-items: flex-start; gap: 9px; }
+.tbgrp__icon { color: var(--ink-400); flex: none; margin-top: 2px; }
+.tbgrp__title {
+  margin: 0 0 2px;
+  font-size: 13px;
+  font-weight: 620;
+  color: var(--navy-900);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.tbgrp__opt {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-500);
+  background: var(--ink-50);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.tbgrp__sub { margin: 0; font-size: 12px; color: var(--ink-500); }
+
+/* Upload button — a styled <label> wrapping a hidden file input. */
+.tbgrp__btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--navy-800);
+  background: var(--white);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 13px;
+  cursor: pointer;
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+.tbgrp__btn:hover { background: var(--navy-50); border-color: var(--navy-600); }
+.tbgrp__btn.is-busy { opacity: 0.55; cursor: default; }
+.tbgrp__btn.is-busy:hover { background: var(--white); border-color: var(--border-strong); }
+.tbgrp__btn input { display: none; }
+
+.tbgrp__hint { margin: 0; font-size: 11.5px; color: var(--ink-400); line-height: 1.55; }
+
+.tbgrp__file {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.tbgrp__file.is-ok { border-color: var(--ok-600); background: var(--ok-100); }
+.tbgrp__file.is-ok svg { color: var(--ok-600); }
+/* A parsed-but-non-matching file is the failure this panel exists to surface,
+   so it reads as an error rather than a neutral "uploaded" state. */
+.tbgrp__file.is-bad { border-color: var(--err-600); background: var(--err-100); }
+.tbgrp__file.is-bad svg { color: var(--err-600); }
+
+.tbgrp__file-row { display: flex; align-items: center; gap: 8px; }
+.tbgrp__filename {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-800);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tbgrp__coverage {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-600);
+  font-variant-numeric: tabular-nums;
+}
+.tbgrp__file.is-bad .tbgrp__coverage { color: var(--err-600); font-weight: 550; }

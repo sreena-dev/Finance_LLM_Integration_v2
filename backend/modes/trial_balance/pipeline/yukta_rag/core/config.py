@@ -51,13 +51,23 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "bge-m3")
 # env var names (pointing at a different endpoint/model). Reading those names
 # unchanged here would silently make Trial Balance run on SAR's LLM instead of
 # its own. TB_GENERATION_BASE_URL/TB_GENERATION_MODEL are TB-specific and take
-# priority; the branch's own hardcoded defaults remain the fallback so this
-# still works standalone with no env vars set at all.
-GENERATION_BASE_URL = os.getenv("TB_GENERATION_BASE_URL", "http://10.10.116.160:11632/v1")
-GENERATION_MODEL = os.getenv("TB_GENERATION_MODEL", "gemma-4-12b-it")
+# priority; a fallback default remains so this still works with no env vars set.
+#
+# The fallback is ALSO patched, away from the branch's gemma-4-12b-it on
+# 10.10.116.160:11632. That endpoint serves only the 12B model, whose 16384-token
+# window is too small for the audit narration on a real trial balance — it
+# rejects the call with an HTTP 400 and every audit silently degrades to the
+# deterministic report. The 26B model has a 262144-token window and narrates it.
+# Both compute identical figures; only the prose differs.
+GENERATION_BASE_URL = os.getenv("TB_GENERATION_BASE_URL", "http://10.10.180.48:30004/v1")
+GENERATION_MODEL = os.getenv("TB_GENERATION_MODEL", "gemma-4-26b-a4b-it")
 
-# The generation model's context window and the tokens reserved for its output.
-# Set GENERATION_CONTEXT_TOKENS to the real window when swapping in a new model.
+# Tokens reserved for the model's output.
+#
+# GENERATION_CONTEXT_TOKENS is declared here because the branch declares it, but
+# nothing reads it — grep the tree. The real prompt bound is the serving model's
+# own max_model_len, so raising this value does not widen anything; check the
+# endpoint's /v1/models instead.
 GENERATION_CONTEXT_TOKENS = int(os.getenv("GENERATION_CONTEXT_TOKENS", "16384"))
 GENERATION_MAX_OUTPUT_TOKENS = int(os.getenv("GENERATION_MAX_OUTPUT_TOKENS", "1536"))
 
