@@ -160,14 +160,24 @@ class SARQATools:
         Pipeline: resolve_documents → hybrid RAG (top-25 pool) → optional reranker → top-7
 
         Args:
-            company:  Company name exactly as in the query context (e.g. "ONGC").
+            company:  Company name exactly as in the query context (e.g. "Coal India", "SAIL", "ONGC").
             fy_start: Starting year of the financial period (e.g. 2023 for FY 2023-24).
             query:    Focused search phrase for the specific topic.
 
         Returns:
             JSON string containing the retrieved chunks with section/page citations.
         """
-        logger.info("retrieve_sar_context: company=%s fy_start=%s query='%s'", company, fy_start, query)
+        # Automatic query enrichment for Annexures (CARO 2020 / IFC)
+        enriched_query = query
+        q_lower = query.lower()
+        if "annexure a" in q_lower or "caro" in q_lower:
+            if "caro" not in q_lower or "2020" not in q_lower:
+                enriched_query += " CARO 2020 Companies Auditor Report Order clauses property inventory loans statutory dues"
+        if "annexure b" in q_lower or "ifc" in q_lower:
+            if "internal financial controls" not in q_lower:
+                enriched_query += " Internal Financial Controls IFC report section 143(3)(i) operating effectiveness"
+
+        logger.info("retrieve_sar_context: company=%s fy_start=%s query='%s' (enriched='%s')", company, fy_start, query, enriched_query)
         try:
             doc_records = resolve_documents(f"{company} {fy_start}")
             doc_ids = [d[0] for d in doc_records] if doc_records else None
@@ -177,7 +187,7 @@ class SARQATools:
                 logger.warning("No documents resolved for '%s %s'. Running global search.", company, fy_start)
 
             raw_results = retrieve_annual_reports(
-                query=query,
+                query=enriched_query,
                 top_k=_RETRIEVAL_POOL,
                 doc_ids=doc_ids,
             )
@@ -191,7 +201,7 @@ class SARQATools:
 
             top_tables      = sorted(table_hits, key=lambda r: r.get("_boosted", r.get("score", 0)), reverse=True)[:max_tables]
             effective_text_k = max_text + (max_tables - len(top_tables))
-            reranked_text   = _rerank(query, text_hits, top_k=effective_text_k)
+            reranked_text   = _rerank(enriched_query, text_hits, top_k=effective_text_k)
             top_chunks      = reranked_text + top_tables
 
             logger.info("Chunk budget: %d text + %d table(s) = %d total",
@@ -222,7 +232,7 @@ class SARQATools:
         Use when the question requires specific financial figures, totals, or ratios.
 
         Args:
-            company:        Company name (e.g. "ONGC").
+            company:        Company name (e.g. "Coal India", "SAIL", "ONGC").
             fy_start:       Starting year of the financial period (e.g. 2023).
             statement_type: One of "balance_sheet", "profit_loss", "cash_flow", "statement_of_equity".
 

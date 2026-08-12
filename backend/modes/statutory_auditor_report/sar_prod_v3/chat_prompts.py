@@ -37,6 +37,16 @@ Output: Does the ONGC Annual Report for FY 2023-24 clearly identify the entity a
 
 Input:  [Context: Company = ONGC, FY starting 2023] What about previous year?
 Output: What were the Key Audit Matters disclosed in the ONGC Statutory Audit Report for FY 2022-23?
+
+Input:  [Context: Company = Coal India, FY starting 2023] Does the report identify the entity?
+Output: Does the Coal India Annual Report for FY 2023-24 clearly identify the entity audited, the period covered, and each financial statement?
+
+Input:  [Context: Company = GAIL, FY starting 2023] What about Annexure A?
+Output: What observations and clauses are reported in Annexure A (CARO 2020) of the GAIL Statutory Audit Report for FY 2023-24?
+
+Input:  [Context: Company = ONGC, FY starting 2023] What about previous year?
+Output: What were the Key Audit Matters disclosed in the ONGC Statutory Audit Report for FY 2022-23?
+
 """
 
 # ---------------------------------------------------------------------------
@@ -80,7 +90,7 @@ Use this tool for ANY question involving:
 - C&AG directions, Rule 11 compliance
 
 Parameters:
-- company:  The company name exactly as provided in the query context (e.g., "ONGC")
+- company:  The company name exactly as provided in the query context (e.g., "Coal India", "SAIL", "ONGC")
 - fy_start: The starting year as an integer (e.g., 2023 for FY 2023-24)
 - query:    A focused search phrase for the specific topic (e.g., "Key Audit Matters KAM SA 701")
 
@@ -89,7 +99,7 @@ Use this tool ONLY when the question asks about specific financial numbers (amou
 Use it in ADDITION to retrieve_sar_context when needed.
 
 Parameters:
-- company:        The company name (e.g., "ONGC")
+- company:        The company name (e.g., "Coal India", "SAIL", "ONGC")
 - fy_start:       The starting year as an integer (e.g., 2023)
 - statement_type: One of "balance_sheet", "profit_loss", "cash_flow", "statement_of_equity"
 
@@ -116,4 +126,20 @@ If the question mentions specific financial figures, ratios, or asks to verify n
 
 ## CITATION FORMAT
 Use inline citations: [Section Name, Page X] or [CARO Clause N, Page X]
+
+## MULTI-COMPANY & SYSTEM CAPABILITIES
+- This database contains Statutory Audit Reports and Financial Statements for MULTIPLE companies (such as Coal India, GAIL, SAIL, NTPC, IOCL, ONGC, etc.).
+- ALWAYS extract and use the exact company name specified in the `[Context: Company = <Company Name>]` prefix.
+- NEVER claim or state that the system is limited to ONGC or any single company.
+
+## GUIDANCE FOR ANNEXURE QUERIES:
+- In Statutory Auditor Reports:
+  * "Annexure A" (or "Annexure 1") is typically the CARO 2020 Annexure (Companies Auditor's Report Order) covering property/plant/equipment, inventory, loans, statutory dues, fraud, internal audit, etc.
+  * "Annexure B" (or "IFC Report") is typically the Report on Internal Financial Controls under Section 143(3)(i).
+  * "Annexure C" or directions often cover C&AG directions for PSUs.
+- When searching for any Annexure (e.g., "Annexure A", "Annexure B", "CARO Annexure", "IFC Annexure"), ALWAYS generate a rich, expanded `query` parameter:
+  * Example for Annexure A / CARO: query="Annexure A CARO 2020 Companies Auditor Report Order clauses property plant equipment inventory statutory dues"
+  * Example for Annexure B / IFC: query="Annexure B Internal Financial Controls IFC report section 143(3)(i) operating effectiveness"
+
+
 """

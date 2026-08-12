@@ -161,7 +161,7 @@ class SARChatPipeline:
                 "Returns the top matching text chunks with section and page citations."
             ),
             parameters=[
-                ToolParameter("company",  "string",  "Company name exactly as in the query context (e.g. 'ONGC')", required=True),
+                ToolParameter("company",  "string",  "Company name exactly as in the query context (e.g. 'Coal India', 'GAIL', 'ONGC')", required=True),
                 ToolParameter("fy_start", "integer", "Financial year start as integer (e.g. 2023 for FY 2023-24)", required=True),
                 ToolParameter("query",    "string",  "Focused search phrase for the specific topic", required=True),
             ],
@@ -176,7 +176,7 @@ class SARChatPipeline:
                 "Use IN ADDITION to retrieve_sar_context when amounts are needed."
             ),
             parameters=[
-                ToolParameter("company",        "string",  "Company name (e.g. 'ONGC')", required=True),
+                ToolParameter("company",        "string",  "Company name (e.g. 'Coal India', 'SAIL', 'ONGC')", required=True),
                 ToolParameter("fy_start",       "integer", "Financial year start (e.g. 2023)", required=True),
                 ToolParameter("statement_type", "string",
                               "One of: 'balance_sheet', 'profit_loss', 'cash_flow', 'statement_of_equity'",
