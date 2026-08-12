@@ -39,11 +39,11 @@ class Mode:
 MODES: list[Mode] = [
     Mode(
         id="statutory-auditor-report",
-        label="Statutory Auditor's Report",
+        label="Independent Auditors Report Analysis",
         short_label="Auditor's Report",
         description=(
-            "Generate a full SAR review memorandum for an entity and financial "
-            "year — opinion, CARO 2020, IFC and coherence checks."
+            "Analyse an Independent Auditors Report for an entity and financial "
+            "year — opinion, CARO 2020, IFC and coherence review."
         ),
         branch="Statutory_Auditor_Report",
         ui="report",

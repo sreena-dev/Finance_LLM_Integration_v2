@@ -218,13 +218,13 @@ export default function ReportView({ mode, chatMode, health, onSubModeChange, st
               <div>
                 <h2 className="setup__title">
                   {isChat
-                    ? 'Ask about a statutory auditor’s report'
-                    : 'Generate a statutory auditor’s report'}
+                    ? 'Ask about an Independent Auditors Report'
+                    : 'Analysis on Independent Auditors Report'}
                 </h2>
                 <p className="setup__sub">
                   {isChat
                     ? 'Select the entity and financial year, then ask your question below.'
-                    : 'Select the entity and financial year to produce its SAR review memorandum.'}
+                    : 'Select the entity and financial year to analyse the Independent Auditors Report.'}
                 </p>
               </div>
             </header>
