@@ -312,12 +312,12 @@ export default function ReportView({ mode, chatMode, health, onSubModeChange, st
                       {generating ? (
                         <>
                           <span className="setup__spinner" />
-                          Generating…
+                          Analysing…
                         </>
                       ) : (
                         <>
                           <Icon name="sparkle" size={16} />
-                          Generate report
+                          Analyse report
                         </>
                       )}
                     </motion.button>
@@ -475,7 +475,7 @@ export default function ReportView({ mode, chatMode, health, onSubModeChange, st
                 >
                   <Icon name="doc" size={28} className="report__idle-icon" />
                   <p className="report__idle-text">
-                    The generated memorandum will appear here.
+                    The analysis will appear here.
                   </p>
                 </motion.div>
               )}

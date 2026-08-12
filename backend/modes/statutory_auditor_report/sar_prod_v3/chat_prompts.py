@@ -43,10 +43,6 @@ Output: Does the Coal India Annual Report for FY 2023-24 clearly identify the en
 
 Input:  [Context: Company = GAIL, FY starting 2023] What about Annexure A?
 Output: What observations and clauses are reported in Annexure A (CARO 2020) of the GAIL Statutory Audit Report for FY 2023-24?
-
-Input:  [Context: Company = ONGC, FY starting 2023] What about previous year?
-Output: What were the Key Audit Matters disclosed in the ONGC Statutory Audit Report for FY 2022-23?
-
 """
 
 # ---------------------------------------------------------------------------
