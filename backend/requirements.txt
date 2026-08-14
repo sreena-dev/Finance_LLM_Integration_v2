@@ -31,7 +31,17 @@ PyMuPDF>=1.24.0
 opentelemetry-api>=1.20.0
 opentelemetry-sdk>=1.20.0
 openinference-semantic-conventions>=0.1.9
-arize-phoenix>=19.0.0
+# Pinned, not >=19.0.0. arize-phoenix 20.x declares a frozen dataclass
+# (_FilterBindings in phoenix/trace/dsl/filter.py) with a mappingproxy default,
+# which Python 3.11 rejects outright — "mutable default <class 'mappingproxy'>
+# for field boolean_names". That import sits under phoenix/__init__.py, so on
+# 20.x *every* phoenix import fails, including phoenix.evals and phoenix.otel.
+#
+# It surfaced as a silent regression: an unpinned rebuild floated 19.17 -> 20.2
+# with no code change on our side. Runtime tracing was unaffected (it uses the
+# plain OTel SDK, not this package), but the evaluation job cannot run without
+# it. Re-test on 3.11 before raising this pin.
+arize-phoenix==19.17.0
 
 # NOT ON PyPI — install separately from your internal index/source checkout.
 # All three integrated pipelines use it to build their agents; without it
