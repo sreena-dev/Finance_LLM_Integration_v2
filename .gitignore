@@ -36,3 +36,7 @@ Thumbs.db
 # Any mode's per-session uploads and generated pipeline artifacts
 backend/modes/*/sessions/
 backend/modes/*/pipeline/output/
+
+FIN_LLM/
+
+
