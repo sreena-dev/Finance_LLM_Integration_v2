@@ -467,11 +467,22 @@ class Orchestrator:
     def _make_llm_client(max_tokens: int):
         from yukta.core.Clients.vllm_client import VLLMClient
 
+        # api_key reaches the base client's config and becomes an
+        # `Authorization: Bearer ...` header. Omitted entirely when unset so an
+        # endpoint without auth is not sent an empty bearer token.
+        import os as _os
+
+        kwargs = {}
+        _key = _os.environ.get("GENERATION_API_KEY", "").strip()
+        if _key:
+            kwargs["api_key"] = _key
+
         return VLLMClient(
             model_name=tool_names.Config.LLM_MODEL_NAME,
             base_url=tool_names.Config.LLM_BASE_URL,
             max_tokens=max_tokens,
             timeout=120,
+            **kwargs,
         )
 
     def _build_fs_agent(self, conn, retrieved_chunks: list[dict], conn_reports=None, callbacks=None,
