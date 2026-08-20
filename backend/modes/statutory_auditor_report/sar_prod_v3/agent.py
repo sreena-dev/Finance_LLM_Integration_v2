@@ -140,13 +140,28 @@ def _build_llm(max_tokens: int = 4096, temperature: float = 0.0):
     if api_key:
         kwargs["api_key"] = api_key
 
-    return SafeVLLMClient(
+    client = SafeVLLMClient(
         model_name=model,
         base_url=base_url,
         max_tokens=max_tokens,
         temperature=temperature,
         **kwargs,
     )
+
+    # The base client turns config["api_key"] into an Authorization header for
+    # its POST path only. get_model_info() issues a *separate*
+    # self._session.get("/v1/models") that bypasses that path, so on a gateway
+    # which authenticates /v1/models too it 401s on every call — visible as
+    # "Failed to fetch model info from vLLM: 401 Unauthorized" and a silent
+    # fallback to a default context window. Setting the header as a session
+    # default covers both requests; the per-request header still takes
+    # precedence where the base client sets one explicitly.
+    if api_key:
+        session = getattr(client, "_session", None)
+        if session is not None:
+            session.headers["Authorization"] = f"Bearer {api_key}"
+
+    return client
 
 
 def _build_config(max_iter: int = 1, max_tokens: int = 4096, name: str = "sar_agent"):

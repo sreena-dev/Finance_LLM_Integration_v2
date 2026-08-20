@@ -477,13 +477,28 @@ class Orchestrator:
         if _key:
             kwargs["api_key"] = _key
 
-        return VLLMClient(
+        client = VLLMClient(
             model_name=tool_names.Config.LLM_MODEL_NAME,
             base_url=tool_names.Config.LLM_BASE_URL,
             max_tokens=max_tokens,
             timeout=120,
             **kwargs,
         )
+
+        # The base client turns config["api_key"] into an Authorization header for
+        # its POST path only. get_model_info() issues a *separate*
+        # self._session.get("/v1/models") that bypasses that path, so on a gateway
+        # which authenticates /v1/models too it 401s on every call — visible as
+        # "Failed to fetch model info from vLLM: 401 Unauthorized" and a silent
+        # fallback to a default context window. Setting the header as a session
+        # default covers both requests; the per-request header still takes
+        # precedence where the base client sets one explicitly.
+        if _key:
+            session = getattr(client, "_session", None)
+            if session is not None:
+                session.headers["Authorization"] = f"Bearer {_key}"
+
+        return client
 
     def _build_fs_agent(self, conn, retrieved_chunks: list[dict], conn_reports=None, callbacks=None,
                         query: str = ""):
