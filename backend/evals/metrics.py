@@ -47,7 +47,15 @@ def build_judge():
     model = os.environ.get("ARTHA_EVAL_LLM_MODEL") or os.environ.get("GENERATION_MODEL", "")
     if not base.endswith("/v1"):
         base = base + "/v1"
-    client_kwargs = {"base_url": base, "api_key": os.environ.get("ARTHA_EVAL_LLM_API_KEY", "not-needed")}
+    # Falls back to the generation key: the judge points at the same endpoint by
+    # default, so it needs the same credential. "not-needed" is the last resort
+    # for a keyless endpoint — the OpenAI client requires *some* value.
+    api_key = (
+        os.environ.get("ARTHA_EVAL_LLM_API_KEY")
+        or os.environ.get("GENERATION_API_KEY")
+        or "not-needed"
+    ).strip() or "not-needed"
+    client_kwargs = {"base_url": base, "api_key": api_key}
     return LLM(
         provider="openai",
         model=model,
