@@ -27,6 +27,22 @@ lxml>=5.0.0
 # the mode is unaffected.
 PyMuPDF>=1.24.0
 
+# Financial Diagnostic Report pipeline (vendored fs_db + fdr)
+# fs_db is written against psycopg v3 and is vendored verbatim, so the driver is
+# added rather than the package forked. v3 installs under a different module
+# name than psycopg2 above and the two coexist; without it this mode alone
+# reports itself unavailable via /api/modes?probe=true.
+psycopg[binary]>=3.1.0
+
+# FDR retrieval path — local cross-encoder reranking (BAAI/bge-reranker-v2-m3).
+# CPU wheel only: install torch from https://download.pytorch.org/whl/cpu, which
+# is ~200MB rather than the ~2.5GB CUDA build this mode has no use for. The
+# weights are read from the local Hugging Face cache and never downloaded at
+# request time; without either package the reranker reports itself unavailable
+# and retrieval falls back to the fused arm order.
+torch>=2.2
+transformers>=4.40
+
 # Tracing (optional at runtime — all three pipelines degrade gracefully without it)
 opentelemetry-api>=1.20.0
 opentelemetry-sdk>=1.20.0

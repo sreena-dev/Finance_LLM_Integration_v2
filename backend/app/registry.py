@@ -107,9 +107,13 @@ MODES: list[Mode] = [
         short_label="Diagnostic Report",
         description="Ratio, trend and risk diagnostics distilled into a review report.",
         branch="Financial_Diagnostic_Report",
-        ui="chat",
+        # The FDR frontend view (setup -> workspace, report + Q&A tabs). Its data
+        # is currently mocked client-side; the pipeline in adapter.py is still a
+        # scaffold, so `integrated=True` here reflects that the UI is wired, not
+        # that the backend analysis exists yet.
+        ui="fdr",
         base_path="/api/financial-diagnostic-report",
-        integrated=False,
+        integrated=True,
         status=fdr_adapter.status,
     ),
 ]
