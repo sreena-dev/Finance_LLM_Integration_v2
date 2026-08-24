@@ -1,0 +1,187 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "source": "TB_AI_Audit_Final_Detailed_Team_Final.md sec 5.4 (sensitive tags), sec 12.1 (fraud/irregularity indicators)",
+    "purpose": "Keyword -> sensitivity category with a base weight. A match elevates an account for audit attention by NATURE, independently of its value.",
+    "extracted_from": "backend/tools/risk/build_sensitive_detector.py::_SENSITIVE_RULES",
+    "extraction_note": "Generated directly from the Python literal by AST read, not retyped. Category order is preserved because build_sensitive_detector sorts matches by weight descending and takes the highest as the primary category -- reordering could change which category an account is filed under.",
+    "amend_policy": "Matching is case-insensitive substring against ' {gl_name} {gl_code} ' (note the padding spaces, which let a keyword like ' iut ' anchor on word boundaries). Adding a category requires a matching entry in assertions/assertion_evidence_catalogue.json, or findings for it will fall back to generic evidence.",
+    "matching": "case_insensitive_substring_on_padded_gl_name_and_code"
+  },
+  "categories": [
+    {
+      "tag": "grant_subsidy",
+      "weight": 40,
+      "keywords": [
+        "grant",
+        "subsidy",
+        "grant-in-aid",
+        "grant in aid",
+        "budgetary support",
+        "viability gap"
+      ]
+    },
+    {
+      "tag": "statutory_dues",
+      "weight": 25,
+      "keywords": [
+        "gst",
+        "tds",
+        "tcs",
+        "pf ",
+        "provident fund",
+        "esi",
+        "professional tax",
+        "income tax",
+        "duty",
+        "cess",
+        "customs",
+        "excise"
+      ]
+    },
+    {
+      "tag": "msme",
+      "weight": 35,
+      "keywords": [
+        "msme",
+        "micro enterprise",
+        "small enterprise",
+        "medium enterprise"
+      ]
+    },
+    {
+      "tag": "csr",
+      "weight": 30,
+      "keywords": [
+        "csr",
+        "corporate social responsibility"
+      ]
+    },
+    {
+      "tag": "related_party",
+      "weight": 45,
+      "keywords": [
+        "holding company",
+        "subsidiary",
+        "associate",
+        "joint venture",
+        " jv ",
+        "director",
+        "kmp",
+        "promoter",
+        "group company",
+        "inter-company",
+        "inter company",
+        "inter corporate",
+        "icd",
+        "due from",
+        "due to",
+        "related party",
+        "loan from",
+        "loan to",
+        "cash call",
+        "iut ",
+        " iut",
+        "inter-unit",
+        "inter unit",
+        "prnt co",
+        "parent co",
+        "group co",
+        "holdg co"
+      ]
+    },
+    {
+      "tag": "suspense_control",
+      "weight": 20,
+      "keywords": [
+        "suspense",
+        "clearing",
+        "control account",
+        "unclassified",
+        "difference",
+        "mismatch",
+        "temporary"
+      ]
+    },
+    {
+      "tag": "propriety",
+      "weight": 40,
+      "keywords": [
+        "write-off",
+        "write off",
+        "written off",
+        "waiver",
+        "ex-gratia",
+        "ex gratia",
+        "shortage",
+        "idle fund",
+        "advance to staff",
+        "advance to officer",
+        "advance to employee",
+        "loss on"
+      ]
+    },
+    {
+      "tag": "deposit",
+      "weight": 15,
+      "keywords": [
+        "deposit",
+        "emd",
+        "earnest money",
+        "retention money",
+        "security deposit"
+      ]
+    },
+    {
+      "tag": "advance",
+      "weight": 15,
+      "keywords": [
+        "advance",
+        "mobilisation advance",
+        "mobilization advance"
+      ]
+    },
+    {
+      "tag": "foreign_currency",
+      "weight": 25,
+      "keywords": [
+        "forex",
+        "foreign currency",
+        "fcnr",
+        "ecb",
+        "fctl",
+        "exchange"
+      ]
+    },
+    {
+      "tag": "prior_period_item",
+      "weight": 30,
+      "keywords": [
+        "prior period",
+        "prior year adjustment",
+        "previous year adjustment",
+        "pp item",
+        "ppi"
+      ]
+    },
+    {
+      "tag": "exceptional_item",
+      "weight": 35,
+      "keywords": [
+        "exceptional item",
+        "exceptional expense",
+        "exceptional income",
+        "one-time item",
+        "one time item"
+      ]
+    },
+    {
+      "tag": "remission",
+      "weight": 30,
+      "keywords": [
+        "remission",
+        "remitted"
+      ]
+    }
+  ]
+}

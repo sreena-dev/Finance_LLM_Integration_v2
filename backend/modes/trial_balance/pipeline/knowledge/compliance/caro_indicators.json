@@ -1,0 +1,177 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "source": "TB_AI_Audit_Final_Detailed_Team_Final.md sec 10.1 (India-specific compliance and reporting flags), sec 10.2 (CARO 2020 analytics support), sec 10.3 (Schedule III disclosure support), sec 10.4 (India-specific limitations)",
+    "purpose": "Trial-balance keyword indicators mapped to the CARO 2020 area or Companies Act compliance head they may be relevant to, and the specific record that would let the audit team form a view.",
+    "safe_rule": "The model may flag a TB indicator relevant to a CARO clause where CARO applies, but it MUST NOT conclude any CARO reporting matter from the trial balance. A keyword such as CSR, MSME, director loan, ICD, public deposit or GST payable is only a trigger to request the relevant statutory working -- never a finding of non-compliance. Output wording must be 'possible CARO-related indicator if CARO applies; request supporting records'.",
+    "applicability_gate": "CARO applicability is NOT derivable from a trial balance. These indicators must only be surfaced when the engagement context confirms CARO applies (see entity/build_engagement_context). Absent that confirmation, they are reported as unconfirmed-applicability information requests.",
+    "amend_policy": "Adding an indicator requires naming the exact record that resolves it. An indicator with no resolving record produces an alarm the audit team cannot act on.",
+    "matching": "case_insensitive_substring against gl_name, main_head and sub_head_1"
+  },
+
+  "caro_2020_areas": [
+    {
+      "id": "CARO-PPE",
+      "area": "Property, plant and equipment and intangible assets",
+      "clause_hint": "3(i)",
+      "tb_indicators": ["property, plant and equipment", "fixed asset", "intangible asset", "capital work-in-progress", "cwip", "revaluation reserve", "profit on sale of asset", "loss on sale of asset", "impairment"],
+      "evidence_to_request": [
+        "Fixed asset register showing full particulars and situation of assets",
+        "Title deeds for immovable property held in the company's name",
+        "Physical verification programme and its results",
+        "Revaluation working and registered valuer's report",
+        "CWIP ageing schedule",
+        "Details of proceedings under the Benami Transactions (Prohibition) Act"
+      ]
+    },
+    {
+      "id": "CARO-INVENTORY",
+      "area": "Inventory and working capital limits",
+      "clause_hint": "3(ii)",
+      "tb_indicators": ["inventory", "stock", "raw material", "work-in-progress", "finished goods", "stores and spares", "cash credit", "working capital loan", "overdraft"],
+      "evidence_to_request": [
+        "Physical verification of inventory with coverage and discrepancy summary",
+        "Inventory valuation records",
+        "Quarterly stock statements filed with banks",
+        "Reconciliation of stock statements to books of account",
+        "Sanction letter for working-capital limits above INR 5 crore"
+      ]
+    },
+    {
+      "id": "CARO-LOANS",
+      "area": "Loans, investments, guarantees and security",
+      "clause_hint": "3(iii), 3(iv)",
+      "tb_indicators": ["loan to", "loan given", "advance to director", "inter corporate deposit", "icd", "guarantee", "security given", "investment in subsidiary", "investment in associate", "loan to related party"],
+      "evidence_to_request": [
+        "Agreements stating terms, tenure and interest",
+        "Board and shareholder approvals",
+        "Schedule of repayment and actual receipts",
+        "Overdue analysis for loans granted",
+        "Balance confirmations from borrowers",
+        "Section 185 and 186 compliance working"
+      ]
+    },
+    {
+      "id": "CARO-DEPOSITS",
+      "area": "Deposits from public or members",
+      "clause_hint": "3(v)",
+      "tb_indicators": ["public deposit", "deposit from member", "fixed deposit accepted", "unsecured loan from director", "deposit from shareholder"],
+      "evidence_to_request": [
+        "Deposit register",
+        "Compliance certificate under Sections 73 to 76",
+        "Repayment schedule and DPT filings",
+        "Directors' declarations for amounts received from directors"
+      ]
+    },
+    {
+      "id": "CARO-STATUTORY",
+      "area": "Statutory dues",
+      "clause_hint": "3(vii)",
+      "tb_indicators": ["gst payable", "tds payable", "tcs", "provident fund", "esi", "professional tax", "income tax payable", "duty", "cess", "disputed tax", "custom duty", "excise"],
+      "evidence_to_request": [
+        "Return-wise reconciliation for each statutory levy",
+        "Challans evidencing payment and payment dates",
+        "Schedule of dues outstanding for more than six months from the due date",
+        "Assessment and demand orders",
+        "Disputed-dues schedule naming the forum where each dispute is pending"
+      ]
+    },
+    {
+      "id": "CARO-BORROWINGS",
+      "area": "Borrowings, defaults and end-use",
+      "clause_hint": "3(ix)",
+      "tb_indicators": ["term loan", "cash credit", "borrowing", "current maturities", "penal interest", "overdue interest", "debenture", "interest accrued and due"],
+      "evidence_to_request": [
+        "Sanction letters and loan agreements",
+        "Repayment schedule against actual repayments",
+        "Bank confirmations covering default status",
+        "Lender-wise default details with period and amount",
+        "End-use documentation for term loans",
+        "Wilful defaulter declaration"
+      ]
+    },
+    {
+      "id": "CARO-FRAUD",
+      "area": "Fraud-sensitive indicators",
+      "clause_hint": "3(xi)",
+      "tb_indicators": ["suspense", "clearing", "write-off", "write off", "waiver", "shortage", "loss on", "cash in hand", "manual adjustment", "prior period"],
+      "evidence_to_request": [
+        "Journal dump for manual and year-end entries",
+        "Authorisation and maker-checker trail",
+        "Management explanation for each unresolved balance",
+        "Whistle-blower complaints received during the year",
+        "Any report filed in Form ADT-4"
+      ],
+      "caution": "These are planning-stage risk indicators only. Reporting a fraud is a matter for the audit team acting under its own statutory responsibility -- never a model output."
+    },
+    {
+      "id": "CARO-CSR",
+      "area": "Corporate social responsibility",
+      "clause_hint": "3(xx)",
+      "tb_indicators": ["csr", "corporate social responsibility", "unspent csr", "csr provision"],
+      "evidence_to_request": [
+        "Section 135 computation of the CSR obligation",
+        "CSR committee and board approvals",
+        "Project-wise spend with ongoing-project classification",
+        "Unspent CSR account details and transfer evidence",
+        "Transfer to a Schedule VII fund where applicable"
+      ]
+    },
+    {
+      "id": "CARO-RELATED-PARTY",
+      "area": "Related-party transactions",
+      "clause_hint": "3(xiii)",
+      "tb_indicators": ["holding company", "subsidiary", "associate", "joint venture", "director", "kmp", "promoter", "related party", "due from", "due to"],
+      "evidence_to_request": [
+        "Related-party register",
+        "Board and audit committee approvals",
+        "Section 177 and 188 compliance working",
+        "Ind AS 24 / AS 18 disclosure working"
+      ]
+    }
+  ],
+
+  "companies_act_heads": [
+    {
+      "id": "CA-CAPITAL",
+      "area": "Share capital and securities premium",
+      "tb_indicators": ["share capital", "securities premium", "share application money", "forfeiture", "rights issue"],
+      "evidence_to_request": ["Shareholding pattern", "Allotment records", "Board and shareholder approvals", "Valuation support for any preferential issue", "ROC filings", "Bank receipt trail"]
+    },
+    {
+      "id": "CA-DIVIDEND",
+      "area": "Dividend",
+      "tb_indicators": ["dividend payable", "unpaid dividend", "proposed dividend", "dividend distribution", "interim dividend"],
+      "evidence_to_request": ["Board and shareholder approval", "Unpaid dividend schedule with ageing", "Evidence of transfer to the Unpaid Dividend Account", "IEPF transfer evidence where over seven years", "DIPAM guidance compliance for a Government company"]
+    },
+    {
+      "id": "CA-REMUNERATION",
+      "area": "Managerial remuneration",
+      "tb_indicators": ["director remuneration", "directors remuneration", "commission to director", "sitting fees", "kmp remuneration", "managerial remuneration"],
+      "evidence_to_request": ["Computation against Section 197 limits", "Board and shareholder approvals", "Board and general meeting minutes", "Central Government approval where required"]
+    },
+    {
+      "id": "CA-AUDIT-TRAIL",
+      "area": "Audit trail and accounting software",
+      "tb_indicators": [],
+      "trigger": "Always evaluated -- this is an input-quality question, not a keyword match. Raised when the TB export carries no ERP report id, no export timestamp, or is an Excel-only extract.",
+      "evidence_to_request": [
+        "Accounting software name and version",
+        "Audit-trail (edit log) enablement report for the full year",
+        "Edit and deletion logs",
+        "User access matrix",
+        "Period-lock evidence",
+        "Manual journal dump",
+        "Management representation on audit-trail preservation"
+      ]
+    }
+  ],
+
+  "schedule_iii_disclosures": [
+    {"cue": "Receivable or payable control accounts present", "request": "Schedule III ageing schedule and party-wise ledger"},
+    {"cue": "CWIP or intangible under development present", "request": "Ageing schedule, completion timeline, and overdue or stalled project details"},
+    {"cue": "Trade payables with MSME keywords", "request": "MSME declarations and delayed-payment interest computation"},
+    {"cue": "Current/non-current, debt, revenue, profit and inventory heads all present", "request": "Only ratios supported by mapped TB fields may be computed; request management explanation for variations where comparatives exist"},
+    {"cue": "Scale or rounding unit undeclared", "request": "Confirm the rounding unit; never silently rescale"}
+  ]
+}
