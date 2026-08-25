@@ -1,0 +1,644 @@
+{
+  "_meta": {
+    "version": "1.1.0",
+    "source": "TB_AI_Audit_Final_Detailed_Team_Final.md sec 6 (missing counterparts), sec 7 (relationship analytics), sec 7.1 (severity), sec 7.2 (valid reasons and resolving evidence)",
+    "purpose": "The expected relationships between trial-balance heads, each with the expectation an auditor sets, the legitimate reasons the relationship may NOT hold, and the exact record that would resolve it.",
+    "extracted_from": "backend/tools/risk/build_relationship_analytics.py::_EXPECTED_FINANCIAL_RELATIONSHIPS (5 pairs) and ::_DEFAULT_BP_MAPPING",
+    "extraction_note": "The 5 pairs previously hardcoded are preserved as REL-01/03/05/07/09 (traceable via legacy_pair). The other 9 come from sec 7's table and had no implementation. This pack also supersedes the optional backend/tools/business_process_mapping.json config, whose contents are reproduced under business_process_mapping. legacy_order preserves the exact iteration order of the original Python list, so the financial_relationships array in relationship_analytics.json is byte-identical to pre-extraction output -- graph edge order carries no meaning, but the Phase-1 gate is 'no artifact diff', and an unexplained reordering is indistinguishable from a real change when reviewing that diff.",
+    "critical_semantics": "The audit signal is the ABSENT counterpart, not the present one. The tool this replaced emitted an edge when BOTH heads existed -- the inverse of what sec 6 asks for. A relationship where the source head is material and the target head is missing or immaterial is the finding.",
+    "amend_policy": "valid_reasons is not optional decoration: sec 7.2 requires every relationship finding to state the legitimate explanations alongside the observation, so it is never presented as a conclusion. A relationship added without valid_reasons will produce findings that overstate.",
+    "matching": "case_insensitive_substring against FSLI hierarchy node names, then gl_name as fallback"
+  },
+  "severity_rubric": {
+    "high": "Gap is material by value, involves sensitive public funds / statutory dues / related parties, or indicates possible omission of a liability, income, or asset valuation.",
+    "medium": "Gap is plausible but needs targeted reconciliation, confirmation or schedule.",
+    "low": "Minor classification or presentation issue; not sensitive and not material.",
+    "information_request": "Input is insufficient to compute the relationship reliably -- denominator absent, zero, or drawn from low-confidence mapping."
+  },
+  "relationships": [
+    {
+      "id": "REL-01",
+      "legacy_pair": [
+        "Trade Receivables",
+        "Revenue"
+      ],
+      "name": "Revenue vs trade receivables and cash",
+      "source_keywords": [
+        "revenue from operations",
+        "revenue",
+        "sales"
+      ],
+      "target_keywords": [
+        "trade receivable",
+        "sundry debtor",
+        "debtors",
+        "receivable"
+      ],
+      "expectation": "Receivables and collections should be reasonable relative to revenue and the entity's credit terms.",
+      "direction": "target_expected_when_source_present",
+      "valid_reasons": [
+        "Cash sales, so revenue never becomes a receivable",
+        "Advances received from customers before invoicing",
+        "Long credit terms agreed contractually",
+        "Government customer with known settlement delays",
+        "Receivables factored or discounted during the year",
+        "Balances sit in a related-party head rather than trade receivables"
+      ],
+      "resolving_evidence": [
+        "Sales register",
+        "Party-wise debtors ageing (Schedule III format)",
+        "Balance confirmations",
+        "Subsequent receipts after the period end",
+        "Credit policy and approved credit terms",
+        "ECL / provision working"
+      ],
+      "assertions": [
+        "Existence",
+        "Valuation",
+        "Cut-off",
+        "Occurrence"
+      ],
+      "default_severity": "high",
+      "risk_if_inconsistent": "Fictitious revenue, cut-off error, recoverability or ECL/provision risk.",
+      "legacy_order": 1
+    },
+    {
+      "id": "REL-02",
+      "name": "Revenue vs GST output liability",
+      "source_keywords": [
+        "revenue from operations",
+        "revenue",
+        "sales"
+      ],
+      "target_keywords": [
+        "gst output",
+        "output gst",
+        "gst payable",
+        "igst payable",
+        "cgst payable",
+        "sgst payable",
+        "output tax"
+      ],
+      "expectation": "Book revenue should reconcile to GST returns after exempt, zero-rated and non-GST adjustments.",
+      "direction": "target_expected_when_source_present",
+      "valid_reasons": [
+        "Exempt revenue",
+        "Zero-rated exports",
+        "Non-GST grants or revenue outside GST scope",
+        "Timing difference between books and return period",
+        "GST charged on advances rather than on revenue recognition",
+        "Credit notes issued during the period"
+      ],
+      "resolving_evidence": [
+        "GST returns (GSTR-1 / GSTR-3B) for the period",
+        "Revenue-to-GST reconciliation",
+        "Taxability matrix / breakup by supply type",
+        "Credit-note register"
+      ],
+      "assertions": [
+        "Completeness",
+        "Accuracy",
+        "Classification"
+      ],
+      "default_severity": "high",
+      "risk_if_inconsistent": "Revenue completeness, tax reconciliation or classification risk."
+    },
+    {
+      "id": "REL-03",
+      "legacy_pair": [
+        "Trade Payables",
+        "Cost of Materials"
+      ],
+      "name": "Purchases and expenses vs trade payables",
+      "source_keywords": [
+        "purchase",
+        "cost of materials",
+        "cost of goods",
+        "raw material consumed"
+      ],
+      "target_keywords": [
+        "trade payable",
+        "sundry creditor",
+        "creditors",
+        "payable"
+      ],
+      "expectation": "Payables should be reasonable relative to procurement volume and supplier credit terms.",
+      "direction": "target_expected_when_source_present",
+      "valid_reasons": [
+        "Cash or advance purchases",
+        "Short supplier credit terms",
+        "Year-end settlement of a large payables balance",
+        "Goods received but not invoiced sitting in a GR/IR clearing head"
+      ],
+      "resolving_evidence": [
+        "Payables ageing",
+        "Vendor balance confirmations",
+        "Subsequent payments after period end",
+        "Purchase cut-off testing",
+        "GR/IR clearing account reconciliation"
+      ],
+      "assertions": [
+        "Completeness",
+        "Obligation",
+        "Cut-off",
+        "Classification"
+      ],
+      "default_severity": "high",
+      "risk_if_inconsistent": "Unrecorded liabilities, cut-off or classification risk.",
+      "legacy_order": 2
+    },
+    {
+      "id": "REL-04",
+      "name": "Purchases and expenses vs GST input credit",
+      "source_keywords": [
+        "purchase",
+        "cost of materials",
+        "cost of goods"
+      ],
+      "target_keywords": [
+        "gst input",
+        "input gst",
+        "itc",
+        "input tax credit",
+        "gst receivable",
+        "gst recoverable"
+      ],
+      "expectation": "Input tax credit should broadly relate to eligible taxable purchases and expenses.",
+      "direction": "target_expected_when_source_present",
+      "valid_reasons": [
+        "Purchases from composition dealers or unregistered suppliers",
+        "Blocked or ineligible credit under Section 17(5)",
+        "Exempt outward supplies causing proportionate reversal",
+        "Import IGST paid and claimed on a different timeline"
+      ],
+      "resolving_evidence": [
+        "GST input reconciliation (GSTR-2B vs books)",
+        "Ineligible-credit working",
+        "Purchase register with taxability flags",
+        "Reversal working under Rule 42/43"
+      ],
+      "assertions": [
+        "Accuracy",
+        "Existence",
+        "Cut-off"
+      ],
+      "default_severity": "medium",
+      "risk_if_inconsistent": "Ineligible ITC, reconciliation issue or missing purchase records.",
+      "keyword_note": "The bare term 'expenses' was removed after live testing: head matching also scans main_head/sub_head_1, so 'expenses' matched the entire Expenses rollup and raised an ITC gap off a depreciation charge, which bears no input tax. Was: ['purchase', 'cost of materials', 'expenses']."
+    },
+    {
+      "id": "REL-05",
+      "legacy_pair": [
+        "Property, Plant and Equipment",
+        "Depreciation"
+      ],
+      "name": "PPE and CWIP vs depreciation",
+      "source_keywords": [
+        "property, plant and equipment",
+        "property plant",
+        "fixed asset",
+        "tangible asset",
+        "plant and machinery",
+        "gross block"
+      ],
+      "target_keywords": [
+        "depreciation",
+        "amortisation",
+        "amortization",
+        "accumulated depreciation"
+      ],
+      "expectation": "A depreciation charge should exist and be consistent with the asset base, additions, useful lives and period of use.",
+      "direction": "target_expected_when_source_present",
+      "valid_reasons": [
+        "Assets fully depreciated in earlier years",
+        "Additions late in the year, so only part-period charge arises",
+        "Assets not yet ready for intended use, still in CWIP",
+        "Land and other non-depreciable assets dominate the block",
+        "Component accounting with differing useful lives"
+      ],
+      "resolving_evidence": [
+        "Fixed asset register",
+        "Depreciation working by asset class",
+        "Capitalisation dates for additions",
+        "Asset class-wise useful-life policy",
+        "Impairment assessment"
+      ],
+      "assertions": [
+        "Existence",
+        "Valuation",
+        "Accuracy",
+        "Rights"
+      ],
+      "default_severity": "high",
+      "risk_if_inconsistent": "Depreciation accuracy, capitalisation, impairment or existence risk.",
+      "legacy_order": 0
+    },
+    {
+      "id": "REL-06",
+      "name": "CWIP vs capital advances and project progress",
+      "source_keywords": [
+        "capital work-in-progress",
+        "capital work in progress",
+        "cwip",
+        "intangible under development"
+      ],
+      "target_keywords": [
+        "capital advance",
+        "advance for capital",
+        "advance to contractor",
+        "mobilisation advance",
+        "mobilization advance"
+      ],
+      "expectation": "Long-standing CWIP and capital advances should have a project status and a capitalisation trigger.",
+      "direction": "context_pair",
+      "valid_reasons": [
+        "Multi-year project genuinely still in progress",
+        "Regulatory or land-acquisition delay outside the entity's control",
+        "Advance recently paid against a milestone not yet met"
+      ],
+      "resolving_evidence": [
+        "CWIP ageing schedule (Schedule III format)",
+        "Project-wise status and completion certificates",
+        "Capitalisation policy and capitalisation dates",
+        "Impairment assessment for stalled projects",
+        "Sanction and utilisation records where grant-funded"
+      ],
+      "assertions": [
+        "Existence",
+        "Valuation",
+        "Completeness",
+        "Classification"
+      ],
+      "default_severity": "high",
+      "regularity_flag": true,
+      "risk_if_inconsistent": "Valuation, impairment, project delay, regularity or idle-fund risk."
+    },
+    {
+      "id": "REL-07",
+      "legacy_pair": [
+        "Borrowings",
+        "Finance Costs"
+      ],
+      "name": "Borrowings vs finance cost",
+      "source_keywords": [
+        "borrowing",
+        "term loan",
+        "cash credit",
+        "overdraft",
+        "debenture",
+        "lease liability",
+        "unsecured loan",
+        "secured loan"
+      ],
+      "target_keywords": [
+        "finance cost",
+        "interest expense",
+        "interest paid",
+        "interest on"
+      ],
+      "expectation": "Borrowings ordinarily generate interest unless the terms prove otherwise.",
+      "direction": "target_expected_when_source_present",
+      "valid_reasons": [
+        "Interest-free government or related-party loan",
+        "Moratorium period during which no interest was charged",
+        "Interest capitalised to a qualifying asset rather than expensed",
+        "Loan drawn very close to the period end"
+      ],
+      "resolving_evidence": [
+        "Loan agreements and sanction letters",
+        "Repayment schedules",
+        "Bank balance confirmations",
+        "Loan-wise interest computation",
+        "Borrowing-cost capitalisation working",
+        "Covenant compliance and default status",
+        "Charge registration details"
+      ],
+      "assertions": [
+        "Completeness",
+        "Obligation",
+        "Accuracy",
+        "Classification"
+      ],
+      "default_severity": "high",
+      "risk_if_inconsistent": "Unrecorded interest, misclassification, covenant or related-party issue.",
+      "legacy_order": 4
+    },
+    {
+      "id": "REL-08",
+      "name": "Payroll vs PF, ESI, TDS and professional tax",
+      "source_keywords": [
+        "salary",
+        "salaries",
+        "wages",
+        "employee benefit",
+        "staff cost",
+        "remuneration"
+      ],
+      "target_keywords": [
+        "provident fund",
+        "pf payable",
+        "esi",
+        "tds payable",
+        "professional tax",
+        "gratuity",
+        "leave encashment"
+      ],
+      "expectation": "Payroll-related statutory deductions and employee-benefit provisions should exist where applicable.",
+      "direction": "target_expected_when_source_present",
+      "valid_reasons": [
+        "Employees below statutory coverage thresholds",
+        "Workforce engaged through outsourced contractors rather than on payroll",
+        "Staff on government deputation with dues borne elsewhere",
+        "Categories exempt from a particular levy"
+      ],
+      "resolving_evidence": [
+        "Payroll register",
+        "Employee classification and headcount",
+        "PF / ESI / TDS challans and returns",
+        "Contractor agreements",
+        "Actuarial valuation for gratuity and leave encashment"
+      ],
+      "assertions": [
+        "Completeness",
+        "Accuracy",
+        "Valuation"
+      ],
+      "default_severity": "high",
+      "regularity_flag": true,
+      "risk_if_inconsistent": "Payroll completeness, statutory reconciliation or contractor-substitution risk."
+    },
+    {
+      "id": "REL-09",
+      "legacy_pair": [
+        "Inventory",
+        "Cost of Materials"
+      ],
+      "name": "Inventory vs purchases, COGS and WIP",
+      "source_keywords": [
+        "inventory",
+        "inventories",
+        "stock",
+        "raw material",
+        "work-in-progress",
+        "finished goods",
+        "stores and spares"
+      ],
+      "target_keywords": [
+        "purchase",
+        "cost of materials",
+        "cost of goods",
+        "changes in inventories",
+        "consumption"
+      ],
+      "expectation": "Inventory movement should relate to procurement, production and consumption.",
+      "direction": "context_pair",
+      "valid_reasons": [
+        "Service entity holding no meaningful inventory",
+        "Direct consumption without stocking",
+        "Project accounting where cost sits in WIP rather than inventory",
+        "Consignment stock held but not owned",
+        "Stock-in-transit at the period end"
+      ],
+      "resolving_evidence": [
+        "Stock register and physical verification report",
+        "Inventory valuation working",
+        "Stock ageing and slow / non-moving analysis",
+        "NRV assessment",
+        "Purchase and consumption records",
+        "Third-party stock confirmations"
+      ],
+      "assertions": [
+        "Existence",
+        "Valuation",
+        "Completeness",
+        "Rights",
+        "Cut-off"
+      ],
+      "default_severity": "medium",
+      "risk_if_inconsistent": "Valuation, obsolete stock, cut-off or physical existence risk.",
+      "legacy_order": 3
+    },
+    {
+      "id": "REL-10",
+      "name": "Loans and advances vs interest income",
+      "source_keywords": [
+        "loan given",
+        "loans and advances",
+        "inter corporate deposit",
+        "icd",
+        "advance to"
+      ],
+      "target_keywords": [
+        "interest income",
+        "interest received",
+        "interest on loan"
+      ],
+      "expectation": "Interest-bearing loans should generate income unless the terms indicate otherwise.",
+      "direction": "target_expected_when_source_present",
+      "valid_reasons": [
+        "Interest-free loan to a subsidiary or employee by policy",
+        "Loan granted close to the period end",
+        "Interest waived or under negotiation",
+        "Advance is a trade advance, not a financing arrangement"
+      ],
+      "resolving_evidence": [
+        "Loan agreements and sanction terms",
+        "Interest computation",
+        "Party-wise ageing",
+        "Balance confirmations",
+        "Board approval for interest-free terms",
+        "Recovery status"
+      ],
+      "assertions": [
+        "Completeness",
+        "Existence",
+        "Valuation",
+        "Rights"
+      ],
+      "default_severity": "medium",
+      "regularity_flag": true,
+      "risk_if_inconsistent": "Completeness of income, related-party issue or recoverability risk."
+    },
+    {
+      "id": "REL-11",
+      "name": "Investments vs investment income and valuation movement",
+      "source_keywords": [
+        "investment",
+        "investments in",
+        "equity instrument",
+        "mutual fund"
+      ],
+      "target_keywords": [
+        "dividend income",
+        "interest income",
+        "fair value",
+        "impairment of investment",
+        "other comprehensive income"
+      ],
+      "expectation": "Investments should generate income, or carry a valuation / impairment assessment where relevant.",
+      "direction": "target_expected_when_source_present",
+      "valid_reasons": [
+        "Investee declared no dividend for the period",
+        "Growth-option mutual funds accruing no distribution",
+        "Investment acquired close to the period end",
+        "Cost-model measurement with no fair-value movement to record"
+      ],
+      "resolving_evidence": [
+        "Investment register and holding statements",
+        "Demat / custodian confirmations",
+        "Valuation and impairment working",
+        "Investee financial statements",
+        "Board approvals for acquisitions and disposals"
+      ],
+      "assertions": [
+        "Existence",
+        "Valuation",
+        "Rights",
+        "Completeness",
+        "Classification"
+      ],
+      "default_severity": "medium",
+      "risk_if_inconsistent": "Income completeness, valuation or classification risk."
+    },
+    {
+      "id": "REL-12",
+      "name": "Deferred tax vs profit or loss and temporary differences",
+      "source_keywords": [
+        "deferred tax",
+        "deferred tax asset",
+        "deferred tax liability"
+      ],
+      "target_keywords": [
+        "tax expense",
+        "current tax",
+        "profit before tax",
+        "depreciation"
+      ],
+      "expectation": "Deferred tax should be supported by identified temporary differences and, for assets, by evidence of recoverability.",
+      "direction": "context_pair",
+      "valid_reasons": [
+        "No material temporary differences in the period",
+        "Deferred tax asset not recognised due to absence of convincing evidence of future taxable profit",
+        "Entity under a presumptive or exempt tax regime"
+      ],
+      "resolving_evidence": [
+        "Deferred tax computation with temporary-difference schedule",
+        "Income tax computation and return",
+        "Recoverability assessment for deferred tax assets",
+        "Assessment and demand orders"
+      ],
+      "assertions": [
+        "Valuation",
+        "Completeness",
+        "Presentation"
+      ],
+      "default_severity": "medium",
+      "risk_if_inconsistent": "Recognition, valuation and disclosure risk."
+    },
+    {
+      "id": "REL-13",
+      "name": "Grants and subsidies vs deferred income, expenditure and assets",
+      "source_keywords": [
+        "grant",
+        "grant-in-aid",
+        "grant in aid",
+        "subsidy",
+        "budgetary support",
+        "viability gap"
+      ],
+      "target_keywords": [
+        "deferred income",
+        "deferred grant",
+        "capital reserve",
+        "capital grant",
+        "project expenditure"
+      ],
+      "expectation": "Grant receipt should match its sanctioned conditions, its deferred-income treatment, and the related expenditure or asset.",
+      "direction": "target_expected_when_source_present",
+      "valid_reasons": [
+        "Grant received in advance of the sanctioned activity",
+        "Conditional grant not yet recognisable as income",
+        "Capital grant netted against the related asset rather than deferred",
+        "Reimbursement claim still pending with the sanctioning authority"
+      ],
+      "resolving_evidence": [
+        "Sanction order and grant conditions",
+        "Utilisation certificate",
+        "Fund-utilisation statement and project expenditure statement",
+        "Bank trail for receipt and application",
+        "Unspent funds schedule",
+        "Grant-wise reconciliation"
+      ],
+      "assertions": [
+        "Classification",
+        "Completeness",
+        "Presentation",
+        "Cut-off"
+      ],
+      "default_severity": "high",
+      "regularity_flag": true,
+      "risk_if_inconsistent": "Classification, completeness, purpose restriction, utilisation and propriety risk."
+    },
+    {
+      "id": "REL-14",
+      "name": "Inter-unit and inter-company receivable vs payable",
+      "source_keywords": [
+        "due from",
+        "inter-unit",
+        "inter unit",
+        "inter-company receivable",
+        "branch account",
+        "head office"
+      ],
+      "target_keywords": [
+        "due to",
+        "inter-company payable",
+        "inter unit payable",
+        "branch current account"
+      ],
+      "expectation": "Counterparty balances should mirror after timing and in-transit adjustments.",
+      "direction": "context_pair",
+      "valid_reasons": [
+        "Goods or cash in transit at the period end",
+        "Timing difference in recording between the two units",
+        "Debit and credit notes not yet exchanged"
+      ],
+      "resolving_evidence": [
+        "Inter-company / inter-unit reconciliation",
+        "Counterparty balance confirmation",
+        "Invoices, debit notes and credit notes",
+        "Settlement records",
+        "Elimination schedule where consolidated accounts are prepared"
+      ],
+      "assertions": [
+        "Completeness",
+        "Accuracy",
+        "Cut-off",
+        "Classification"
+      ],
+      "default_severity": "medium",
+      "risk_if_inconsistent": "Completeness, cut-off, reconciliation or related-party disclosure risk."
+    }
+  ],
+  "business_process_mapping": {
+    "_note": "FSLI keyword -> business process, used to cluster correlated exceptions. Reproduced from build_relationship_analytics.py::_DEFAULT_BP_MAPPING; supersedes the optional backend/tools/business_process_mapping.json. Unmatched FSLIs default to R2R (Record to Report).",
+    "Trade Receivables": "O2C",
+    "Revenue": "O2C",
+    "Sales": "O2C",
+    "Trade Payables": "P2P",
+    "Purchases": "P2P",
+    "Cost of Materials": "P2P",
+    "Inventory": "Inventory",
+    "Inventories": "Inventory",
+    "Property, Plant and Equipment": "Fixed Assets",
+    "Intangible Assets": "Fixed Assets",
+    "Depreciation": "Fixed Assets",
+    "Employee Benefit": "Payroll",
+    "Salaries": "Payroll",
+    "Cash and Cash Equivalents": "Treasury",
+    "Borrowings": "Treasury",
+    "Finance Costs": "Treasury",
+    "Tax": "Taxation",
+    "Deferred Tax": "Taxation"
+  }
+}

@@ -162,16 +162,17 @@ export function tbUploadMapped(mode, mapping) {
 }
 
 /**
- * Every trial balance stored on the server, newest first.
- *
- * Intentionally NOT called by the UI: the database is shared, so this returns
- * other engagements' and other people's files, and listing it turned the run
- * picker into a directory of unrelated data. The picker shows what the session
- * uploaded instead. Kept because the endpoint is part of the API surface and is
- * the right call for an operator or a future "browse stored files" screen.
+ * Every trial balance already ingested into the database, newest first.
+ * Backs TbRunPicker's "Existing (Database)" tab — the database is shared
+ * across engagements, so callers should filter with `entityId`/`financialYear`
+ * where possible; the picker also applies a client-side text filter on top.
  */
-export async function tbListDocuments(mode) {
-  return request(`${mode.base_path}/documents`);
+export async function tbListDocuments(mode, { entityId, financialYear } = {}) {
+  const params = new URLSearchParams();
+  if (entityId) params.set('entity_id', entityId);
+  if (financialYear) params.set('financial_year', financialYear);
+  const qs = params.toString();
+  return request(`${mode.base_path}/documents${qs ? `?${qs}` : ''}`);
 }
 
 export async function tbDeleteDocument(mode, docId) {
@@ -231,36 +232,16 @@ export function tbUploadGrouping(mode, { file, docId, docId2 }) {
   });
 }
 
+// Known gap (not fixed in the TB-v2 migration): the backend has no
+// POST /audit/upload-grouping-mapped route to receive this. The only way
+// /audit/upload-grouping returns needs_mapping is a grouping file
+// preview_excel_data cannot parse at all, which has no recovery path yet —
+// GroupingMapper.jsx will open, but submitting it 404s.
 export function tbUploadGroupingMapped(mode, mapping) {
   return post(`${mode.base_path}/audit/upload-grouping-mapped`, mapping);
 }
 
-/**
- * PDF evidence for `audit` — annual reports / auditor comments, page-chunked and
- * embedded so the audit can quantify and cite document-sourced risk items.
- *
- * This sub-feature has its own database and embedding endpoint, so it can be
- * unavailable while the rest of the mode works. `tbPdfHealth` reports that
- * separately, which is what the UI uses to explain itself rather than surfacing a
- * connection error on first upload.
- */
-export async function tbPdfHealth(mode) {
-  return request(`${mode.base_path}/pdfs/health`);
-}
-
-export function tbUploadPdf(mode, file) {
-  return uploadFile(`${mode.base_path}/pdfs`, file);
-}
-
-export async function tbListPdfs(mode) {
-  return request(`${mode.base_path}/pdfs`);
-}
-
-export async function tbDeletePdf(mode, docId) {
-  return request(`${mode.base_path}/pdfs/${encodeURIComponent(docId)}`, { method: 'DELETE' });
-}
-
-export async function tbAuditWorkbook(mode, { docId, docIdPrior, uploadDocIds }) {
+export async function tbAuditWorkbook(mode, { docId, docIdPrior, uploadDocIds, format }) {
   let res;
   try {
     res = await fetch(`${mode.base_path}/audit/workbook`, {
@@ -270,6 +251,7 @@ export async function tbAuditWorkbook(mode, { docId, docIdPrior, uploadDocIds })
         doc_id: docId,
         doc_id_prior: docIdPrior || null,
         upload_doc_ids: uploadDocIds?.length ? uploadDocIds : null,
+        format: format || 'xlsx',
       }),
     });
   } catch {
@@ -279,7 +261,13 @@ export async function tbAuditWorkbook(mode, { docId, docIdPrior, uploadDocIds })
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail || `Workbook generation failed (HTTP ${res.status})`);
   }
-  return res.blob();
+  // The backend names the file after the input TB (see router.py's
+  // _tb_filename_suffix) via Content-Disposition — parsed here rather than
+  // hardcoded client-side, so the two never drift apart.
+  const disposition = res.headers.get('content-disposition') || '';
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  const filename = match ? match[1] : (format === 'docx' ? 'TB_Audit_Report.docx' : 'TB_Audit.xlsx');
+  return { blob: await res.blob(), filename };
 }
 
 export function tbValidate(mode, { docId, docIdPrior, ...params }) {
