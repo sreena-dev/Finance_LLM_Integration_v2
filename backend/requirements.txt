@@ -14,18 +14,15 @@ httpx>=0.27.0
 pandas>=2.0.0
 openpyxl>=3.1.0
 
-# Trial Balance pipeline (Finance_llm_v2) — Excel parsing across real-world
-# exports: openpyxl reads .xlsx, xlrd reads legacy .xls, lxml backs
-# pd.read_html for the common case of an ERP "export to Excel" that's actually
-# an HTML table saved with an .xls/.xlsx extension.
-xlrd>=2.0.1
-lxml>=5.0.0
-
-# Trial Balance PDF evidence — page-wise text extraction for the annual-report /
-# auditor-comment PDFs that `audit` cites. Only this one sub-feature imports it;
-# without it the three /pdfs routes report themselves unavailable and the rest of
-# the mode is unaffected.
-PyMuPDF>=1.24.0
+# Trial Balance pipeline (TB-v2) — polars/fastexcel for canonical TB ingestion,
+# python-docx for the audit report writer. No PDF-evidence sub-feature (that's
+# what the old mode's xlrd/lxml/PyMuPDF backed; TB-v2 doesn't have it, and
+# nothing else in this repo imports those three, so they're dropped entirely
+# rather than kept unused).
+polars>=1.0.0
+fastexcel>=0.12.0
+numpy>=1.26.0
+python-docx>=1.1.0
 
 # Financial Diagnostic Report pipeline (vendored fs_db + fdr)
 # fs_db is written against psycopg v3 and is vendored verbatim, so the driver is

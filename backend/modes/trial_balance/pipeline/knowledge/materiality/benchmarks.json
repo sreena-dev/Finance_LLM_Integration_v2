@@ -1,0 +1,108 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "source": "TB_AI_Audit_Final_Detailed_Team_Final.md sec 8.1 (provisional materiality proxies), sec 2.2 (materiality by value/nature/context)",
+    "purpose": "Benchmark percentages and threshold fractions for PROVISIONAL planning materiality, plus the sensitive-item floors that make an account material by NATURE regardless of value.",
+    "extracted_from": "backend/tools/materiality/build_materiality.py module constants",
+    "extraction_note": "benchmark_percentages / threshold_fractions / priority_ratios / distribution_ratios / coverage_thresholds are generated from the Python literals by AST read and reproduce current behaviour exactly. sensitive_floors is NEW (sec 8.1) and is NOT read by build_materiality -- it is consumed by build_materiality_lens, which layers nature/context beside the existing quantitative waterfall without modifying it.",
+    "amend_policy": "Audit-approved materiality, when the engagement team supplies one, OVERRIDES everything here. These are proxies for prioritisation only and must be labelled provisional in output -- sec 8.1."
+  },
+  "benchmark_percentages": {
+    "profit_before_tax": 5.0,
+    "revenue": 1.0,
+    "total_assets": 1.0,
+    "total_expenses": 1.0
+  },
+  "pbt_stability_min_revenue_pct": 0.02,
+  "threshold_fractions": {
+    "performance_materiality": 0.75,
+    "clearly_trivial": 0.05
+  },
+  "priority_ratios": {
+    "critical": 100.0,
+    "high": 20.0,
+    "medium": 5.0,
+    "low": 0.75
+  },
+  "distribution_ratios": {
+    "trivial_to_performance": 0.75,
+    "performance_to_overall": 1.0,
+    "above_10x": 10.0,
+    "above_100x": 100.0
+  },
+  "coverage_thresholds": {
+    "high_pct": 95.0,
+    "medium_pct": 85.0
+  },
+  "sensitive_floors": {
+    "_note": "sec 8.1 sensitive-item floor and sec 2.2 materiality by nature/context. An account matching one of these sensitive tags is elevated for audit attention even when its value sits below the clearly-trivial threshold. floor_fraction is expressed as a fraction of OVERALL materiality: 0.0 means any non-nil balance qualifies.",
+    "default_floor_fraction": 0.05,
+    "by_tag": {
+      "grant_subsidy": {
+        "floor_fraction": 0.0,
+        "basis": "context",
+        "reason": "Public money with purpose restriction -- regularity and utilisation apply at any value (sec 12.3)."
+      },
+      "propriety": {
+        "floor_fraction": 0.0,
+        "basis": "context",
+        "reason": "Write-off, waiver, ex-gratia, loss or shortage requires competent sanction regardless of amount (sec 2.2, sec 12.4)."
+      },
+      "related_party": {
+        "floor_fraction": 0.0,
+        "basis": "nature",
+        "reason": "Disclosure completeness does not have a value threshold (sec 11)."
+      },
+      "csr": {
+        "floor_fraction": 0.0,
+        "basis": "context",
+        "reason": "Section 135 computation and unspent-account treatment are statutory (sec 9.17)."
+      },
+      "suspense_control": {
+        "floor_fraction": 0.01,
+        "basis": "nature",
+        "reason": "Unresolved classification; can mask offsetting errors far larger than the net balance (sec 12.1)."
+      },
+      "statutory_dues": {
+        "floor_fraction": 0.01,
+        "basis": "context",
+        "reason": "Return-wise reconciliation and payment compliance (sec 9.16)."
+      },
+      "msme": {
+        "floor_fraction": 0.01,
+        "basis": "context",
+        "reason": "Delayed-payment interest and disclosure are statutory (sec 10.1)."
+      },
+      "deposit": {
+        "floor_fraction": 0.02,
+        "basis": "nature",
+        "reason": "Long-outstanding deposits and lapsing rules (sec 9.8)."
+      },
+      "advance": {
+        "floor_fraction": 0.02,
+        "basis": "nature",
+        "reason": "Recoverability, sanction and adjustment status (sec 9.8)."
+      },
+      "prior_period_item": {
+        "floor_fraction": 0.02,
+        "basis": "nature",
+        "reason": "Indicates a correction whose origin period needs explanation (sec 9.15)."
+      },
+      "exceptional_item": {
+        "floor_fraction": 0.02,
+        "basis": "nature",
+        "reason": "Presentation and disclosure judgement (sec 9.15)."
+      },
+      "remission": {
+        "floor_fraction": 0.0,
+        "basis": "context",
+        "reason": "Foregone public revenue requires sanction (sec 12.3)."
+      },
+      "foreign_currency": {
+        "floor_fraction": 0.02,
+        "basis": "nature",
+        "reason": "Restatement at closing rate and exchange-difference treatment (sec 9.15)."
+      }
+    }
+  }
+}

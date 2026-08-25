@@ -29,42 +29,38 @@
 }
 .tb__dismiss:hover { color: var(--navy-900); }
 
-/* ── Quick actions ────────────────────────────────────────────────────── */
+/* ── Top row: chat mode tabs + quick actions, same line ──────────────────── */
 
-/* Flex rather than an auto-fit grid: with a single action a grid track would
-   stretch the card to the full width and make one button look like a banner. */
-.tb__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--border);
-}
-.tb__action {
-  flex: 0 1 340px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
-  text-align: left;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: border-color 0.16s var(--ease), background 0.16s var(--ease);
-}
-.tb__action:hover:not(:disabled) { border-color: var(--navy-600); background: var(--navy-50); }
-.tb__action:disabled { opacity: 0.55; cursor: default; }
-.tb__action-title {
+.tb__toprow {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 13px;
-  font-weight: 620;
-  color: var(--navy-900);
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 20px 0;
+  background: var(--surface);
 }
-.tb__action-desc { font-size: 11.5px; line-height: 1.45; color: var(--ink-500); }
-.tb__action-time { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-400); }
+
+.tb__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.tb__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 190px;
+  padding: 7px 18px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--white);
+  background: var(--navy-700);
+  border: 1px solid var(--navy-700);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
+}
+.tb__action:hover:not(:disabled) { background: var(--navy-800); border-color: var(--navy-800); box-shadow: var(--shadow-md); }
+.tb__action:disabled { opacity: 0.55; cursor: default; }
 
 /* ── Stream ───────────────────────────────────────────────────────────── */
 
@@ -89,6 +85,18 @@
   line-height: 1.5;
 }
 
+.tb__assistant {
+  align-self: flex-start;
+  max-width: 76%;
+  padding: 10px 15px;
+  border-radius: 14px 14px 14px 3px;
+  background: var(--ink-50);
+  border: 1px solid var(--border);
+  color: var(--ink-700);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
 .tb__note {
   margin: 0;
   font-size: 12.5px;
@@ -103,7 +111,8 @@
 /* Which scope answered. Shown because a question about "revenue" means something
    different against one trial balance than against the annual-report corpus, and
    the answer text alone does not always make that obvious. */
-.tb__answer-head { display: flex; flex-wrap: wrap; gap: 6px; }
+.tb__answer-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.tb__ai-mark { color: var(--blue-500); flex-shrink: 0; margin-right: 2px; vertical-align: -2px; }
 .tb__computed {
   margin: 0;
   padding: 10px 12px;
@@ -144,8 +153,37 @@
   color: var(--ink-500);
   text-align: center;
 }
-.tb__idle-icon { color: var(--ink-300); }
+.tb__idle-icon { color: var(--blue-500); }
 .tb__idle p { margin: 0; font-size: 13px; max-width: 440px; line-height: 1.6; }
+.tb__idle-welcome { font-size: 15px; font-weight: 600; color: var(--ink-700); }
+
+/* ── Chat mode toggle ─────────────────────────────────────────────────── */
+
+.tb__chatmode {
+  display: flex;
+  gap: 4px;
+  background: var(--surface);
+}
+.tb__chatmode-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-500);
+  background: var(--ink-50);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.16s var(--ease), color 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+.tb__chatmode-tab:hover { color: var(--ink-800); }
+.tb__chatmode-tab.is-active {
+  background: var(--navy-50);
+  color: var(--navy-800);
+  border-color: var(--navy-600);
+}
 
 /* ── Composer ─────────────────────────────────────────────────────────── */
 
@@ -153,7 +191,7 @@
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  padding: 12px 20px 16px;
+  padding: 8px 20px 16px;
   border-top: 1px solid var(--border);
   background: var(--surface);
 }
@@ -197,5 +235,5 @@
 
 @media (max-width: 900px) {
   .tb__stream-inner { padding: 16px 16px 24px; }
-  .tb__actions, .tb__composer { padding-left: 16px; padding-right: 16px; }
+  .tb__toprow, .tb__composer { padding-left: 16px; padding-right: 16px; }
 }

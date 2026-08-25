@@ -1,0 +1,63 @@
+{
+  "_meta": {
+    "source": "Companies Act 2013, Schedule III, Division I (Companies (Accounting Standards) Rules, 2006 / AS)",
+    "purpose": "Closed classification taxonomy for TB grouping of companies following AS (not Ind AS). Use ONLY for companies confirmed to follow AS - see accounting_standard_detect.py.",
+    "fields": ["BS/PL", "MAIN HEAD", "SUB HEAD 1", "SUB HEAD 2"],
+    "account_type_rule": "Same derivation rule as Ind AS: BS+asset-ish MAIN HEAD -> Asset; BS+liabilit-ish -> Liability; BS+Shareholders' funds -> Equity; PL+Revenue/Other income -> Income; PL+Expenses -> Expense",
+    "key_differences_from_ind_as": [
+      "No 'Financial Assets' / 'Financial Liabilities' grouping - items sit directly under Non-current/Current assets or liabilities",
+      "No Other Comprehensive Income concept",
+      "No Statement of Changes in Equity as a primary statement",
+      "Equity is 'Shareholders' funds' (Share capital, Reserves and surplus) not 'Equity'/'Other Equity'",
+      "PPE is called 'Tangible assets' not 'Property, Plant and Equipment'",
+      "Trade receivables sub-classified as Secured/Unsecured/Doubtful only (no ECL staging)",
+      "P&L includes 'Extraordinary items' and 'Exceptional items' as separate lines"
+    ]
+  },
+  "taxonomy": [
+    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Tangible assets", "sub_head_2": ["Land", "Buildings", "Plant and Equipment", "Furniture and Fixtures", "Vehicles", "Office equipment", "Other tangible assets"]},
+    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Intangible assets", "sub_head_2": ["Goodwill", "Brands/trademarks", "Computer software", "Mastheads and publishing titles", "Mining rights", "Copyrights, patents and other intellectual property rights", "Recipes, formulae, models, designs and prototypes", "Licences and franchise", "Other intangible assets"]},
+    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Capital work-in-progress", "sub_head_2": ["Capital work-in-progress"]},
+    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Intangible assets under development", "sub_head_2": ["Intangible assets under development"]},
+    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Non-current investments", "sub_head_2": ["Investment property", "Investments in Equity Instruments", "Investments in preference shares", "Investments in Government or trust securities", "Investments in debentures or bonds", "Investments in Mutual Funds", "Investments in partnership firms", "Other non-current investments"]},
+    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Deferred tax assets (net)", "sub_head_2": ["Deferred tax assets (net)"]},
+    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Long-term loans and advances", "sub_head_2": ["Capital Advances", "Security Deposits", "Loans and advances to related parties", "Other loans and advances - Secured considered good", "Other loans and advances - Unsecured considered good", "Other loans and advances - Doubtful"]},
+    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Other non-current assets", "sub_head_2": ["Long-term Trade Receivables - Secured considered good", "Long-term Trade Receivables - Unsecured considered good", "Long-term Trade Receivables - Doubtful", "Other non-current assets"]},
+
+    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Current investments", "sub_head_2": ["Investments in Equity Instruments", "Investments in Preference Shares", "Investments in Government or trust securities", "Investments in debentures or bonds", "Investments in Mutual Funds", "Investments in partnership firms", "Other current investments"]},
+    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Inventories", "sub_head_2": ["Raw materials", "Work-in-progress", "Finished goods", "Stock-in-trade", "Stores and spares", "Loose tools", "Other inventories"]},
+    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Trade receivables", "sub_head_2": ["Secured, considered good", "Unsecured, considered good", "Doubtful"]},
+    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Cash and cash equivalents", "sub_head_2": ["Balances with banks", "Cheques, drafts on hand", "Cash on hand", "Earmarked balances with banks", "Bank deposits with more than 12 months maturity", "Other cash equivalents"]},
+    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Short-term loans and advances", "sub_head_2": ["Loans and advances to related parties", "Other loans and advances - Secured considered good", "Other loans and advances - Unsecured considered good", "Other loans and advances - Doubtful"]},
+    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Other current assets", "sub_head_2": ["Other current assets (specify nature)"]},
+
+    {"bs_pl": "BS", "main_head": "Shareholders' funds", "sub_head_1": "Share capital", "sub_head_2": ["Share capital"]},
+    {"bs_pl": "BS", "main_head": "Shareholders' funds", "sub_head_1": "Reserves and surplus", "sub_head_2": ["Capital Reserves", "Capital Redemption Reserve", "Securities Premium", "Debenture Redemption Reserve", "Revaluation Reserve", "Share Options Outstanding Account", "Other Reserves", "Surplus (balance in Statement of Profit and Loss)"]},
+    {"bs_pl": "BS", "main_head": "Shareholders' funds", "sub_head_1": "Money received against share warrants", "sub_head_2": ["Money received against share warrants"]},
+    {"bs_pl": "BS", "main_head": "Share application money pending allotment", "sub_head_1": "Share application money pending allotment", "sub_head_2": ["Share application money pending allotment"]},
+
+    {"bs_pl": "BS", "main_head": "Non-current liabilities", "sub_head_1": "Long-term borrowings", "sub_head_2": ["Bonds/debentures", "Term loans - from banks", "Term loans - from other parties", "Deferred payment liabilities", "Deposits", "Loans and advances from related parties", "Long term maturities of finance lease obligations", "Other loans and advances"]},
+    {"bs_pl": "BS", "main_head": "Non-current liabilities", "sub_head_1": "Deferred tax liabilities (Net)", "sub_head_2": ["Deferred tax liabilities (Net)"]},
+    {"bs_pl": "BS", "main_head": "Non-current liabilities", "sub_head_1": "Other Long-term liabilities", "sub_head_2": ["Trade payables (long-term)", "Others"]},
+    {"bs_pl": "BS", "main_head": "Non-current liabilities", "sub_head_1": "Long-term provisions", "sub_head_2": ["Provision for employee benefits", "Others"]},
+
+    {"bs_pl": "BS", "main_head": "Current liabilities", "sub_head_1": "Short-term borrowings", "sub_head_2": ["Loans repayable on demand - from banks", "Loans repayable on demand - from other parties", "Loans and advances from related parties", "Deposits", "Other loans and advances"]},
+    {"bs_pl": "BS", "main_head": "Current liabilities", "sub_head_1": "Trade payables", "sub_head_2": ["Total outstanding dues of micro and small enterprises", "Total outstanding dues of creditors other than micro and small enterprises"]},
+    {"bs_pl": "BS", "main_head": "Current liabilities", "sub_head_1": "Other current liabilities", "sub_head_2": ["Current maturities of long-term debt", "Current maturities of finance lease obligations", "Interest accrued but not due on borrowings", "Interest accrued and due on borrowings", "Income received in advance", "Unpaid dividends", "Application money refundable", "Unpaid matured deposits and interest accrued thereon", "Unpaid matured debentures and interest accrued thereon", "Other payables"]},
+    {"bs_pl": "BS", "main_head": "Current liabilities", "sub_head_1": "Short-term provisions", "sub_head_2": ["Provision for employee benefits", "Others"]},
+
+    {"bs_pl": "PL", "main_head": "Revenue", "sub_head_1": "Revenue from operations", "sub_head_2": ["Sale of products", "Sale of services", "Other operating revenues", "Less: Excise duty"]},
+    {"bs_pl": "PL", "main_head": "Revenue", "sub_head_1": "Other income", "sub_head_2": ["Interest Income", "Dividend Income", "Net gain/loss on sale of investments", "Other non-operating income"]},
+    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Cost of materials consumed", "sub_head_2": ["Cost of materials consumed"]},
+    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Purchases of Stock-in-Trade", "sub_head_2": ["Purchases of Stock-in-Trade"]},
+    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Changes in inventories of finished goods, WIP and Stock-in-Trade", "sub_head_2": ["Changes in inventories"]},
+    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Employee benefits expense", "sub_head_2": ["Salaries and wages", "Contribution to provident and other funds", "Expense on ESOP/ESPP", "Staff welfare expenses"]},
+    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Finance costs", "sub_head_2": ["Interest expense", "Other borrowing costs", "Net gain/loss on foreign currency transactions and translation (finance cost)"]},
+    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Depreciation and amortisation expense", "sub_head_2": ["Depreciation - Tangible assets", "Amortisation - Intangible assets"]},
+    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Other expenses", "sub_head_2": ["Consumption of stores and spare parts", "Power and fuel", "Rent", "Repairs to buildings", "Repairs to machinery", "Insurance", "Rates and taxes (excluding income tax)", "Statutory Audit Fee", "Tax Audit Fee", "other miscellaneous expenses", "Business development and other miscellaneous expenses", "Legal and professional charges", "Miscellaneous expenses"]},
+    {"bs_pl": "PL", "main_head": "Exceptional and extraordinary items", "sub_head_1": "Exceptional items", "sub_head_2": ["Exceptional items"]},
+    {"bs_pl": "PL", "main_head": "Exceptional and extraordinary items", "sub_head_1": "Extraordinary items", "sub_head_2": ["Extraordinary items"]},
+    {"bs_pl": "PL", "main_head": "Tax expense", "sub_head_1": "Tax expense", "sub_head_2": ["Current tax", "Deferred tax"]},
+    {"bs_pl": "PL", "main_head": "Discontinuing operations", "sub_head_1": "Profit/loss from discontinuing operations", "sub_head_2": ["Profit/loss from discontinuing operations (before tax)", "Tax expense of discontinuing operations"]}
+  ]
+}
