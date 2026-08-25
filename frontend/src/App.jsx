@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar';
 import ChatView from './components/chat/ChatView';
 import ReportView from './components/report/ReportView';
 import TrialBalanceView from './components/trial-balance/TrialBalanceView';
+import FdrAnalysis from './components/financial-diagnostic-report/FdrAnalysis';
 import Icon from './components/common/Icon';
 import Notice from './components/common/Notice';
 import './App.css';
@@ -86,8 +87,15 @@ export default function App() {
         if (cancelled) return;
         setModes(list);
         // Companions are sub-modes rendered inside their parent, so one must
-        // never become the initially selected mode.
-        setActiveId((cur) => cur || list.find((m) => !m.companion_of)?.id || null);
+        // never become the initially selected mode. A refresh restores the
+        // last-selected mode from localStorage when it is still a valid,
+        // non-companion mode; otherwise it falls back to the first one.
+        setActiveId((cur) => {
+          if (cur) return cur;
+          const stored = localStorage.getItem('artha.activeMode');
+          const restorable = list.some((m) => m.id === stored && !m.companion_of);
+          return (restorable && stored) || list.find((m) => !m.companion_of)?.id || null;
+        });
         setBootError(null);
 
         // Probed in parallel and after first paint: probing imports pipelines
@@ -112,6 +120,12 @@ export default function App() {
     () => modes.find((m) => m.id === activeId) || null,
     [modes, activeId]
   );
+
+  // Remember the selected mode so a refresh returns here instead of the first
+  // page. Restored on boot in the mode-list effect above.
+  useEffect(() => {
+    if (activeId) localStorage.setItem('artha.activeMode', activeId);
+  }, [activeId]);
 
   // The switcher lists top-level modes only. A companion (SAR Q&A) shares its
   // parent's entity/FY dropdowns, so listing it separately would show the same
@@ -275,6 +289,10 @@ export default function App() {
                     state={tbStates[activeMode.id] || emptyTBState()}
                     setState={setTBFor(activeMode.id)}
                   />
+                ) : activeMode.ui === 'fdr' ? (
+                  // Self-contained mocked view; the gateway's ModeHeader already
+                  // renders the title/pill/path, so it runs in `embedded` mode.
+                  <FdrAnalysis embedded />
                 ) : (
                   <ChatView
                     mode={activeMode}

@@ -130,12 +130,38 @@ def _build_llm(max_tokens: int = 4096, temperature: float = 0.0):
     base_url = os.environ.get("GENERATION_BASE_URL", "http://localhost:8000").rstrip("/")
     model    = os.environ.get("GENERATION_MODEL", "gemma-4-26b-a4b-it")
 
-    return SafeVLLMClient(
+    # `api_key` is passed through **kwargs into the base client's config, which
+    # turns it into an `Authorization: Bearer ...` header (see
+    # yukta/core/Clients/base_client.py). Only sent when set: the header key is
+    # absent from config when the value is empty, so an endpoint that needs no
+    # auth still sees an unauthenticated request rather than "Bearer ".
+    kwargs = {}
+    api_key = os.environ.get("GENERATION_API_KEY", "").strip()
+    if api_key:
+        kwargs["api_key"] = api_key
+
+    client = SafeVLLMClient(
         model_name=model,
         base_url=base_url,
         max_tokens=max_tokens,
         temperature=temperature,
+        **kwargs,
     )
+
+    # The base client turns config["api_key"] into an Authorization header for
+    # its POST path only. get_model_info() issues a *separate*
+    # self._session.get("/v1/models") that bypasses that path, so on a gateway
+    # which authenticates /v1/models too it 401s on every call — visible as
+    # "Failed to fetch model info from vLLM: 401 Unauthorized" and a silent
+    # fallback to a default context window. Setting the header as a session
+    # default covers both requests; the per-request header still takes
+    # precedence where the base client sets one explicitly.
+    if api_key:
+        session = getattr(client, "_session", None)
+        if session is not None:
+            session.headers["Authorization"] = f"Bearer {api_key}"
+
+    return client
 
 
 def _build_config(max_iter: int = 1, max_tokens: int = 4096, name: str = "sar_agent"):
@@ -580,6 +606,16 @@ def _make_direct_llm_caller(
         timeout = int(os.environ.get("GENERATION_TIMEOUT", "300"))
         return base, model, timeout
 
+    def _auth_headers():
+        """Bearer header for the generation endpoint, or {} when no key is set.
+
+        This path bypasses the yukta client (it is the direct-HTTP fallback used
+        when yukta is unavailable), so it has to add the header itself — the
+        client's own api_key plumbing does not apply here.
+        """
+        key = os.environ.get("GENERATION_API_KEY", "").strip()
+        return {"Authorization": f"Bearer {key}"} if key else {}
+
     def _call(user_message: str):
         base, model, timeout = _get_settings()
         resp = requests.post(
@@ -593,6 +629,7 @@ def _make_direct_llm_caller(
                 "max_tokens": max_tokens,
                 "temperature": temperature,
             },
+            headers=_auth_headers(),
             timeout=timeout,
         )
         resp.raise_for_status()

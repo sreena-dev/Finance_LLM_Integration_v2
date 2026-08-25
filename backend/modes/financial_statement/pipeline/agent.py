@@ -467,12 +467,38 @@ class Orchestrator:
     def _make_llm_client(max_tokens: int):
         from yukta.core.Clients.vllm_client import VLLMClient
 
-        return VLLMClient(
+        # api_key reaches the base client's config and becomes an
+        # `Authorization: Bearer ...` header. Omitted entirely when unset so an
+        # endpoint without auth is not sent an empty bearer token.
+        import os as _os
+
+        kwargs = {}
+        _key = _os.environ.get("GENERATION_API_KEY", "").strip()
+        if _key:
+            kwargs["api_key"] = _key
+
+        client = VLLMClient(
             model_name=tool_names.Config.LLM_MODEL_NAME,
             base_url=tool_names.Config.LLM_BASE_URL,
             max_tokens=max_tokens,
             timeout=120,
+            **kwargs,
         )
+
+        # The base client turns config["api_key"] into an Authorization header for
+        # its POST path only. get_model_info() issues a *separate*
+        # self._session.get("/v1/models") that bypasses that path, so on a gateway
+        # which authenticates /v1/models too it 401s on every call — visible as
+        # "Failed to fetch model info from vLLM: 401 Unauthorized" and a silent
+        # fallback to a default context window. Setting the header as a session
+        # default covers both requests; the per-request header still takes
+        # precedence where the base client sets one explicitly.
+        if _key:
+            session = getattr(client, "_session", None)
+            if session is not None:
+                session.headers["Authorization"] = f"Bearer {_key}"
+
+        return client
 
     def _build_fs_agent(self, conn, retrieved_chunks: list[dict], conn_reports=None, callbacks=None,
                         query: str = ""):

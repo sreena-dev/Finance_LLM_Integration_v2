@@ -37,7 +37,13 @@ RUN pip install --upgrade pip setuptools wheel
 
 # Dependencies before source: editing a .py file must not re-run this layer.
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+# The CPU wheel index is added for torch, which the FDR mode pulls in for local
+# cross-encoder reranking. requirements.txt asks for the CPU build in a comment,
+# but a comment cannot select an index: plain PyPI resolves torch to the CUDA
+# build, which is ~2.5GB of wheels and drivers this image has no GPU to use.
+# --extra-index-url (not --index-url) so PyPI stays the source for everything
+# else; pip prefers the CPU wheel because only that index publishes it.
+RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
 # `yukta` is not on PyPI. It is supplied as a wheel in backend/vendor/ (build
 # one with scripts/build-yukta-wheel.sh). Without it, Financial Statements,
@@ -111,18 +117,26 @@ RUN groupadd --system --gid 10001 artha \
 #   here as JSON (yukta/core/storage.py). It defaults to ~/.yukta; YUKTA_DATA_DIR
 #   redirects it somewhere explicit and backed by a volume instead.
 #
+# /var/lib/artha/hf — the Hugging Face cache (HF_HOME). The FDR reranker
+#   (BAAI/bge-reranker-v2-m3) is 2.29GB; HF's default location is under $HOME,
+#   which is a 64MB tmpfs here, so the model could never be cached there no
+#   matter what the network does — it reported itself unavailable with a
+#   "couldn't connect to huggingface.co" message that pointed at the wrong
+#   cause. On the volume it downloads once and survives restarts.
+#
 # /home/artha — HOME must exist and be writable even though nothing should need
 #   it: the user was created with --no-create-home, so Path.home() resolved to a
 #   missing directory and any library reaching for $HOME (a ~/.cache, a
 #   tokenizer download) failed with "[Errno 30] Read-only file system" from deep
 #   inside a pipeline, where it reads as an LLM error rather than a mount
 #   problem. Compose mounts a tmpfs here so such writes are scratch, not state.
-RUN mkdir -p /home/artha /var/lib/artha/yukta \
+RUN mkdir -p /home/artha /var/lib/artha/yukta /var/lib/artha/hf \
  && chown -R artha:artha /home/artha /var/lib/artha \
  && chmod 700 /home/artha
 
 ENV HOME=/home/artha \
-    YUKTA_DATA_DIR=/var/lib/artha/yukta
+    YUKTA_DATA_DIR=/var/lib/artha/yukta \
+    HF_HOME=/var/lib/artha/hf
 
 WORKDIR /app
 COPY --chown=artha:artha . /app

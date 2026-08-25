@@ -65,6 +65,14 @@ logging.basicConfig(
 # to mutate it.
 logging.getLogger("yukta").propagate = False
 
+# Registered before any mode is imported. OpenTelemetry's first TracerProvider
+# wins, and each mode's own tracing setup backs off when one already exists — so
+# doing it here is what makes all four modes report to the same Phoenix project
+# instead of racing to configure it differently. See app/tracing.py.
+from app.tracing import setup_tracing  # noqa: E402
+
+setup_tracing()
+
 from app.errors import InvalidRequestError, NotFoundError  # noqa: E402
 from app.registry import MODES, describe  # noqa: E402
 from modes.financial_diagnostic_report.router import router as fdr_router  # noqa: E402
