@@ -32,9 +32,6 @@ const emptyTBState = () => ({
   priorId: null,
   messages: [],
   pdfIds: [],
-  // 'db' = free-form questions answered by intent from already-ingested data,
-  // no file needed. 'upload' = questions scoped to a file uploaded this session.
-  chatQueryMode: 'db',
 });
 
 function ModeHeader({ mode, health }) {

@@ -41,67 +41,6 @@
   gap: 14px;
 }
 
-/* Source switcher: "Upload new" vs "Existing (Database)" — same visual
-   language as the chat-mode tabs in TrialBalanceView.css. */
-.tbpick__tabs {
-  display: flex;
-  gap: 4px;
-  padding: 3px;
-  background: var(--ink-50);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  align-self: flex-start;
-}
-.tbpick__tab {
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-500);
-  background: transparent;
-  border: none;
-  border-radius: calc(var(--radius-sm) - 2px);
-  cursor: pointer;
-  transition: background 0.16s var(--ease), color 0.16s var(--ease);
-}
-.tbpick__tab:hover { color: var(--ink-800); }
-.tbpick__tab.is-active { background: var(--white); color: var(--navy-800); box-shadow: 0 1px 2px rgb(16 24 40 / 8%); }
-
-/* Two explicit slots (Current Year / Prior Year) for comparison mode, used by
-   both the upload tab and the database tab so the two periods are never
-   ambiguous about which one is which. */
-.tbpick__slots { display: flex; flex-direction: column; gap: 12px; }
-.tbpick__slot { display: flex; flex-direction: column; gap: 6px; }
-.tbpick__slot-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink-500);
-}
-
-/* Company + Period Year dropdown pair for the database tab. */
-.tbpick__dbselect { display: flex; flex-direction: column; gap: 8px; }
-.tbpick__select {
-  width: 100%;
-  padding: 8px 12px;
-  font-size: 12.5px;
-  color: var(--ink-800);
-  background: var(--white);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-.tbpick__select:focus { outline: none; border-color: var(--navy-600); }
-.tbpick__select:disabled { opacity: 0.5; cursor: default; }
-.tbpick__dbselect-picked {
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--ok-600);
-}
-
 .tbpick__list { display: flex; flex-direction: column; gap: 6px; }
 .tbpick__empty { margin: 0; font-size: 13px; color: var(--ink-500); padding: 8px 2px; }
 

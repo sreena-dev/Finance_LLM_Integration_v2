@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
-  tbAsk, tbAskGeneral, tbAudit, tbUpload, tbValidate,
+  tbAsk, tbAskGeneral, tbAudit, tbUpload, tbUploadPdf, tbValidate,
 } from '../../api/client';
 import Icon from '../common/Icon';
 import Markdown from '../common/Markdown';
@@ -12,41 +12,15 @@ import GroupingMapper from './GroupingMapper';
 import TbRunPicker from './TbRunPicker';
 import './TrialBalanceView.css';
 
-const SINGLE_AUDIT_STAGES = [
-  'Validating trial balance', 'Computing materiality & FSLI summary',
-  'Analysing relationships & risk indicators', 'Screening sensitive & anomalous accounts',
-  'Consolidating exceptions', 'Drafting findings',
-];
-const COMPARISON_AUDIT_STAGES = [
-  'Validating both trial balances', 'Comparing structure (new/removed accounts)',
-  'Analysing variances', 'Checking sign conventions', 'Drafting comparison findings',
+const AUDIT_STAGES = [
+  'Mapping accounts', 'Screening', 'Analysing relationships',
+  'Reading supporting documents', 'Mapping standards & rule docs', 'Drafting findings',
 ];
 const ASK_STAGES = ['Reading the trial balance', 'Running tools', 'Composing the answer'];
 const GENERAL_STAGES = ['Checking', 'Planning', 'Searching corpora', 'Composing answer'];
 
 let _seq = 0;
 const nextId = () => `m${++_seq}`;
-
-// Small-talk greetings answer instantly from the client — no reason to spend a
-// tool-calling turn (or a network round trip) on "hi". Matched as a whole
-// message (with light punctuation tolerance) so this never intercepts a real
-// question that merely starts with "hello" mid-sentence.
-const GREETING_RULES = [
-  { re: /^(hi+|hello+|hey+|yo|greetings)$/i, reply: 'Hi! How can I help you?' },
-  { re: /^good\s*morning$/i, reply: 'Good morning! How can I help you?' },
-  { re: /^good\s*afternoon$/i, reply: 'Good afternoon! How can I help you?' },
-  { re: /^good\s*evening$/i, reply: 'Good evening! How can I help you?' },
-  { re: /^good\s*night$/i, reply: 'Good night! Let me know if you need anything before you go.' },
-  { re: /^(how are you\??|how'?s it going\??)$/i, reply: "I'm doing well, thanks for asking! How can I help you?" },
-  { re: /^(thanks|thank you|thx|ty)!?$/i, reply: "You're welcome! Anything else I can help with?" },
-  { re: /^(bye|goodbye|see ya|see you)!?$/i, reply: 'Goodbye! Come back anytime you have a question.' },
-];
-
-function matchGreeting(text) {
-  const normalized = text.trim().replace(/[!.\s]+$/, '');
-  const rule = GREETING_RULES.find(({ re }) => re.test(normalized));
-  return rule ? rule.reply : null;
-}
 
 /**
  * Trial Balance mode — one continuous stream rather than tabbed panels.
@@ -62,21 +36,20 @@ function matchGreeting(text) {
  * against it, and without one they go to the corpus pipeline (Ind AS, annual
  * reports, reference material) — see send().
  *
- * `documents` starts as whatever was uploaded here, but also picks up any
- * document the run picker's "Existing (Database)" tab adds — selecting a
- * DB-ingested trial balance normalizes it into the same row shape as an
- * upload, so this state stays the single source of truth for `docOf`,
- * `askTarget`, and the active-selection banner either way. Uploads are
- * content-addressed, so re-uploading the same workbook returns the same
- * `doc_id` and costs nothing.
+ * `documents` holds only what was uploaded here, and is deliberately NOT seeded
+ * from `GET /documents`. That endpoint returns every trial balance ever stored on
+ * a shared database — other companies, other engagements, other people's files —
+ * so listing it made the picker a directory of unrelated data that happened to
+ * contain your file. Uploads are content-addressed, so re-uploading the same
+ * workbook returns the same `doc_id` and costs nothing.
  */
 export default function TrialBalanceView({ mode, state, setState }) {
-  const { documents, currentId, priorId, messages, pdfIds, chatQueryMode } = state;
+  const { documents, currentId, priorId, messages, pdfIds } = state;
 
   const [pendingUpload, setPendingUpload] = useState(null);
   const [pendingGrouping, setPendingGrouping] = useState(null);
   const [grouping, setGrouping] = useState(null);
-  const [picker, setPicker] = useState(null);      // 'single' | 'comparison' | null
+  const [picker, setPicker] = useState(null);      // 'audit' | null
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -143,80 +116,28 @@ export default function TrialBalanceView({ mode, state, setState }) {
   }
 
   /**
-   * Merges a document picked from the "Existing (Database)" tab into
-   * `documents` (deduped by doc_id, same as an upload) without touching the
-   * upload-only bookkeeping `addDocument` does (no `setPendingUpload` reset,
-   * no slot auto-assignment — the picker calls `onSelect` right after this to
-   * place it, the same as it would for an uploaded row).
-   */
-  function mergeDbDocument(row) {
-    setState((prev) => ({
-      ...prev,
-      documents: (prev.documents || []).some((d) => d.doc_id === row.doc_id)
-        ? prev.documents
-        : [row, ...(prev.documents || [])],
-    }));
-  }
-
-  /**
-   * Places a document into an explicit slot ('current' | 'prior'), used by
-   * comparison mode's Current Year (CY) / Prior Year (PY) upload slots and
-   * database pickers — unlike `addDocument`'s "first free slot" heuristic,
-   * the caller here already knows exactly which period this document is.
-   */
-  function placeDocumentInSlot(info, slot) {
-    setState((prev) => {
-      const row = {
-        doc_id: info.doc_id, filename: info.filename, sheet: info.sheet,
-        periods: info.periods, uploaded_at: new Date().toISOString(),
-      };
-      return {
-        ...prev,
-        documents: [row, ...(prev.documents || []).filter((d) => d.doc_id !== info.doc_id)],
-        [slot === 'prior' ? 'priorId' : 'currentId']: info.doc_id,
-      };
-    });
-    setPendingUpload(null);
-  }
-
-  function pickDbDocForSlot(normalizedRow, slot) {
-    mergeDbDocument(normalizedRow);
-    patch({ [slot === 'prior' ? 'priorId' : 'currentId']: normalizedRow.doc_id });
-  }
-
-  async function uploadFileForSlot(file, slot) {
-    if (!file) return;
-    setUploading(true);
-    try {
-      const info = await tbUpload(mode, file);
-      if (info.needsMapping) {
-        setPendingUpload({ ...info, filename: file.name, targetSlot: slot });
-      } else {
-        placeDocumentInSlot({ ...info, filename: info.filename || file.name }, slot);
-        push({ kind: 'note', text: `Loaded "${info.filename}" — ${info.accounts} accounts · ${(info.periods || []).join(', ')}.` });
-      }
-    } catch (err) {
-      push({ kind: 'error', text: err.message || `Could not upload "${file.name}".` });
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  /**
    * The single upload path, shared by the composer's attach button and the run
    * picker's own button, so a file lands in exactly the same place either way.
+   * Kind is routed by extension, as in the source UI.
    */
   async function uploadFiles(files) {
     if (!files.length) return;
     setUploading(true);
     for (const file of files) {
+      const isPdf = /\.pdf$/i.test(file.name);
       try {
-        const info = await tbUpload(mode, file);
-        if (info.needsMapping) {
-          setPendingUpload({ ...info, filename: file.name });
+        if (isPdf) {
+          const info = await tbUploadPdf(mode, file);
+          if (!pdfIds.includes(info.doc_id)) patch({ pdfIds: [...pdfIds, info.doc_id] });
+          push({ kind: 'note', text: `Indexed "${info.filename}" — ${info.pages} pages, selected as audit evidence.` });
         } else {
-          addDocument({ ...info, filename: info.filename || file.name });
-          push({ kind: 'note', text: `Loaded "${info.filename}" — ${info.accounts} accounts · ${(info.periods || []).join(', ')}.` });
+          const info = await tbUpload(mode, file);
+          if (info.needsMapping) {
+            setPendingUpload({ ...info, filename: file.name });
+          } else {
+            addDocument({ ...info, filename: info.filename || file.name });
+            push({ kind: 'note', text: `Loaded "${info.filename}" — ${info.accounts} accounts · ${(info.periods || []).join(', ')}.` });
+          }
         }
       } catch (err) {
         push({ kind: 'error', text: err.message || `Could not upload "${file.name}".` });
@@ -234,15 +155,14 @@ export default function TrialBalanceView({ mode, state, setState }) {
   async function runAudit(docId, priorDocId) {
     const doc = docOf(docId);
     const prior = docOf(priorDocId);
-    const label = prior ? 'Two TB Comparative Analysis' : 'Single TB Analysis';
     setPicker(null);
     push({
       kind: 'user',
-      text: `${label} — ${doc?.filename}${prior ? ` vs ${prior.filename} (two periods)` : ''}`
+      text: `Audit mode — ${doc?.filename}${prior ? ` vs ${prior.filename} (two periods)` : ''}`
         + `${pdfIds.length ? ` + ${pdfIds.length} supporting PDF(s)` : ''}`
         + `${grouping ? ' + chart-of-accounts grouping' : ''}`,
     });
-    const loadingId = push({ kind: 'loading', stages: prior ? COMPARISON_AUDIT_STAGES : SINGLE_AUDIT_STAGES });
+    const loadingId = push({ kind: 'loading', stages: AUDIT_STAGES });
     setBusy(true);
     try {
       const result = await tbAudit(mode, {
@@ -275,50 +195,35 @@ export default function TrialBalanceView({ mode, state, setState }) {
       drop(loadingId);
       push({ kind: 'audit', result, fullTb, doc, priorDoc: prior, pdfIds: [...pdfIds] });
     } catch (err) {
-      replace(loadingId, { kind: 'error', text: err.message || `${label} failed.` });
+      replace(loadingId, { kind: 'error', text: err.message || 'Audit mode failed.' });
     } finally {
       setBusy(false);
     }
   }
 
   /**
-   * Two explicit chat sub-modes, chosen via the toggle above the composer:
+   * A question needs no trial balance.
    *
-   * 'db' — free-form questions, no file involved. Answered from whatever the
-   * agent's own tools decide is relevant (already-ingested DB documents, Ind
-   * AS / annual-report reference corpora, etc.) — always `tbAskGeneral`.
+   * With one loaded, the question is answered against that file, where every
+   * figure is computed from it. With none, it goes to the corpus pipeline, which
+   * answers from Ind AS / annual reports / reference material. Both are real
+   * answers — the earlier behaviour of refusing to ask anything until a workbook
+   * was uploaded made a research tool feel like a spreadsheet importer.
    *
-   * 'upload' — scoped to a specific file uploaded this session. `askTarget`
-   * covers the case where a usable file is loaded but nothing is explicitly
-   * selected (dismissed, or a second upload took the PRIOR slot): adopt it
-   * rather than asking again, since a question typed with a trial balance on
-   * screen is almost certainly about it. With nothing uploaded yet, the user
-   * is nudged to upload first rather than silently falling back to 'db'.
+   * `askTarget` also covers the case where a usable file is loaded but nothing is
+   * selected (dismissed, or a second upload took the PRIOR slot): adopt it rather
+   * than silently answering from the corpora, since a question typed while a
+   * trial balance is on screen is almost certainly about it.
    */
   async function send() {
     const text = input.trim();
     if (!text || busy) return;
 
-    setInput('');
-    push({ kind: 'user', text });
-
-    const greeting = matchGreeting(text);
-    if (greeting) {
-      push({ kind: 'greeting', text: greeting });
-      return;
-    }
-
-    if (chatQueryMode === 'upload' && !askTarget) {
-      push({
-        kind: 'note',
-        text: 'Upload a trial balance first (attach button below) — then ask your question about it.',
-      });
-      return;
-    }
-
-    const target = chatQueryMode === 'upload' ? askTarget : null;
+    const target = askTarget;
     if (target && !currentDoc) patch({ currentId: target.doc_id });
 
+    setInput('');
+    push({ kind: 'user', text });
     const loadingId = push({
       kind: 'loading',
       stages: target ? ASK_STAGES : GENERAL_STAGES,
@@ -342,21 +247,14 @@ export default function TrialBalanceView({ mode, state, setState }) {
     }
   }
 
-  // Two explicit launchable runs, replacing the old single "Audit mode" whose
-  // single-vs-comparison split was only implicit (however many slots got
-  // filled). The deterministic validation engine still backs both — it
-  // produces the Full trial balance table inside the audit card (see
-  // runAudit) — it just has no separate entry point.
+  // Audit is the only launchable run. The deterministic validation engine is
+  // still used on every audit — it produces the Full trial balance table inside
+  // the audit card (see runAudit) — it just has no separate entry point.
   const quickActions = [
     {
-      id: 'single', title: 'Single TB Analysis', icon: 'doc',
-      desc: 'Mapping, screening, relationships, findings — one trial balance.',
-      duration: '~1–2 min',
-    },
-    {
-      id: 'comparison', title: 'Two TB Comparative Analysis', icon: 'layers',
-      desc: 'Everything Single TB Analysis does, plus period-over-period variance.',
-      duration: '~2–3 min',
+      id: 'audit', title: 'Audit mode', icon: 'shield',
+      desc: 'Mapping, screen, relationships, findings — 1 file, or 2 for a full comparison',
+      duration: '~1–3 min',
     },
   ];
 
@@ -378,16 +276,44 @@ export default function TrialBalanceView({ mode, state, setState }) {
         </div>
       )}
 
+      <div className="tb__actions">
+        {quickActions.map((qa) => (
+          <button
+            key={qa.id}
+            type="button"
+            className="tb__action"
+            onClick={() => setPicker(qa.id)}
+            disabled={busy || uploading}
+          >
+            <span className="tb__action-title">
+              <Icon name={qa.icon} size={14} />
+              {qa.title}
+            </span>
+            <span className="tb__action-desc">{qa.desc}</span>
+            <span className="tb__action-time">{uploading ? 'waiting for uploads…' : qa.duration}</span>
+          </button>
+        ))}
+      </div>
+
       <div className="tb__stream">
         <div className="tb__stream-inner">
           {(messages || []).length === 0 && (
             <div className="tb__idle">
-              <Icon name="sparkle" size={26} className="tb__idle-icon" />
-              <p className="tb__idle-welcome">👋 Hi, how can I help you today?</p>
+              <Icon name="ledger" size={26} className="tb__idle-icon" />
               <p>
-                Database query for quick questions, Single TB Analysis for one file,
-                or Two TB Comparative Analysis to compare two periods.
+                Ask about Ind AS, a company or an annual report straight away — no file
+                needed. Upload an Excel trial balance to ask about that file instead, or
+                to run an audit over it. Results stay on this page so you can compare them.
               </p>
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={() => fileRef.current?.click()}
+                disabled={uploading}
+              >
+                <Icon name="upload" size={15} />
+                {uploading ? 'Uploading…' : 'Upload trial balance'}
+              </button>
             </div>
           )}
 
@@ -397,14 +323,6 @@ export default function TrialBalanceView({ mode, state, setState }) {
             }
             if (m.kind === 'note') {
               return <p key={m.id} className="tb__note">{m.text}</p>;
-            }
-            if (m.kind === 'greeting') {
-              return (
-                <div key={m.id} className="tb__assistant">
-                  <Icon name="sparkle" size={14} className="tb__ai-mark" />
-                  {m.text}
-                </div>
-              );
             }
             if (m.kind === 'error') {
               return (
@@ -418,7 +336,6 @@ export default function TrialBalanceView({ mode, state, setState }) {
               return (
                 <article key={m.id} className="card tb__answer">
                   <div className="tb__answer-head">
-                    <Icon name="sparkle" size={14} className="tb__ai-mark" />
                     <span className="pill pill--mute">
                       {m.scope === 'corpora' ? 'Ind AS & annual reports' : 'This trial balance'}
                     </span>
@@ -447,60 +364,13 @@ export default function TrialBalanceView({ mode, state, setState }) {
         </div>
       </div>
 
-      <div className="tb__toprow">
-        <div className="tb__chatmode" role="tablist" aria-label="Chat query mode">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={chatQueryMode === 'db'}
-            className={`tb__chatmode-tab ${chatQueryMode === 'db' ? 'is-active' : ''}`}
-            onClick={() => patch({ chatQueryMode: 'db' })}
-          >
-            <Icon name="search" size={13} />
-            Database query
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={chatQueryMode === 'upload'}
-            className={`tb__chatmode-tab ${chatQueryMode === 'upload' ? 'is-active' : ''}`}
-            onClick={() => patch({ chatQueryMode: 'upload' })}
-          >
-            <Icon name="upload" size={13} />
-            Upload & analyze
-          </button>
-        </div>
-
-        <div className="tb__actions">
-          {quickActions.map((qa) => (
-            <button
-              key={qa.id}
-              type="button"
-              className="tb__action"
-              title={`${qa.desc} (${qa.duration})`}
-              onClick={() => {
-                // Single mode never uses the PRIOR slot — clear a leftover
-                // selection from an earlier comparison run so the picker
-                // doesn't show a stale PRIOR badge.
-                if (qa.id === 'single' && priorId) patch({ priorId: null });
-                setPicker(qa.id);
-              }}
-              disabled={busy || uploading}
-            >
-              <Icon name={qa.icon} size={13} />
-              {qa.title}
-            </button>
-          ))}
-        </div>
-      </div>
-
       <div className="tb__composer">
         <button
           type="button"
           className="tb__attach"
           onClick={() => fileRef.current?.click()}
           disabled={uploading}
-          title="Attach a trial balance (.xlsx/.xls)"
+          title="Attach a trial balance (.xlsx/.xls) or a supporting PDF"
         >
           <Icon name={uploading ? 'refresh' : 'upload'} size={16} />
         </button>
@@ -508,17 +378,19 @@ export default function TrialBalanceView({ mode, state, setState }) {
           ref={fileRef}
           type="file"
           multiple
-          accept=".xlsx,.xls"
+          accept=".xlsx,.xls,.pdf"
           className="tb__file"
           onChange={onFiles}
         />
+        {/* Disabled with no trial balance loaded, so the state is visible before
+            typing rather than surfacing as an error after submitting. */}
         <textarea
           className="tb__input"
           rows={1}
           value={input}
-          placeholder={chatQueryMode === 'upload'
-            ? (askTarget ? `Ask a question about ${askTarget.filename}…` : 'Upload a trial balance, then ask about it…')
-            : 'Ask a question about data already in the database — no file needed…'}
+          placeholder={askTarget
+            ? `Ask a question about ${askTarget.filename}…`
+            : 'Ask about Ind AS, a company or an annual report…'}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -538,20 +410,18 @@ export default function TrialBalanceView({ mode, state, setState }) {
       {picker && (
         <TbRunPicker
           mode={mode}
-          pickerMode={picker}
           documents={documents}
           uploading={uploading}
           onUpload={uploadFiles}
-          onUploadForSlot={(file, slot) => uploadFileForSlot(file, slot)}
-          onClearSlot={(slot) => patch(slot === 'prior' ? { priorId: null } : { currentId: null })}
           currentId={currentId}
           priorId={priorId}
-          // Single mode only — comparison mode's explicit CY/PY slots use
-          // onUploadForSlot/onPickDbDocForSlot instead, so a doc is never
-          // ambiguous about which period it belongs to.
-          onSelect={(id) => patch({ currentId: id === currentId ? null : id, priorId: null })}
-          onPickDbDoc={(row) => mergeDbDocument(row)}
-          onPickDbDocForSlot={(row, slot) => pickDbDocForSlot(row, slot)}
+          onSelect={(id) => {
+            // current → prior → unselected, so one gesture covers both shapes.
+            if (id === currentId) patch({ currentId: null });
+            else if (id === priorId) patch({ priorId: null });
+            else if (!currentId) patch({ currentId: id });
+            else patch({ priorId: id });
+          }}
           onDeleted={(docId) => patch({
             documents: (documents || []).filter((d) => d.doc_id !== docId),
             currentId: currentId === docId ? null : currentId,
@@ -560,6 +430,8 @@ export default function TrialBalanceView({ mode, state, setState }) {
           grouping={grouping}
           onGroupingChange={setGrouping}
           onGroupingNeedsMapping={setPendingGrouping}
+          pdfIds={pdfIds}
+          onPdfIdsChange={(ids) => patch({ pdfIds: ids })}
           onRun={() => runAudit(currentId, priorId)}
           onCancel={() => setPicker(null)}
         />
@@ -569,9 +441,7 @@ export default function TrialBalanceView({ mode, state, setState }) {
         <ColumnMapper
           mode={mode}
           pending={pendingUpload}
-          onDone={(info) => (pendingUpload?.targetSlot
-            ? placeDocumentInSlot(info, pendingUpload.targetSlot)
-            : addDocument(info))}
+          onDone={(info) => addDocument(info)}
           onCancel={() => setPendingUpload(null)}
         />
       )}

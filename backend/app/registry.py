@@ -95,7 +95,7 @@ MODES: list[Mode] = [
             "Upload a trial balance to ask questions over it, run FSLI/risk "
             "audit analytics, or a deterministic PY-vs-CY validation gate."
         ),
-        branch="TB-v2",
+        branch="Finance_llm_v2 (main @ 3a6e9bc)",
         ui="trial-balance",
         base_path="/api/trial-balance",
         integrated=True,
