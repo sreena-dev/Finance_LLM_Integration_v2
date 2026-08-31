@@ -12,8 +12,12 @@ async function request(path, options = {}) {
   try {
     res = await fetch(path, options);
   } catch {
+    // No port quoted here on purpose: the gateway's port comes from .env
+    // (ARTHA_BACKEND_PORT), so a hard-coded number in this message would go
+    // stale and send people looking at the wrong service.
     throw new Error(
-      'Could not reach the backend. Start it with: uvicorn app.main:app --port 8080'
+      'Could not reach the backend. Start the stack with `docker compose up -d`, ' +
+        'or run the gateway directly: uvicorn app.main:app --port $ARTHA_BACKEND_PORT'
     );
   }
 
@@ -36,8 +40,9 @@ async function request(path, options = {}) {
     // Vite's proxy reports an unreachable target as a 500.
     if (!isJson && res.status >= 500) {
       throw new Error(
-        `The backend gateway is not responding (HTTP ${res.status}). Start it from ` +
-          `the backend/ directory with: uvicorn app.main:app --reload --port 8090`
+        `The backend gateway is not responding (HTTP ${res.status}). Check it with ` +
+          `\`docker compose ps\`, or start it from the backend/ directory with: ` +
+          `uvicorn app.main:app --reload --port $ARTHA_BACKEND_PORT`
       );
     }
 
@@ -95,11 +100,34 @@ export function generateReport(mode, { entity, fyStart, fyEnd, scope }) {
   });
 }
 
+/**
+ * SAR Q&A: one conversational turn about an already-selected entity and FY.
+ *
+ * `history` carries the prior turns so the pipeline's rewriter can resolve
+ * back-references ("that clause", "why is it qualified?") into a standalone
+ * question. Like every other call here it is built from `mode.base_path`, so
+ * this cannot reach the report mode's pipeline.
+ */
+export function runSARChat(mode, { query, company, fyStart, history }) {
+  return post(`${mode.base_path}/ask`, {
+    query,
+    company,
+    fy_start: fyStart,
+    history: history || [],
+  });
+}
+
 /** Trial Balance: upload once, then ask / audit / validate against a doc_id. */
 
-async function uploadFile(path, file) {
+async function uploadFile(path, file, fields = {}) {
   const form = new FormData();
   form.append('file', file);
+  // Extra multipart fields (the grouping upload sends the doc_id(s) the file is
+  // matched against). Skipped when null/undefined so the backend sees an absent
+  // optional Form field rather than the string "null".
+  for (const [k, v] of Object.entries(fields)) {
+    if (v !== null && v !== undefined) form.append(k, v);
+  }
   let res;
   try {
     res = await fetch(path, { method: 'POST', body: form });
@@ -133,8 +161,18 @@ export function tbUploadMapped(mode, mapping) {
   return post(`${mode.base_path}/upload-mapped`, mapping);
 }
 
-export async function tbListDocuments(mode) {
-  return request(`${mode.base_path}/documents`);
+/**
+ * Every trial balance already ingested into the database, newest first.
+ * Backs TbRunPicker's "Existing (Database)" tab — the database is shared
+ * across engagements, so callers should filter with `entityId`/`financialYear`
+ * where possible; the picker also applies a client-side text filter on top.
+ */
+export async function tbListDocuments(mode, { entityId, financialYear } = {}) {
+  const params = new URLSearchParams();
+  if (entityId) params.set('entity_id', entityId);
+  if (financialYear) params.set('financial_year', financialYear);
+  const qs = params.toString();
+  return request(`${mode.base_path}/documents${qs ? `?${qs}` : ''}`);
 }
 
 export async function tbDeleteDocument(mode, docId) {
@@ -147,23 +185,74 @@ export function tbAsk(mode, { docId, question, sessionId }) {
   return post(`${mode.base_path}/ask`, { doc_id: docId, question, session_id: sessionId });
 }
 
-export function tbAudit(mode, { docId, docIdPrior, entity, engagementContext, framework }) {
+/**
+ * A question with no trial balance attached, answered from the Ind AS /
+ * annual-report / reference corpora. Separate memory from `tbAsk`, and a
+ * different response shape: it can carry `computed` (a deterministic arithmetic
+ * result) and `guardrail` (the pipeline declined to source the answer).
+ */
+export function tbAskGeneral(mode, { question, sessionId, uploadDocIds }) {
+  return post(`${mode.base_path}/ask-general`, {
+    question,
+    session_id: sessionId,
+    upload_doc_ids: uploadDocIds?.length ? uploadDocIds : null,
+  });
+}
+
+export function tbAudit(
+  mode,
+  { docId, docIdPrior, entity, engagementContext, framework, groupingToken, uploadDocIds }
+) {
   return post(`${mode.base_path}/audit`, {
     doc_id: docId,
     doc_id_prior: docIdPrior || null,
     entity: entity || null,
     engagement_context: engagementContext || null,
     framework: framework || null,
+    grouping_token: groupingToken || null,
+    upload_doc_ids: uploadDocIds?.length ? uploadDocIds : null,
   });
 }
 
-export async function tbAuditWorkbook(mode, { docId, docIdPrior }) {
+/**
+ * Upload an optional client chart-of-accounts / FSLI grouping file, whose labels
+ * then override keyword-based classification for the whole audit.
+ *
+ * `docId`/`docId2` are the trial balance(s) it applies to — sent so the backend
+ * can detect columns by matching real account codes/names instead of guessing
+ * from header text, and so it can report how many accounts the file covers.
+ *
+ * Resolves to `{ needsMapping: true, preview_token }` when the layout can't be
+ * auto-detected — same convention as `tbUpload`, so the caller opens a mapper.
+ */
+export function tbUploadGrouping(mode, { file, docId, docId2 }) {
+  return uploadFile(`${mode.base_path}/audit/upload-grouping`, file, {
+    doc_id: docId,
+    doc_id_2: docId2,
+  });
+}
+
+// Known gap (not fixed in the TB-v2 migration): the backend has no
+// POST /audit/upload-grouping-mapped route to receive this. The only way
+// /audit/upload-grouping returns needs_mapping is a grouping file
+// preview_excel_data cannot parse at all, which has no recovery path yet —
+// GroupingMapper.jsx will open, but submitting it 404s.
+export function tbUploadGroupingMapped(mode, mapping) {
+  return post(`${mode.base_path}/audit/upload-grouping-mapped`, mapping);
+}
+
+export async function tbAuditWorkbook(mode, { docId, docIdPrior, uploadDocIds, format }) {
   let res;
   try {
     res = await fetch(`${mode.base_path}/audit/workbook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ doc_id: docId, doc_id_prior: docIdPrior || null }),
+      body: JSON.stringify({
+        doc_id: docId,
+        doc_id_prior: docIdPrior || null,
+        upload_doc_ids: uploadDocIds?.length ? uploadDocIds : null,
+        format: format || 'xlsx',
+      }),
     });
   } catch {
     throw new Error('Could not reach the backend to build the workbook.');
@@ -172,7 +261,13 @@ export async function tbAuditWorkbook(mode, { docId, docIdPrior }) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail || `Workbook generation failed (HTTP ${res.status})`);
   }
-  return res.blob();
+  // The backend names the file after the input TB (see router.py's
+  // _tb_filename_suffix) via Content-Disposition — parsed here rather than
+  // hardcoded client-side, so the two never drift apart.
+  const disposition = res.headers.get('content-disposition') || '';
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  const filename = match ? match[1] : (format === 'docx' ? 'TB_Audit_Report.docx' : 'TB_Audit.xlsx');
+  return { blob: await res.blob(), filename };
 }
 
 export function tbValidate(mode, { docId, docIdPrior, ...params }) {

@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
+.pytest_cache/
 .venv/
 venv/
 *.egg-info/
@@ -10,10 +11,18 @@ node_modules/
 dist/
 .vite/
 
-# Environment — never commit real credentials
+# Environment — never commit real credentials.
+# .env.example IS tracked; it is the same file with the credentials blanked.
 .env
 .env.local
 .env.*.local
+!.env.example
+
+# Vendored wheels for non-PyPI dependencies (yukta). Binaries stay out of the
+# repo — rebuild with scripts/build-yukta-wheel.sh; see backend/vendor/README.md,
+# which is tracked so a fresh clone knows to run it.
+backend/vendor/*.whl
+backend/vendor/*.tar.gz
 
 # Editors / OS
 .vscode/
@@ -27,3 +36,7 @@ Thumbs.db
 # Any mode's per-session uploads and generated pipeline artifacts
 backend/modes/*/sessions/
 backend/modes/*/pipeline/output/
+
+FIN_LLM/
+
+

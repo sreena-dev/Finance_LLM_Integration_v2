@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar';
 import ChatView from './components/chat/ChatView';
 import ReportView from './components/report/ReportView';
 import TrialBalanceView from './components/trial-balance/TrialBalanceView';
+import FdrAnalysis from './components/financial-diagnostic-report/FdrAnalysis';
 import Icon from './components/common/Icon';
 import Notice from './components/common/Notice';
 import './App.css';
@@ -19,13 +20,21 @@ const emptyReportState = () => ({
   error: null,
 });
 
+// Trial Balance is an append-only stream rather than tabbed panels: `messages`
+// holds every run's result so an audit and a validation of the same file can be
+// read against each other. `pdfIds` is the supporting-evidence selection, kept at
+// mode level because it applies to the entity rather than to one trial balance.
+// `documents` is what this session uploaded, not the stored-document catalog —
+// see the note in TrialBalanceView on why the catalog is not listed.
 const emptyTBState = () => ({
-  documents: null,
-  docsError: null,
+  documents: [],
   currentId: null,
   priorId: null,
-  tab: 'ask',
-  threads: {},
+  messages: [],
+  pdfIds: [],
+  // 'db' = free-form questions answered by intent from already-ingested data,
+  // no file needed. 'upload' = questions scoped to a file uploaded this session.
+  chatQueryMode: 'db',
 });
 
 function ModeHeader({ mode, health }) {
@@ -77,7 +86,16 @@ export default function App() {
         const list = await fetchModes();
         if (cancelled) return;
         setModes(list);
-        setActiveId((cur) => cur || list[0]?.id || null);
+        // Companions are sub-modes rendered inside their parent, so one must
+        // never become the initially selected mode. A refresh restores the
+        // last-selected mode from localStorage when it is still a valid,
+        // non-companion mode; otherwise it falls back to the first one.
+        setActiveId((cur) => {
+          if (cur) return cur;
+          const stored = localStorage.getItem('artha.activeMode');
+          const restorable = list.some((m) => m.id === stored && !m.companion_of);
+          return (restorable && stored) || list.find((m) => !m.companion_of)?.id || null;
+        });
         setBootError(null);
 
         // Probed in parallel and after first paint: probing imports pipelines
@@ -101,6 +119,34 @@ export default function App() {
   const activeMode = useMemo(
     () => modes.find((m) => m.id === activeId) || null,
     [modes, activeId]
+  );
+
+  // Remember the selected mode so a refresh returns here instead of the first
+  // page. Restored on boot in the mode-list effect above.
+  useEffect(() => {
+    if (activeId) localStorage.setItem('artha.activeMode', activeId);
+  }, [activeId]);
+
+  // The switcher lists top-level modes only. A companion (SAR Q&A) shares its
+  // parent's entity/FY dropdowns, so listing it separately would show the same
+  // two selects twice under different names; its parent renders it as a toggle
+  // instead. It is still probed and still has its own routes.
+  const sidebarModes = useMemo(() => modes.filter((m) => !m.companion_of), [modes]);
+
+  // Which companion (if any) the active mode is currently showing. The header
+  // names the pipeline that will actually serve the next request, so switching
+  // to SAR Q&A has to retitle it and swap the API namespace shown — otherwise
+  // the header claims /api/statutory-auditor-report while the request goes to
+  // /api/sar-chat.
+  const [subModeId, setSubModeId] = useState(null);
+
+  useEffect(() => {
+    setSubModeId(null);
+  }, [activeId]);
+
+  const headerMode = useMemo(
+    () => modes.find((m) => m.id === subModeId) || activeMode,
+    [modes, subModeId, activeMode]
   );
 
   // Per-mode state setters, so one mode's thread can never leak into another.
@@ -178,12 +224,12 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar modes={modes} activeId={activeId} onSelect={setActiveId} health={health} />
+      <Sidebar modes={sidebarModes} activeId={activeId} onSelect={setActiveId} health={health} />
 
       <main className="main">
         {activeMode && (
           <>
-            <ModeHeader mode={activeMode} health={health[activeMode.id]} />
+            <ModeHeader mode={headerMode} health={health[headerMode.id]} />
 
             <div className="main__body">
               {/* No AnimatePresence here, deliberately: it wraps this pane in
@@ -222,9 +268,17 @@ export default function App() {
                   </div>
                 )}
 
-                {activeMode.ui === 'report' ? (
+                {/* SAR Q&A is folded into this view rather than being its own
+                    sidebar entry: `chatMode` is the companion mode the gateway
+                    reported, and ReportView offers it as a Report/Chat toggle.
+                    Passing the mode object (not a URL) keeps every request built
+                    from the gateway's own base_path. */}
+                {activeMode.ui === 'report' || activeMode.ui === 'report-chat' ? (
                   <ReportView
                     mode={activeMode}
+                    chatMode={modes.find((m) => m.companion_of === activeMode.id) || null}
+                    health={health}
+                    onSubModeChange={setSubModeId}
                     state={reports[activeMode.id] || emptyReportState()}
                     setState={setReportFor(activeMode.id)}
                   />
@@ -235,6 +289,10 @@ export default function App() {
                     state={tbStates[activeMode.id] || emptyTBState()}
                     setState={setTBFor(activeMode.id)}
                   />
+                ) : activeMode.ui === 'fdr' ? (
+                  // Self-contained mocked view; the gateway's ModeHeader already
+                  // renders the title/pill/path, so it runs in `embedded` mode.
+                  <FdrAnalysis embedded />
                 ) : (
                   <ChatView
                     mode={activeMode}

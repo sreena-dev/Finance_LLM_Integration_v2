@@ -1,0 +1,25 @@
+# Keep the build context small. node_modules especially: `npm ci` reinstalls
+# from the lockfile inside the image, and copying a host node_modules built
+# against a different platform would break native modules.
+
+node_modules/
+dist/
+.vite/
+
+.env
+.env.local
+.env.*.local
+
+npm-debug.log*
+*.log
+
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker's own files never need to be inside the context it builds from.
+Dockerfile
+.dockerignore

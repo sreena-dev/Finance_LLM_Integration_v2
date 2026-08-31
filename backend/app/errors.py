@@ -22,6 +22,24 @@ class ModeUnavailableError(RuntimeError):
         return HTTPException(status_code=503, detail=self.reason)
 
 
+class NotFoundError(ValueError):
+    """A referenced resource does not exist — an unknown doc_id, an expired token.
+
+    Kept distinct from ModeUnavailableError, which means "this mode is broken".
+    Conflating them is a real problem for a caller: a 503 invites a retry and
+    reads as an outage, while the honest answer to a stale doc_id is a 404 that
+    says the reference itself is wrong. Subclasses ValueError so the vendored
+    pipelines' own `raise ValueError("no stored trial balance for ...")` can be
+    re-raised as this without changing their behaviour.
+    """
+
+
+class InvalidRequestError(ValueError):
+    """A request that is well-formed but asks for something incoherent — e.g. the
+    same trial balance given as both current and prior period. A client error
+    (400), not a server or mode failure."""
+
+
 class ModeNotIntegratedError(RuntimeError):
     """Raised by mode scaffolds whose branch has not been integrated yet."""
 

@@ -1,0 +1,280 @@
+# ---------------------------------------------------------------------------
+# Artha.AI — Integrated Audit Platform
+#
+#   docker compose up -d --build          # frontend + gateway
+#   docker compose --profile tracing up -d   # ...plus a local Phoenix collector
+#
+# Everything configurable lives in ./.env — this file declares no literal
+# credential, host or port. Ports occupy one contiguous 121xx series so the
+# whole stack can be firewalled, proxied or moved as a single block; this host
+# already runs a dozen other compose projects across 8000-11999, and a shared
+# port is the one collision whose symptom (a 404 from somebody else's service)
+# reads like a bug in this app.
+#
+#   12100  frontend  (nginx, serves the SPA and proxies /api)
+#   12101  backend   (FastAPI gateway)
+#   12106  phoenix   UI            — `tracing` profile only
+#   12107  phoenix   OTLP ingest   — `tracing` profile only
+# ---------------------------------------------------------------------------
+
+name: artha-ai
+
+# Anchor shared by every service: same timezone, same log rotation. Without
+# max-size, a container that logs one line per LLM call fills the disk slowly
+# and invisibly over a few months.
+x-common: &common
+  restart: unless-stopped
+  environment:
+    TZ: ${TZ:-Asia/Kolkata}
+  logging:
+    driver: json-file
+    options:
+      max-size: ${ARTHA_LOG_MAX_SIZE:-20m}
+      max-file: ${ARTHA_LOG_MAX_FILES:-5}
+
+services:
+
+  # =========================================================================
+  # Gateway — FastAPI over the four mode pipelines
+  # =========================================================================
+  backend:
+    <<: *common
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        PYTHON_VERSION: ${ARTHA_PYTHON_VERSION:-3.11}
+        BACKEND_PORT: ${ARTHA_BACKEND_PORT:-12101}
+        TZ: ${TZ:-Asia/Kolkata}
+        # Set to 1 only to build without the yukta wheel; 3 of the 4 modes
+        # then come up reporting themselves unavailable.
+        ALLOW_MISSING_YUKTA: ${ARTHA_ALLOW_MISSING_YUKTA:-0}
+    image: artha-ai/backend:${ARTHA_VERSION:-1.0.0}
+    container_name: artha-backend
+
+    # The single source of truth for every pipeline's credentials and
+    # endpoints. Injected at run time, never baked into an image layer.
+    env_file:
+      - .env
+
+    environment:
+      TZ: ${TZ:-Asia/Kolkata}
+      ARTHA_BACKEND_PORT: ${ARTHA_BACKEND_PORT:-12101}
+      ARTHA_BACKEND_WORKERS: ${ARTHA_BACKEND_WORKERS:-1}
+      ARTHA_LOG_LEVEL: ${ARTHA_LOG_LEVEL:-info}
+      ARTHA_KEEPALIVE_TIMEOUT: ${ARTHA_KEEPALIVE_TIMEOUT:-75}
+      ARTHA_CORS_ALLOW_ORIGINS: ${ARTHA_CORS_ALLOW_ORIGINS:-}
+
+    ports:
+      - "${ARTHA_BIND_HOST:-0.0.0.0}:${ARTHA_BACKEND_PORT:-12101}:${ARTHA_BACKEND_PORT:-12101}"
+
+    # This app's own code writes almost nothing to disk — uploads stream into
+    # Postgres and the audit workbook is assembled in an in-memory buffer — so
+    # the root filesystem is read-only, turning any accidental write into a loud
+    # failure instead of state that silently vanishes on the next deploy. Its
+    # *dependencies* do write, so they get explicit writable paths below.
+    #
+    # The one exception is Trial Balance's column-mapper cache, which must
+    # outlive a single request to hand a file from `upload` to `upload-mapped`.
+    # It writes to PREVIEW_CACHE_DIR, defaulting into the /tmp tmpfs below —
+    # deliberately ephemeral, since entries expire in 30 minutes anyway. See
+    # PREVIEW_CACHE_DIR in .env.example before adding a second replica.
+    read_only: true
+
+    volumes:
+      # yukta persists every agent's chat session as JSON under YUKTA_DATA_DIR
+      # (set to /var/lib/artha/yukta in the Dockerfile). It defaults to
+      # ~/.yukta; left at that default on a read-only rootfs, the very first
+      # tool-calling run dies in JSONFileStorage's mkdir with "[Errno 30]
+      # Read-only file system: '/home/artha'" — surfaced to the user as an LLM
+      # pipeline error, which is a long way from the actual cause. A named
+      # volume rather than a tmpfs because these are agent transcripts: cheap
+      # to keep, and awkward to discover missing after the fact.
+      - artha-data:/var/lib/artha
+
+    tmpfs:
+      - /tmp:size=${ARTHA_TMPFS_SIZE:-512m},mode=1777
+      # HOME. Nothing should need it now that YUKTA_DATA_DIR is explicit, but
+      # any dependency reaching for ~/.cache or ~/.config must not take a
+      # pipeline down. Scratch, so it stays scratch: uid/gid 10001 because a
+      # tmpfs mount comes up root-owned and would otherwise be unwritable.
+      - /home/artha:rw,size=${ARTHA_HOME_TMPFS_SIZE:-64m},mode=0700,uid=10001,gid=10001
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    stop_grace_period: 60s
+
+    deploy:
+      resources:
+        limits:
+          cpus: ${ARTHA_BACKEND_CPU_LIMIT:-4.0}
+          memory: ${ARTHA_BACKEND_MEM_LIMIT:-6g}
+        reservations:
+          memory: ${ARTHA_BACKEND_MEM_RESERVATION:-1g}
+
+    # Docker's shared default bridge, not a per-project network. See the note
+    # at the bottom of this file — on this host a dedicated network would have
+    # had to carve out a new subnet, and no safe block was free.
+    network_mode: bridge
+
+    # Trial Balance's PDF-evidence database (UPLOADS_DSN) runs on the HOST at
+    # :5433, not in this compose project, and a container cannot reach the host
+    # via `localhost`. This maps host.docker.internal to the docker0 gateway so
+    # that DSN resolves — the frontend already needs the same mapping to proxy
+    # /api. Without it the /pdfs routes fail with a DNS error rather than a
+    # connection error, which is a confusing way to learn the host is missing.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # =========================================================================
+  # Frontend — static SPA + the /api reverse proxy
+  # =========================================================================
+  frontend:
+    <<: *common
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NODE_VERSION: ${ARTHA_NODE_VERSION:-20}
+        NGINX_VERSION: ${ARTHA_NGINX_VERSION:-1.27}
+        TZ: ${TZ:-Asia/Kolkata}
+    image: artha-ai/frontend:${ARTHA_VERSION:-1.0.0}
+    container_name: artha-frontend
+
+    environment:
+      TZ: ${TZ:-Asia/Kolkata}
+      # Substituted into nginx/default.conf.template at container start, so
+      # retargeting the gateway is a restart rather than an image rebuild.
+      #
+      # host.docker.internal — not `backend` — because the shared default
+      # bridge provides no container-name DNS. nginx reaches the gateway
+      # through the host gateway address mapped by extra_hosts below, i.e. via
+      # the backend's own published port.
+      ARTHA_BACKEND_HOST: ${ARTHA_BACKEND_HOST:-host.docker.internal}
+      ARTHA_BACKEND_PORT: ${ARTHA_BACKEND_PORT:-12101}
+      ARTHA_PROXY_TIMEOUT: ${ARTHA_PROXY_TIMEOUT:-1800s}
+      ARTHA_MAX_UPLOAD_SIZE: ${ARTHA_MAX_UPLOAD_SIZE:-64m}
+
+    # Resolves host.docker.internal to the docker0 gateway (172.17.0.1). This
+    # is what replaces container-name DNS on the default bridge.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    ports:
+      - "${ARTHA_BIND_HOST:-0.0.0.0}:${ARTHA_FRONTEND_PORT:-12100}:8080"
+
+    # Wait for the gateway to answer /api/health, not merely to start — nginx
+    # resolves its upstream at startup and a not-yet-listening backend makes
+    # the first page load fail with a 502.
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /var/cache/nginx:size=64m
+      - /var/run:size=8m
+      # The base image's entrypoint renders nginx/default.conf.template through
+      # envsubst *into* /etc/nginx/conf.d/ at every start, so that one directory
+      # has to be writable — with a read-only rootfs and no tmpfs here, nginx
+      # starts with no server block at all and the port simply resets every
+      # connection. A tmpfs also means the rendered config is regenerated from
+      # the current environment on every restart, never a stale copy.
+      #
+      # uid/gid 101 is the nginx user in the unprivileged base image. A tmpfs
+      # mount defaults to root:root and replaces whatever ownership the image
+      # set, so without these the entrypoint reports "/etc/nginx/conf.d is not
+      # writable" and skips rendering — the failure this exact line fixes.
+      # Ownership rather than mode=0777: the directory holds the live config.
+      - /etc/nginx/conf.d:rw,size=1m,mode=0755,uid=101,gid=101
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    deploy:
+      resources:
+        limits:
+          cpus: ${ARTHA_FRONTEND_CPU_LIMIT:-1.0}
+          memory: ${ARTHA_FRONTEND_MEM_LIMIT:-256m}
+
+    network_mode: bridge
+
+  # =========================================================================
+  # Phoenix — optional OpenTelemetry collector + trace UI
+  #
+  # Opt-in: `docker compose --profile tracing up -d`. Also set ENABLE_TRACING
+  # =true and point PHOENIX_ENDPOINT at http://phoenix:6006/v1/traces in .env,
+  # otherwise the pipelines never emit to it.
+  # =========================================================================
+  phoenix:
+    <<: *common
+    profiles: ["tracing"]
+    image: arizephoenix/phoenix:${ARTHA_PHOENIX_VERSION:-version-11.44}
+    container_name: artha-phoenix
+
+    environment:
+      TZ: ${TZ:-Asia/Kolkata}
+      PHOENIX_WORKING_DIR: /data
+
+    ports:
+      - "${ARTHA_BIND_HOST:-0.0.0.0}:${ARTHA_PHOENIX_UI_PORT:-12106}:6006"
+      - "${ARTHA_BIND_HOST:-0.0.0.0}:${ARTHA_PHOENIX_OTLP_PORT:-12107}:4317"
+
+    # Traces are the one thing in this stack worth surviving a restart.
+    volumes:
+      - phoenix-data:/data
+
+    security_opt:
+      - no-new-privileges:true
+
+    deploy:
+      resources:
+        limits:
+          memory: ${ARTHA_PHOENIX_MEM_LIMIT:-2g}
+
+    network_mode: bridge
+
+# ---------------------------------------------------------------------------
+# Networking note — why the shared default bridge, and not a project network
+#
+# The conventional choice would be a dedicated `artha-net` bridge, which buys
+# container-name DNS (nginx could say `server backend:12101`). It is not used
+# here because creating one requires a fresh subnet, and on this host:
+#
+#   * Every one of Docker's automatic pools is already carved up across ~34
+#     networks — creation fails outright with "all predefined address pools
+#     have been fully subnetted".
+#   * The one free block in its 192.168.0.0/16 pool, 192.168.192.0/20, spans
+#     192.168.200.x — this machine's own LAN, and the address of every
+#     Postgres, embedding and reranker server the pipelines talk to. A network
+#     there would silently black-hole all of them, presenting as intermittent
+#     database timeouts rather than as a routing mistake.
+#
+# So both services share the existing default bridge and allocate no new
+# address space. The one consequence: no inter-container DNS, so the frontend
+# reaches the gateway via `host.docker.internal` (mapped to the docker0 gateway
+# by its extra_hosts entry) on the backend's published port.
+#
+# That makes the backend's published port load-bearing, not merely convenient:
+# ARTHA_BIND_HOST must stay reachable from containers. 0.0.0.0 is fine;
+# 127.0.0.1 would break the frontend's proxy. To keep the API off the LAN,
+# firewall the port rather than narrowing the bind address.
+#
+# If a subnet does free up later, switching back is a small edit: replace both
+# `network_mode: bridge` lines with a `networks: [artha]` list, add a top-level
+# `networks:` block, drop the frontend's extra_hosts, and set
+# ARTHA_BACKEND_HOST=backend.
+# ---------------------------------------------------------------------------
+
+volumes:
+  # yukta's agent chat sessions. See the backend service's volumes block.
+  artha-data:
+    name: artha-data
+  phoenix-data:
+    name: artha-phoenix-data

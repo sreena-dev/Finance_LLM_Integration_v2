@@ -1,0 +1,185 @@
+.tbpick-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(16 24 40 / 46%);
+  backdrop-filter: blur(2px);
+}
+
+.tbpick {
+  width: 620px;
+  max-width: 100%;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.tbpick__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.tbpick__title { margin: 0 0 3px; font-size: 16px; font-weight: 630; color: var(--navy-900); }
+.tbpick__sub { margin: 0; font-size: 12.5px; color: var(--ink-500); }
+
+.tbpick__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Source switcher: "Upload new" vs "Existing (Database)" — same visual
+   language as the chat-mode tabs in TrialBalanceView.css. */
+.tbpick__tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--ink-50);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  align-self: flex-start;
+}
+.tbpick__tab {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-500);
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  cursor: pointer;
+  transition: background 0.16s var(--ease), color 0.16s var(--ease);
+}
+.tbpick__tab:hover { color: var(--ink-800); }
+.tbpick__tab.is-active { background: var(--white); color: var(--navy-800); box-shadow: 0 1px 2px rgb(16 24 40 / 8%); }
+
+/* Two explicit slots (Current Year / Prior Year) for comparison mode, used by
+   both the upload tab and the database tab so the two periods are never
+   ambiguous about which one is which. */
+.tbpick__slots { display: flex; flex-direction: column; gap: 12px; }
+.tbpick__slot { display: flex; flex-direction: column; gap: 6px; }
+.tbpick__slot-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-500);
+}
+
+/* Company + Period Year dropdown pair for the database tab. */
+.tbpick__dbselect { display: flex; flex-direction: column; gap: 8px; }
+.tbpick__select {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--ink-800);
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.tbpick__select:focus { outline: none; border-color: var(--navy-600); }
+.tbpick__select:disabled { opacity: 0.5; cursor: default; }
+.tbpick__dbselect-picked {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ok-600);
+}
+
+.tbpick__list { display: flex; flex-direction: column; gap: 6px; }
+.tbpick__empty { margin: 0; font-size: 13px; color: var(--ink-500); padding: 8px 2px; }
+
+.tbpick__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.16s var(--ease), background 0.16s var(--ease);
+}
+.tbpick__row:hover { border-color: var(--border-strong); background: var(--ink-50); }
+.tbpick__row.is-on { border-color: var(--navy-600); background: var(--navy-50); }
+
+.tbpick__row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tbpick__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-800);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tbpick__meta { font-size: 11.5px; color: var(--ink-500); }
+.tbpick__role {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--navy-700);
+  flex: none;
+}
+
+/* Upload from inside the dialog: reaching a run and finding nothing to run it on
+   should not require closing the dialog to go and attach a file. */
+.tbpick__upload {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--navy-800);
+  background: var(--white);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+.tbpick__upload:hover { background: var(--navy-50); border-color: var(--navy-600); }
+.tbpick__upload.is-busy { opacity: 0.55; cursor: default; }
+.tbpick__upload.is-busy:hover { background: var(--white); border-color: var(--border-strong); }
+.tbpick__upload input { display: none; }
+
+.tbpick__options {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.tbpick__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--ink-50);
+}
+.tbpick__summary {
+  font-size: 12px;
+  color: var(--ink-500);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

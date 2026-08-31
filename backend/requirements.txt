@@ -14,18 +14,47 @@ httpx>=0.27.0
 pandas>=2.0.0
 openpyxl>=3.1.0
 
-# Trial Balance pipeline (Finance_llm_v2_naveen) — Excel parsing across real-
-# world exports: openpyxl reads .xlsx, xlrd reads legacy .xls, lxml backs
-# pd.read_html for the common case of an ERP "export to Excel" that's actually
-# an HTML table saved with an .xls/.xlsx extension.
-xlrd>=2.0.1
-lxml>=5.0.0
+# Trial Balance pipeline (TB-v2) — polars/fastexcel for canonical TB ingestion,
+# python-docx for the audit report writer. No PDF-evidence sub-feature (that's
+# what the old mode's xlrd/lxml/PyMuPDF backed; TB-v2 doesn't have it, and
+# nothing else in this repo imports those three, so they're dropped entirely
+# rather than kept unused).
+polars>=1.0.0
+fastexcel>=0.12.0
+numpy>=1.26.0
+python-docx>=1.1.0
+
+# Financial Diagnostic Report pipeline (vendored fs_db + fdr)
+# fs_db is written against psycopg v3 and is vendored verbatim, so the driver is
+# added rather than the package forked. v3 installs under a different module
+# name than psycopg2 above and the two coexist; without it this mode alone
+# reports itself unavailable via /api/modes?probe=true.
+psycopg[binary]>=3.1.0
+
+# FDR retrieval path — local cross-encoder reranking (BAAI/bge-reranker-v2-m3).
+# CPU wheel only: install torch from https://download.pytorch.org/whl/cpu, which
+# is ~200MB rather than the ~2.5GB CUDA build this mode has no use for. The
+# weights are read from the local Hugging Face cache and never downloaded at
+# request time; without either package the reranker reports itself unavailable
+# and retrieval falls back to the fused arm order.
+torch>=2.2
+transformers>=4.40
 
 # Tracing (optional at runtime — all three pipelines degrade gracefully without it)
 opentelemetry-api>=1.20.0
 opentelemetry-sdk>=1.20.0
 openinference-semantic-conventions>=0.1.9
-arize-phoenix>=19.0.0
+# Pinned, not >=19.0.0. arize-phoenix 20.x declares a frozen dataclass
+# (_FilterBindings in phoenix/trace/dsl/filter.py) with a mappingproxy default,
+# which Python 3.11 rejects outright — "mutable default <class 'mappingproxy'>
+# for field boolean_names". That import sits under phoenix/__init__.py, so on
+# 20.x *every* phoenix import fails, including phoenix.evals and phoenix.otel.
+#
+# It surfaced as a silent regression: an unpinned rebuild floated 19.17 -> 20.2
+# with no code change on our side. Runtime tracing was unaffected (it uses the
+# plain OTel SDK, not this package), but the evaluation job cannot run without
+# it. Re-test on 3.11 before raising this pin.
+arize-phoenix==19.17.0
 
 # NOT ON PyPI — install separately from your internal index/source checkout.
 # All three integrated pipelines use it to build their agents; without it

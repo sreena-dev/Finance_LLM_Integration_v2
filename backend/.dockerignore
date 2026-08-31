@@ -1,0 +1,31 @@
+# Keep the build context small and keep secrets out of the image.
+# NOTE: vendor/*.whl is deliberately NOT ignored — the yukta wheel must reach
+# the builder stage.
+
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+.venv/
+venv/
+env/
+
+# Real credentials never enter an image layer. Configuration is injected at
+# run time by docker-compose's env_file.
+.env
+.env.local
+.env.*.local
+
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+*.log
+
+# Any mode's runtime artifacts
+modes/*/sessions/
+modes/*/pipeline/output/
+
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store

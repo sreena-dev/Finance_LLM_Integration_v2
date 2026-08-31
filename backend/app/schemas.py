@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -11,6 +11,35 @@ from pydantic import BaseModel
 
 class QueryRequest(BaseModel):
     query: str
+
+    @field_validator("query")
+    @classmethod
+    def _normalise_whitespace(cls, value: str) -> str:
+        """Strip trailing whitespace from every line, not just the whole string.
+
+        This is not cosmetic. A single space typed before Shift+Enter — invisible
+        in the chat bubble, and left untouched by `.strip()` because it sits in
+        the *interior* of the string — changes the tokenisation of the prompt
+        enough to flip the agent's first tool choice.
+
+        Measured on the Financial Statements mode, same container, same endpoint:
+
+            "...unfavorable.\\nOutput: Table"    (147 chars)
+                -> summarize_annual_report, get_audit_report_highlights
+                -> answers in 3 iterations, 20+ consecutive successes
+
+            "...unfavorable. \\nOutput: Table"   (148 chars, one added space)
+                -> search_company_disclosures, then lookup_report_reference x7
+                -> exhausts MAX_TOOL_ITERATIONS, 3/3 failures
+
+        Deterministic in both directions. Normalising here rather than in one
+        router because every chat-style mode feeds its text to the same class of
+        agent and is exposed to the same trap. Interior blank lines and
+        single spaces *within* a line are preserved — the user's phrasing and
+        deliberate line structure are theirs, and only invisible trailing runs
+        are removed.
+        """
+        return "\n".join(line.rstrip() for line in value.splitlines()).strip()
 
 
 class QueryResponse(BaseModel):
@@ -26,89 +55,9 @@ class QueryResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Trial Balance — upload once, then ask / audit / validate against a doc_id
+# Trial Balance — request/response models live inline in
+# modes/trial_balance/router.py instead of here (TB-v2's own convention).
 # ---------------------------------------------------------------------------
-
-class TBUploadResponse(BaseModel):
-    doc_id: str
-    filename: str
-    sheet: str | None = None
-    periods: list[str]
-    accounts: int
-    parse_report: dict
-
-
-class TBPreviewResponse(BaseModel):
-    filename: str | None = None
-    sheets: list[dict]
-
-
-class TBUploadMappedRequest(BaseModel):
-    token: str
-    sheet_name: str
-    header_row: int
-    account_col: int
-    debit_col: int | None = None
-    credit_col: int | None = None
-    balance_col: int | None = None
-    code_col: int | None = None
-
-
-class TrialBalanceInfo(BaseModel):
-    doc_id: str
-    filename: str
-    sheet: str | None = None
-    periods: list[str]
-    uploaded_at: str | None = None
-
-
-class TBAskRequest(BaseModel):
-    doc_id: str
-    question: str
-    session_id: str | None = None
-
-
-class TBAskResponse(BaseModel):
-    doc_id: str
-    answer: str
-    sources: list[dict] = []
-
-
-class TBAuditRequest(BaseModel):
-    doc_id: str
-    doc_id_prior: str | None = None
-    entity: str | None = None
-    engagement_context: str | None = None
-    framework: str | None = None
-
-
-class TBValidateRequest(BaseModel):
-    doc_id: str
-    doc_id_prior: str | None = None
-    tolerance_pct: float | None = None
-    documented_convention: str | None = None
-    engagement_period: str | None = None
-    target_currency: str | None = None
-    rounding_account_threshold: float | None = None
-    variance_materiality_pct: float | None = None
-    never_invert_accounts: list[str] | None = None
-    approved_group_master: list[str] | None = None
-    required_heads: list[str] | None = None
-    tax_head_sign_map: dict[str, str] | None = None
-    sub_ledger_ref: list[str] | None = None
-    target_company_code: str | None = None
-    external_pl_figure: float | None = None
-    tb_period_year: int | None = None
-
-
-class TBValidateResponse(BaseModel):
-    phase_reached: str
-    layer1_results: dict
-    structural_result: dict | None = None
-    variance_rows: list[dict] | None = None
-    full_table_rows: list[dict] | None = None
-    formula_flags: list[dict] = []
-    summary_narrative: str
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +85,40 @@ class ReportResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# SAR Q&A chat (statutory auditor's report, conversational)
+#
+# Not QueryRequest: this mode is scoped to one entity and financial year picked
+# from the same catalog the report mode uses, and it carries prior turns, so the
+# pipeline's rewriter can resolve "it"/"that clause" against the conversation.
+# ---------------------------------------------------------------------------
+
+class SARChatRequest(BaseModel):
+    query: str
+    company: str
+    fy_start: int
+    history: list[dict] = []
+
+    @field_validator("query")
+    @classmethod
+    def _normalise_whitespace(cls, value: str) -> str:
+        """Same per-line trailing-whitespace strip as QueryRequest.
+
+        Applied here too because this mode feeds free text to the same class of
+        tool-calling agent, and so is exposed to the same trap: an invisible
+        space before a newline survives `.strip()` and can change which tool the
+        agent reaches for first. See QueryRequest for the measured case.
+        """
+        return "\n".join(line.rstrip() for line in value.splitlines()).strip()
+
+
+class SARChatResponse(BaseModel):
+    mode: str
+    query: str
+    final_answer: str = ""
+    evidences_md: str = ""
+
+
+# ---------------------------------------------------------------------------
 # Mode discovery
 # ---------------------------------------------------------------------------
 
@@ -145,8 +128,11 @@ class ModeInfo(BaseModel):
     short_label: str
     description: str
     branch: str
-    ui: str                 # "chat" | "report" | "upload-chat"
+    ui: str                 # "chat" | "report" | "report-chat" | "trial-balance"
     base_path: str
     integrated: bool
+    # Set on sub-modes that the UI folds into another mode rather than listing
+    # separately — see Mode.companion_of in registry.py.
+    companion_of: str | None = None
     available: bool
     reason: str | None = None

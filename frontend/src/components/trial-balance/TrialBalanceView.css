@@ -1,56 +1,239 @@
-.tb { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+.tb {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
 
-.tb__top { flex: none; max-height: 44vh; overflow-y: auto; }
-.tb__top-inner {
-  max-width: 960px;
+/* ── Active trial balance ──────────────────────────────────────────────── */
+
+.tb__active {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 9px 20px;
+  background: var(--navy-50);
+  border-bottom: 1px solid var(--navy-100);
+}
+.tb__active-text { font-size: 12.5px; color: var(--navy-800); }
+.tb__dismiss {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12.5px;
+  color: var(--navy-700);
+  cursor: pointer;
+}
+.tb__dismiss:hover { color: var(--navy-900); }
+
+/* ── Top row: chat mode tabs + quick actions, same line ──────────────────── */
+
+.tb__toprow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 20px 0;
+  background: var(--surface);
+}
+
+.tb__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.tb__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 190px;
+  padding: 7px 18px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--white);
+  background: var(--navy-700);
+  border: 1px solid var(--navy-700);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
+}
+.tb__action:hover:not(:disabled) { background: var(--navy-800); border-color: var(--navy-800); box-shadow: var(--shadow-md); }
+.tb__action:disabled { opacity: 0.55; cursor: default; }
+
+/* ── Stream ───────────────────────────────────────────────────────────── */
+
+.tb__stream { flex: 1; min-height: 0; overflow-y: auto; }
+.tb__stream-inner {
+  max-width: 880px;
   margin: 0 auto;
-  padding: 22px 32px 0;
+  padding: 20px 24px 32px;
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
 
-.tb__panel { flex: 1; min-height: 0; }
-
-/* ── Tabs ──────────────────────────────────────────────────────────────── */
-
-.tb__tabs {
-  display: inline-flex;
-  gap: 3px;
-  padding: 3px;
-  background: var(--ink-100);
-  border-radius: var(--radius);
-  width: fit-content;
-  align-self: flex-start;
+.tb__user {
+  align-self: flex-end;
+  max-width: 76%;
+  padding: 10px 15px;
+  border-radius: 14px 14px 3px 14px;
+  background: var(--navy-700);
+  color: var(--white);
+  font-size: 13.5px;
+  line-height: 1.5;
 }
 
-.tb__tab {
-  position: relative;
+.tb__assistant {
+  align-self: flex-start;
+  max-width: 76%;
+  padding: 10px 15px;
+  border-radius: 14px 14px 14px 3px;
+  background: var(--ink-50);
+  border: 1px solid var(--border);
+  color: var(--ink-700);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.tb__note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ink-500);
+  padding: 8px 12px;
+  background: var(--ink-50);
+  border-radius: var(--radius-sm);
+}
+.tb__muted { margin: 0; font-size: 13px; color: var(--ink-500); }
+
+.tb__answer { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+/* Which scope answered. Shown because a question about "revenue" means something
+   different against one trial balance than against the annual-report corpus, and
+   the answer text alone does not always make that obvious. */
+.tb__answer-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.tb__ai-mark { color: var(--blue-500); flex-shrink: 0; margin-right: 2px; vertical-align: -2px; }
+.tb__computed {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--ink-50);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  color: var(--ink-700);
+}
+.tb__answer .md { font-size: 13.5px; line-height: 1.7; }
+.tb__sources { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.tb__loading { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-500); }
+.tb__loading-text { font-variant-numeric: tabular-nums; }
+.tb__spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid var(--ink-200);
+  border-top-color: var(--navy-600);
+  border-radius: 50%;
+  animation: tb-spin 0.7s linear infinite;
+}
+@keyframes tb-spin { to { transform: rotate(360deg); } }
+
+.tb__idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  color: var(--ink-500);
+  text-align: center;
+}
+.tb__idle-icon { color: var(--blue-500); }
+.tb__idle p { margin: 0; font-size: 13px; max-width: 440px; line-height: 1.6; }
+.tb__idle-welcome { font-size: 15px; font-weight: 600; color: var(--ink-700); }
+
+/* ── Chat mode toggle ─────────────────────────────────────────────────── */
+
+.tb__chatmode {
+  display: flex;
+  gap: 4px;
+  background: var(--surface);
+}
+.tb__chatmode-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-500);
+  background: var(--ink-50);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.16s var(--ease), color 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+.tb__chatmode-tab:hover { color: var(--ink-800); }
+.tb__chatmode-tab.is-active {
+  background: var(--navy-50);
+  color: var(--navy-800);
+  border-color: var(--navy-600);
+}
+
+/* ── Composer ─────────────────────────────────────────────────────────── */
+
+.tb__composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 20px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.tb__file { display: none; }
+.tb__attach {
+  flex: none;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 16px;
-  background: none;
-  border: none;
+  justify-content: center;
+  background: var(--white);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  font-size: 13px;
-  font-weight: 550;
   color: var(--ink-600);
   cursor: pointer;
-  transition: color 0.18s var(--ease);
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease);
 }
-.tb__tab.is-on { color: var(--navy-900); }
+.tb__attach:hover:not(:disabled) {
+  background: var(--navy-50);
+  border-color: var(--navy-600);
+  color: var(--navy-800);
+}
+.tb__attach:disabled { opacity: 0.55; cursor: default; }
 
-.tb__tab-bg {
-  position: absolute;
-  inset: 0;
-  background: var(--surface);
+.tb__input {
+  flex: 1;
+  min-height: 36px;
+  max-height: 140px;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink-900);
+  background: var(--white);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-sm);
+  resize: vertical;
 }
-
-.tb__tab-icon, .tb__tab-text { position: relative; z-index: 1; }
+.tb__input:focus { outline: none; border-color: var(--navy-600); }
 
 @media (max-width: 900px) {
-  .tb__top-inner { padding: 16px 16px 0; }
+  .tb__stream-inner { padding: 16px 16px 24px; }
+  .tb__toprow, .tb__composer { padding-left: 16px; padding-right: 16px; }
 }
