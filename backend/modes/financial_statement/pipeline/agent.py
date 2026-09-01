@@ -498,6 +498,28 @@ class Orchestrator:
             if session is not None:
                 session.headers["Authorization"] = f"Bearer {_key}"
 
+        # PATCHED (integration): pin the sampling temperature on the CLIENT.
+        #
+        # This used to ride on `agent.run(..., llm_kwargs={"temperature": 0.1})`.
+        # Some builds of yukta -- including the one in use here -- have
+        # `Agent.run(user_message, reset_conversation)` with no `llm_kwargs` at
+        # all, and their `VLLMClient.generate` builds its payload from **kwargs
+        # while never reading `self.temperature`. On such a build the agent loop
+        # calls generate(messages, tools, max_tokens) and NO temperature is sent,
+        # so the server's own default (typically 0.7) silently replaces the 0.1
+        # this pipeline was tuned at.
+        #
+        # Defaulting it here means the intended value reaches the server whatever
+        # the yukta version, and `setdefault` leaves an explicit per-call
+        # temperature (the rewriter passes 0.0) winning as it should.
+        _inner_generate = client.generate
+
+        def _generate_at_fixed_temperature(messages, tools=None, **kw):
+            kw.setdefault("temperature", 0.1)
+            return _inner_generate(messages, tools=tools, **kw)
+
+        client.generate = _generate_at_fixed_temperature
+
         return client
 
     def _build_fs_agent(self, conn, retrieved_chunks: list[dict], conn_reports=None, callbacks=None,
@@ -527,16 +549,29 @@ class Orchestrator:
             verbose=False,
         )
 
-        fs_agent = create_agent(
-            name="fs-agent",
-            system_prompt=SystemPrompt("fs-agent", self.build_system_prompt(query)),
-            tools_processor=tools_processor,
-            config=config,
+        # PATCHED (integration): `callbacks` is passed only when this build of
+        # yukta accepts it. Not every build has the callbacks API -- one in use
+        # here exposes neither `AgentCallbackHandler` nor a `callbacks`
+        # parameter, and passing it unconditionally raised a TypeError that
+        # surfaced to the user as "Pipeline error at stage 'llm'". Callbacks
+        # only feed the token-accounting in `llm_stats`, so a build without them
+        # should cost telemetry, not every answer. Detected by signature rather
+        # than by version so it stays correct in both directions.
+        import inspect as _inspect
+
+        _agent_kwargs = {
+            "name": "fs-agent",
+            "system_prompt": SystemPrompt("fs-agent", self.build_system_prompt(query)),
+            "tools_processor": tools_processor,
+            "config": config,
             # See yukta_agents.py's original note: 2000 tokens truncated a
             # full 33-ratio answer mid-JSON; 6000 was sized for that case.
-            llm_client=self._make_llm_client(max_tokens=6000),
-            callbacks=callbacks,
-        )
+            "llm_client": self._make_llm_client(max_tokens=6000),
+        }
+        if callbacks is not None and "callbacks" in _inspect.signature(create_agent).parameters:
+            _agent_kwargs["callbacks"] = callbacks
+
+        fs_agent = create_agent(**_agent_kwargs)
 
         # yukta feeds tool output back as json.dumps(result, indent=2), which
         # escapes every newline in our plain-text tool results to a literal \n —
@@ -970,9 +1005,17 @@ class Orchestrator:
         self, query: str, conn, retrieved_chunks: list[dict], conn_reports=None,
     ) -> tuple[str, str, list[dict], dict]:
         """Runs fs-agent end to end. Returns (answer_text, intent, tool_calls_log, llm_stats)."""
-        from yukta import AgentCallbackHandler
+        # PATCHED (integration): optional import. This build of yukta may not
+        # export AgentCallbackHandler at all; when it does not, the stats
+        # collector still works as a plain object and simply never gets called,
+        # leaving llm_stats at zero. Losing a token count is a fair price for an
+        # answer; losing the answer is not.
+        try:
+            from yukta import AgentCallbackHandler as _CallbackBase
+        except ImportError:
+            _CallbackBase = object
 
-        class _StatsCallback(AgentCallbackHandler):
+        class _StatsCallback(_CallbackBase):
             def __init__(self):
                 self.prompt_tokens = 0
                 self.completion_tokens = 0
@@ -982,13 +1025,24 @@ class Orchestrator:
                 self.prompt_tokens += usage.get("prompt_tokens", 0)
                 self.completion_tokens += usage.get("completion_tokens", 0)
 
+        import inspect
+
         stats_cb = _StatsCallback()
         agent = self._build_fs_agent(
             conn, retrieved_chunks, conn_reports, callbacks=stats_cb, query=query
         )
 
         _t_start = time.perf_counter()
-        result = agent.run(user_message=f"Query: {query}", llm_kwargs={"temperature": 0.1})
+        # PATCHED (integration): `llm_kwargs` is passed only when this build of
+        # yukta accepts it -- some have `run(user_message, reset_conversation)`
+        # only, and passing it raised "Agent.run() got an unexpected keyword
+        # argument 'llm_kwargs'", surfaced to the user as a pipeline error. The
+        # temperature it carried is now pinned on the client in
+        # `_make_llm_client`, so dropping it here changes nothing.
+        _run_kwargs = {"user_message": f"Query: {query}"}
+        if "llm_kwargs" in inspect.signature(agent.run).parameters:
+            _run_kwargs["llm_kwargs"] = {"temperature": 0.1}
+        result = agent.run(**_run_kwargs)
         elapsed = round(time.perf_counter() - _t_start, 2)
 
         if not result.get("success"):

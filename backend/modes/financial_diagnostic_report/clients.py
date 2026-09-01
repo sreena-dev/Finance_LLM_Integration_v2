@@ -17,6 +17,7 @@ statements about the entity and they must never be confusable.
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
 from typing import Any, Iterator
@@ -33,10 +34,31 @@ class EndpointError(RuntimeError):
         super().__init__(f"{what}: {detail}")
 
 
-def _post(url: str, payload: dict, timeout: float) -> dict:
+def _generation_headers() -> dict[str, str]:
+    """Headers for the GENERATION endpoint only.
+
+    That server authenticates; the embedding and reranker servers are separate
+    hosts on the same network and neither asks for a key, so the header is not
+    sent to them -- an unexpected bearer token is a thing a server is entitled to
+    reject. The key is omitted entirely when unset rather than sent empty, which
+    is what the other modes already do (see agent._make_llm_client).
+
+    Without this the whole retrieval path failed with "unreachable
+    (Unauthorized)": the diagnostics still answered, so the mode looked healthy,
+    while every narrative question 401'd.
+    """
+    headers = {"Content-Type": "application/json"}
+    key = (os.environ.get("GENERATION_API_KEY") or "").strip()
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    return headers
+
+
+def _post(url: str, payload: dict, timeout: float,
+          headers: dict[str, str] | None = None) -> dict:
     request = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=headers or {"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.load(response)
 
@@ -122,7 +144,7 @@ def chat(messages: list[dict], *, max_tokens: int | None = None,
             {"model": settings.llm_model, "messages": messages,
              "max_tokens": max_tokens or settings.llm_max_tokens,
              "temperature": temperature},
-            settings.llm_timeout)
+            settings.llm_timeout, headers=_generation_headers())
         return body["choices"][0]["message"]["content"] or ""
     except urllib.error.URLError as exc:
         raise EndpointError("generation endpoint", f"unreachable ({exc.reason})") from exc
@@ -148,7 +170,7 @@ def chat_stream(messages: list[dict], *, max_tokens: int | None = None,
     request = urllib.request.Request(
         f"{settings.llm_url.rstrip('/')}/v1/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=_generation_headers(), method="POST")
 
     try:
         with urllib.request.urlopen(request, timeout=settings.llm_timeout) as response:

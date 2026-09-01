@@ -5,12 +5,21 @@
  * the mode the user selected is structurally the mode whose pipeline runs.
  * No call site hard-codes a URL — that is what stops Trial Balance from ever
  * hitting the Financial Statement endpoint.
+ *
+ * Every request carries the session token. It is read from `auth/token.js` — a
+ * leaf module with no React in it — rather than from context, because these are
+ * plain functions where no hook can be called.
  */
+
+import { authHeaders, notifyUnauthorized } from '../auth/token';
 
 async function request(path, options = {}) {
   let res;
   try {
-    res = await fetch(path, options);
+    res = await fetch(path, {
+      ...options,
+      headers: { ...(options.headers || {}), ...authHeaders() },
+    });
   } catch {
     // No port quoted here on purpose: the gateway's port comes from .env
     // (ARTHA_BACKEND_PORT), so a hard-coded number in this message would go
@@ -22,6 +31,17 @@ async function request(path, options = {}) {
   }
 
   if (!res.ok) {
+    // An expired or missing token is a session event, not a mode failure.
+    // Without this it would surface as every mode being "unavailable", which
+    // tells the user nothing about what actually happened or what to do.
+    if (res.status === 401) {
+      const body = await res.json().catch(() => ({}));
+      notifyUnauthorized(body.detail || 'Your session ended. Please sign in again.');
+      const err = new Error(body.detail || 'Your session ended. Please sign in again.');
+      err.status = 401;
+      throw err;
+    }
+
     const isJson = (res.headers.get('content-type') || '').includes('application/json');
 
     // A non-JSON 404 means something answered that isn't our gateway — almost
@@ -80,9 +100,48 @@ export async function probeMode(mode) {
 
 // ── Per-mode calls ────────────────────────────────────────────────────────
 
-/** Chat-style modes: financial statement, trial balance, diagnostic report. */
-export function runQuery(mode, query) {
-  return post(`${mode.base_path}/query`, { query });
+/**
+ * Chat-style modes: currently only Financial Statements.
+ *
+ * `conversationId` is optional and is the ONLY thing sent about the past — the
+ * prior turns live server-side against the signed-in user, so a thread resumes
+ * after a refresh or on another machine, and the client cannot rewrite its own
+ * history. Omit it and the server starts a new conversation.
+ */
+export function runQuery(mode, query, conversationId = null) {
+  return post(`${mode.base_path}/query`, {
+    query,
+    conversation_id: conversationId || null,
+  });
+}
+
+/** This user's saved conversations for a mode, most recently active first. */
+export async function listConversations(mode) {
+  const { conversations } = await request(`${mode.base_path}/conversations`);
+  return conversations || [];
+}
+
+/**
+ * Every turn of one conversation.
+ *
+ * Assistant turns carry the stored `payload` — the full original response — so a
+ * reopened thread renders with its evidence and citations intact rather than as
+ * plain text.
+ */
+export function fetchConversation(mode, conversationId) {
+  return request(`${mode.base_path}/conversations/${encodeURIComponent(conversationId)}`);
+}
+
+export async function deleteConversation(mode, conversationId) {
+  const res = await fetch(
+    `${mode.base_path}/conversations/${encodeURIComponent(conversationId)}`,
+    { method: 'DELETE', headers: { ...authHeaders() } }
+  );
+  if (!res.ok && res.status !== 204) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `Could not delete the conversation (HTTP ${res.status}).`);
+  }
+  return true;
 }
 
 /** Statutory auditor's report: entities + the financial years available for each. */
@@ -130,7 +189,10 @@ async function uploadFile(path, file, fields = {}) {
   }
   let res;
   try {
-    res = await fetch(path, { method: 'POST', body: form });
+    // Headers are set explicitly here and deliberately WITHOUT Content-Type:
+    // FormData must set its own multipart boundary, and naming the type would
+    // overwrite it with one that has no boundary at all.
+    res = await fetch(path, { method: 'POST', body: form, headers: { ...authHeaders() } });
   } catch {
     throw new Error('Could not reach the backend to upload the file.');
   }
@@ -246,7 +308,7 @@ export async function tbAuditWorkbook(mode, { docId, docIdPrior, uploadDocIds, f
   try {
     res = await fetch(`${mode.base_path}/audit/workbook`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
         doc_id: docId,
         doc_id_prior: docIdPrior || null,

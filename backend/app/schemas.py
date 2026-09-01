@@ -11,6 +11,13 @@ from pydantic import BaseModel, field_validator
 
 class QueryRequest(BaseModel):
     query: str
+    # Which conversation this turn belongs to. Optional and defaulted, so an
+    # existing caller that sends only `query` keeps working unchanged; the
+    # server starts a new conversation when it is absent. The prior turns are
+    # NOT sent by the client — they are read from the database against the
+    # authenticated user, so the client cannot rewrite its own history and a
+    # thread survives a refresh or a move to another machine.
+    conversation_id: str | None = None
 
     @field_validator("query")
     @classmethod
@@ -52,6 +59,14 @@ class QueryResponse(BaseModel):
     num_tables_searched: int = 0
     num_chunks_retrieved: int = 0
     elapsed_seconds: float = 0.0
+    # The conversation this answer was recorded in — the client stores it and
+    # sends it back on the next turn.
+    conversation_id: str = ""
+    # What was actually sent to the pipeline, when a follow-up was resolved into
+    # a standalone question. Empty when the question was used as typed. Surfaced
+    # rather than hidden: an answer that addresses something subtly different
+    # from what was asked is otherwise impossible to explain after the fact.
+    rewritten_query: str = ""
 
 
 # ---------------------------------------------------------------------------

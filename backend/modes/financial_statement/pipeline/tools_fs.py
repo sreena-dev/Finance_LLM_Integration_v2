@@ -7369,6 +7369,14 @@ class ToolRegistry:
                     "source metadata — cite them by number. Call this ONCE for the whole"
                     " question; re-searching with reworded queries returns near-identical"
                     " chunks and wastes a full round."
+                    # PATCHED (integration): this index holds NO company filings, and a
+                    # company question routed here can only ever come back empty --
+                    # which the model then reported as the company having no data.
+                    " THIS INDEX CONTAINS NO COMPANY FILINGS. It holds standards and"
+                    " regulations only. For anything about a named company's own annual"
+                    " report — its figures, notes, policies, auditor's report — use the"
+                    " company tools instead. An empty result here says nothing whatsoever"
+                    " about whether that company is in the corpus."
                 ),
                 parameters=[
                     ToolParameter(
@@ -7551,7 +7559,22 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'Coal India', 'ONGC', 'BPCL'",
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
                             required=True,
                         ),
                         ToolParameter(
@@ -7588,7 +7611,22 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'Coal India', 'ONGC', 'BPCL'",
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
                             required=True,
                         ),
                         ToolParameter(
@@ -7626,7 +7664,22 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'SAIL', 'NTPC', 'RVNL'",
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
                             required=True,
                         ),
                         ToolParameter(
@@ -7655,7 +7708,23 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'SAIL', 'NTPC'", required=True,
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
+                            required=True,
                         ),
                         ToolParameter(
                             name="financial_year", type="string",
@@ -7691,7 +7760,23 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'SAIL', 'NTPC'", required=True,
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
+                            required=True,
                         ),
                         ToolParameter(
                             name="financial_year", type="string",
@@ -7722,7 +7807,23 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'SAIL', 'NTPC'", required=True,
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
+                            required=True,
                         ),
                         ToolParameter(
                             name="financial_year", type="string",
@@ -7755,7 +7856,23 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'SAIL', 'NTPC'", required=True,
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
+                            required=True,
                         ),
                         ToolParameter(
                             name="financial_year", type="string",
@@ -7779,7 +7896,22 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'SAIL', 'NTPC', 'IOCL'",
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
                             required=True,
                         ),
                         ToolParameter(
@@ -7810,7 +7942,22 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'SAIL', 'NTPC', 'IOCL'",
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
                             required=True,
                         ),
                         ToolParameter(
@@ -7846,7 +7993,22 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'Coal India', 'ONGC', 'BPCL'",
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
                             required=True,
                         ),
                         ToolParameter(
@@ -7881,7 +8043,22 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'Coal India', 'ONGC', 'BPCL'",
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
                             required=True,
                         ),
                         ToolParameter(
@@ -7908,7 +8085,22 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'Coal India', 'ONGC', 'BPCL'",
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
                             required=True,
                         ),
                         ToolParameter(
@@ -7945,7 +8137,22 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'Coal India', 'ONGC', 'BPCL'",
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
                             required=True,
                         ),
                         ToolParameter(
@@ -8004,7 +8211,22 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'Coal India', 'ONGC', 'BPCL'",
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
                             required=True,
                         ),
                         ToolParameter(
@@ -8029,7 +8251,22 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'Coal India', 'ONGC', 'BPCL'",
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
                             required=True,
                         ),
                         ToolParameter(
@@ -8084,7 +8321,22 @@ class ToolRegistry:
                     parameters=[
                         ToolParameter(
                             name="company", type="string",
-                            description="Company name. e.g. 'Coal India', 'ONGC', 'BPCL'",
+                            # PATCHED (integration): these examples were ONGC/BPCL/SAIL only. The
+                            # model read that as the corpus's full membership and expanded short
+                            # names into legal ones, which the old substring matcher then rejected --
+                            # so entities that were present reported themselves absent. See
+                            # modes/financial_statement/entity_resolution.py.
+                            description=(
+                                "Company name, exactly as the user wrote it. The corpus covers many "
+                                "Indian listed and public-sector companies; these are examples, NOT "
+                                "the full list: 'Coal India', 'ONGC', 'GAIL', 'Gujarat Gas', "
+                                "'SAIL', 'NTPC'. Do NOT expand a short name into a full legal name "
+                                "and do NOT abbreviate a long one -- legal suffixes (Limited/Ltd), "
+                                "underscores, '&' and case are all handled for you. If the name is "
+                                "not found the tool replies with the closest stored names; use one "
+                                "of those verbatim. Never tell the user this system covers only "
+                                "certain companies."
+                            ),
                             required=True,
                         ),
                         ToolParameter(

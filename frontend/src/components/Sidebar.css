@@ -39,7 +39,94 @@
 
 /* ── Nav ───────────────────────────────────────────────────────────────── */
 
-.side__nav { flex: 1; padding: 18px 12px; display: flex; flex-direction: column; gap: 3px; }
+/* The scroller now owns the free space, not the nav.
+ *
+ * `.side__nav` used to be `flex: 1` and absorbed everything below the brand.
+ * With a conversation list and a footer added, it has to yield: the wrapper
+ * takes the space and the two lists split it. `min-height: 0` is load-bearing —
+ * without it a flex child refuses to shrink below its content height and a long
+ * conversation list pushes the footer off the bottom of the screen. */
+.side__scroll {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.side__nav { flex: none; padding: 18px 12px; display: flex; flex-direction: column; gap: 3px; }
+
+/* ── Footer: who is signed in ──────────────────────────────────────────── */
+
+.side__footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.side__user {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.side__avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  color: var(--navy-700);
+  background: var(--navy-50);
+  border-radius: 50%;
+}
+
+.side__user-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.side__user-name {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-800);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side__user-sub {
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--ink-400);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side__signout {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  color: var(--ink-500);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.14s var(--ease), background 0.14s var(--ease);
+}
+
+.side__signout:hover {
+  color: var(--err-600);
+  background: var(--err-100);
+}
 
 .side__heading {
   margin: 0 0 8px 8px;
@@ -113,4 +200,21 @@
   .side__heading { display: none; }
   .side__item { width: auto; flex: none; }
   .side__item-label { white-space: nowrap; }
+}
+
+/* On the mobile strip layout the footer would stack under a horizontally
+   scrolling row of modes and eat a third of the viewport. The sign-out control
+   stays reachable; only the identity block is dropped. */
+@media (max-width: 900px) {
+  .side__scroll {
+    overflow: visible;
+  }
+
+  .side__footer {
+    padding: 6px 12px;
+  }
+
+  .side__user-sub {
+    display: none;
+  }
 }

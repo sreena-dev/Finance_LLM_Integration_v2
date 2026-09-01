@@ -136,9 +136,23 @@ class SafeVLLMClient(VLLMClient):
         # Setting it as a session-level default header fixes get_model_info() without
         # touching _make_request()'s own (already-correct) per-call header, since `requests`
         # merges call-level headers on top of session-level ones.
+        # PATCHED (integration): `_session` is not present on every build of
+        # yukta's VLLMClient. The one in use here issues a module-level
+        # `requests.get(...)` from get_model_info() and has no session object at
+        # all, so this line raised "'SafeVLLMClient' object has no attribute
+        # '_session'" from the constructor -- taking down the whole Trial Balance
+        # agent before it ran anything.
+        #
+        # Guarded the same way the Financial Statement mode already guards the
+        # identical access. Where there is no session there is also no
+        # session-level header to fix, and the only consequence is the one this
+        # workaround was written to avoid: get_model_info() may 401 and the
+        # context window falls back to its default. A smaller context window is a
+        # degradation; a constructor that raises is an outage.
         api_key = self.config.get("api_key")
-        if api_key:
-            self._session.headers["Authorization"] = f"Bearer {api_key}"
+        session = getattr(self, "_session", None)
+        if api_key and session is not None:
+            session.headers["Authorization"] = f"Bearer {api_key}"
 
     def generate(self, messages, tools=None, **kwargs):
         kwargs["max_tokens"] = min(kwargs.get("max_tokens", 4096), 4096)

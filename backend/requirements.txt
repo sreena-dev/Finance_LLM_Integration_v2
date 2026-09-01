@@ -5,6 +5,14 @@ pydantic>=2.6.0
 python-dotenv>=1.0.0
 python-multipart>=0.0.9
 
+# Authentication (gateway-wide sign-up / sign-in)
+# bcrypt is called directly rather than through passlib: passlib 1.7.4 is
+# unmaintained and raises AttributeError against bcrypt >= 4.1, which is what
+# pip resolves today. PyJWT rather than python-jose — one algorithm, two
+# functions. Both ship manylinux wheels, so the Dockerfile needs no change.
+bcrypt>=4.1.0
+PyJWT>=2.8.0
+
 # Shared by both integrated pipelines
 psycopg2-binary>=2.9.9
 requests>=2.31.0
@@ -56,7 +64,28 @@ openinference-semantic-conventions>=0.1.9
 # it. Re-test on 3.11 before raising this pin.
 arize-phoenix==19.17.0
 
-# NOT ON PyPI — install separately from your internal index/source checkout.
+# NOT ON PyPI. Install it from the project's own repository:
+#
+#   pip install "git+https://github.com/HARISH-027/yukta.git@main"
+#
+# The repo is private, so this uses your configured git credentials.
+#
+# VERSION PINNING DOES NOT PROTECT YOU HERE. A local source checkout was in use
+# that reported version 2.1.0 while being a divergent, older snapshot: it
+# exported no `AgentCallbackHandler`, its `Agent.run` had no `llm_kwargs`, and
+# its `VLLMClient` had no `_session`. All three are used by the Financial
+# Statement and Trial Balance pipelines, and each surfaced as a runtime error
+# with no hint that the dependency was the cause -- "Pipeline error at stage
+# 'llm'" and "'SafeVLLMClient' object has no attribute '_session'". Both
+# pipelines now detect these by signature and degrade rather than crash, but
+# install from the URL above to get the intended behaviour: token accounting and
+# real context-window detection both depend on them.
+#
+# Verify an install with:
+#   python -c "import inspect,yukta;from yukta import AgentCallbackHandler,create_agent;#   from yukta.core.Agent.agent import Agent;#   print('llm_kwargs' in inspect.signature(Agent.run).parameters)"
+#
+# Older note, still true for an air-gapped build: install separately from your
+# internal index/source checkout.
 # All three integrated pipelines use it to build their agents; without it
 # Financial Statement, SAR report *generation*, and Trial Balance all report
 # themselves unavailable via /api/modes?probe=true (the SAR dropdowns keep

@@ -5,11 +5,20 @@
  * of the app; this mode adds its calls here instead so wiring the FDR touches no
  * file another mode depends on.
  *
+ * ONE DELIBERATE EXCEPTION: `auth/token.js`. Every route below now requires a
+ * session token, and this file has three independent `fetch` calls that never
+ * pass through the shared client. The alternative was to re-read
+ * `localStorage.getItem('artha.token')` here, which would mean two files that
+ * must agree on a key name forever. Importing a leaf module that holds no state
+ * of its own is the smaller coupling.
+ *
  * It still follows that client's one binding rule: NO URL IS HARD-CODED. Every
  * call is built from the `base_path` the gateway reports for this mode, so the
  * mode the user selected is structurally the mode whose pipeline runs, and this
  * client cannot reach another mode's endpoints even by mistake.
  */
+
+import { authHeaders, notifyUnauthorized } from '../../auth/token';
 
 const MODE_ID = 'financial-diagnostic-report';
 
@@ -25,7 +34,7 @@ let basePathPromise = null;
 export function getBasePath() {
   if (!basePathPromise) {
     basePathPromise = (async () => {
-      const res = await fetch('/api/modes');
+      const res = await fetch('/api/modes', { headers: { ...authHeaders() } });
       if (!res.ok) throw new Error(`Could not read the mode registry (HTTP ${res.status}).`);
       const { modes } = await res.json();
       const mode = (modes || []).find((m) => m.id === MODE_ID);
@@ -49,7 +58,10 @@ export function getBasePath() {
 async function request(path, options = {}) {
   let res;
   try {
-    res = await fetch(path, options);
+    res = await fetch(path, {
+      ...options,
+      headers: { ...(options.headers || {}), ...authHeaders() },
+    });
   } catch {
     throw new Error(
       'Could not reach the backend. Start the stack with `docker compose up -d`, ' +
@@ -58,6 +70,13 @@ async function request(path, options = {}) {
   }
 
   if (!res.ok) {
+    if (res.status === 401) {
+      const body = await res.json().catch(() => ({}));
+      notifyUnauthorized(body.detail || 'Your session ended. Please sign in again.');
+      const err = new Error(body.detail || 'Your session ended. Please sign in again.');
+      err.status = 401;
+      throw err;
+    }
     const isJson = (res.headers.get('content-type') || '').includes('application/json');
     if (!isJson) {
       throw new Error(
@@ -136,7 +155,7 @@ export async function askQuestionStream(
   try {
     res = await fetch(`${base}/query/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ entity_id: entityId, query, refresh }),
       signal,
     });

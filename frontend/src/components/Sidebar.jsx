@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import Icon from './common/Icon';
+import { useAuth } from '../auth/AuthContext';
 import './Sidebar.css';
 
 export const MODE_ICONS = {
@@ -21,7 +22,9 @@ function StatusDot({ status }) {
   return <span className={`side__status side__status--${status}`} title={title} />;
 }
 
-export default function Sidebar({ modes, activeId, onSelect, health }) {
+export default function Sidebar({ modes, activeId, onSelect, health, children }) {
+  const { user, signOut } = useAuth();
+
   return (
     <aside className="side">
       <div className="side__brand">
@@ -44,6 +47,7 @@ export default function Sidebar({ modes, activeId, onSelect, health }) {
         </div>
       </div>
 
+      <div className="side__scroll">
       <nav className="side__nav" aria-label="Modes">
         <p className="side__heading">Modes</p>
 
@@ -85,6 +89,38 @@ export default function Sidebar({ modes, activeId, onSelect, health }) {
           );
         })}
       </nav>
+
+        {/* The conversation list, when the active mode has one. Passed as
+            children rather than fetched here so the sidebar stays a
+            presentation component and only App owns the data. */}
+        {children}
+      </div>
+
+      {/* Signed-in user. Reads context directly instead of taking props: the
+          sidebar is app-shell, not a shared surface, so drilling `user` and
+          `onSignOut` through App would add two props to no benefit. */}
+      <div className="side__footer">
+        <div className="side__user">
+          <span className="side__avatar" aria-hidden="true">
+            <Icon name="user" size={14} />
+          </span>
+          <span className="side__user-text">
+            <span className="side__user-name" title={user?.email || ''}>
+              {user?.display_name || user?.username || 'Signed in'}
+            </span>
+            <span className="side__user-sub">{user?.email || ''}</span>
+          </span>
+        </div>
+        <button
+          type="button"
+          className="side__signout"
+          onClick={() => signOut()}
+          title="Sign out"
+          aria-label="Sign out"
+        >
+          <Icon name="logout" size={15} />
+        </button>
+      </div>
     </aside>
   );
 }

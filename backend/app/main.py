@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -73,13 +73,27 @@ from app.tracing import setup_tracing  # noqa: E402
 
 setup_tracing()
 
+from app.auth.deps import require_user  # noqa: E402
+from app.auth.router import router as auth_router  # noqa: E402
 from app.errors import InvalidRequestError, NotFoundError  # noqa: E402
+from app.mode_loader import IMPORT_FAILURES, load_routers  # noqa: E402
 from app.registry import MODES, describe  # noqa: E402
-from modes.financial_diagnostic_report.router import router as fdr_router  # noqa: E402
-from modes.financial_statement.router import router as fs_router  # noqa: E402
-from modes.sar_chat.router import router as sar_chat_router  # noqa: E402
-from modes.statutory_auditor_report.router import router as sar_router  # noqa: E402
-from modes.trial_balance.router import router as tb_router  # noqa: E402
+
+# Imported one at a time rather than with five module-scope `from ... import`
+# statements. A mode router is not inert — Trial Balance's verifies its
+# knowledge packs and creates a directory at import time, and pulls in a tree
+# that imports python-docx. One missing dependency there used to abort the
+# import of this module and stop uvicorn, taking down four modes that had
+# nothing to do with it. See app/mode_loader.py.
+_MODE_ROUTERS = (
+    ("statutory-auditor-report", "modes.statutory_auditor_report.router"),
+    ("sar-chat", "modes.sar_chat.router"),
+    ("financial-statement", "modes.financial_statement.router"),
+    ("trial-balance", "modes.trial_balance.router"),
+    ("financial-diagnostic-report", "modes.financial_diagnostic_report.router"),
+)
+
+_loaded_routers = load_routers(_MODE_ROUTERS)
 
 app = FastAPI(
     title="Artha.AI — Integrated Audit Platform",
@@ -132,11 +146,55 @@ async def _invalid_request_handler(_request: Request, exc: InvalidRequestError) 
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
-for _router in (sar_router, sar_chat_router, fs_router, tb_router, fdr_router):
-    app.include_router(_router)
+# Sign-up and sign-in are the only routes besides /api/health reachable without
+# a token — a chicken-and-egg requirement rather than a policy choice.
+app.include_router(auth_router)
+
+# EVERY mode is authenticated by this one argument. Attaching the dependency
+# here rather than inside each mode's router is what lets four working
+# pipelines gain authentication without a single line changing in their own
+# files — and it cannot accidentally cover /api/health, which is declared
+# directly on `app` below and which the container healthcheck polls with no
+# credentials (see backend/Dockerfile). Middleware was the alternative and was
+# rejected: it would have to re-implement path matching plus an allowlist, and
+# would also intercept /docs, /openapi.json and CORS preflight OPTIONS.
+for _mode_id, _router in _loaded_routers:
+    app.include_router(_router, dependencies=[Depends(require_user)])
 
 
-@app.get("/api/modes")
+def _register_unavailable(mode) -> None:
+    """Answer 503 under a mode whose router could not be imported.
+
+    Without this its endpoints would 404, and a 404 says "this route does not
+    exist" — which reads as a client mistake and sends someone looking for a
+    typo. The honest answer is 503 with the import error, which names the
+    missing dependency. It matches the status the rest of this gateway already
+    uses for an unavailable mode, and 503 is the one status that invites a retry.
+    """
+    reason = IMPORT_FAILURES[mode.id]
+    # Behind the same auth dependency as a working mode. Otherwise this would be
+    # the one route set in the gateway that answers an anonymous caller, and it
+    # would answer with an exception string naming internal packages and paths.
+    stub = APIRouter(prefix=mode.base_path, tags=[mode.id],
+                     dependencies=[Depends(require_user)])
+
+    @stub.api_route(
+        "/{path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
+    async def _unavailable(path: str):  # noqa: ARG001 - path is the catch-all
+        raise HTTPException(status_code=503, detail=reason)
+
+    app.include_router(stub)
+
+
+for _mode in MODES:
+    if _mode.id in IMPORT_FAILURES:
+        _register_unavailable(_mode)
+
+
+@app.get("/api/modes", dependencies=[Depends(require_user)])
 async def list_modes(probe: bool = False):
     """List the modes the UI should render.
 
@@ -147,6 +205,11 @@ async def list_modes(probe: bool = False):
     return {"modes": [describe(m, probe=probe) for m in MODES]}
 
 
+# DELIBERATELY UNAUTHENTICATED. backend/Dockerfile's HEALTHCHECK calls this
+# every 30 seconds with a plain urllib request that carries no token; requiring
+# one here would mark the container unhealthy and restart-loop it forever. It
+# probes nothing and opens no database connection, so it discloses only that the
+# gateway is running and which modes are compiled in.
 @app.get("/api/health")
 async def health():
     return {

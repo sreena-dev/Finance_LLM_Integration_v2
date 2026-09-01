@@ -36,7 +36,16 @@ const SUGGESTIONS = {
  * back preserves that mode's thread instead of replaying it against a
  * different pipeline.
  */
-export default function ChatView({ mode, health, thread, setThread }) {
+export default function ChatView({
+  mode,
+  health,
+  thread,
+  setThread,
+  // Optional: only Financial Statements persists a thread. Absent, this
+  // component behaves exactly as it did before conversations existed.
+  conversationId = null,
+  onConversationChange,
+}) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);
   const scrollRef = useRef(null);
@@ -57,11 +66,17 @@ export default function ChatView({ mode, health, thread, setThread }) {
     setThread((prev) => [...prev, { role: 'user', text: query, id: `u-${Date.now()}` }]);
 
     try {
-      const result = await runQuery(mode, query);
+      const result = await runQuery(mode, query, conversationId);
       setThread((prev) => [
         ...prev,
         { role: 'assistant', result, id: `a-${Date.now()}` },
       ]);
+      // The server assigns the id on the first turn of a new conversation; the
+      // next question sends it back so the thread continues rather than
+      // starting over.
+      if (result?.conversation_id && result.conversation_id !== conversationId) {
+        onConversationChange?.(result.conversation_id);
+      }
     } catch (err) {
       setError(err.message);
     } finally {

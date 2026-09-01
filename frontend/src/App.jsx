@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { fetchModes, probeMode } from './api/client';
+import {
+  deleteConversation,
+  fetchConversation,
+  fetchModes,
+  listConversations,
+  probeMode,
+} from './api/client';
 import Sidebar from './components/Sidebar';
+import ConversationList from './components/chat/ConversationList';
 import ChatView from './components/chat/ChatView';
 import ReportView from './components/report/ReportView';
 import TrialBalanceView from './components/trial-balance/TrialBalanceView';
@@ -76,6 +83,13 @@ export default function App() {
   const [threads, setThreads] = useState({});
   const [reports, setReports] = useState({});
   const [tbStates, setTBStates] = useState({});
+
+  // Financial Statements chat history. Held here rather than in ChatView because
+  // App already owns `threads`, and rehydrating a saved conversation means
+  // replacing that array — which is App's to do.
+  const [conversations, setConversations] = useState([]);
+  const [convoId, setConvoId] = useState(null);
+  const [convoState, setConvoState] = useState({ loading: false, error: null });
 
   // ── Boot: load the mode list, then probe each mode in the background ────
   useEffect(() => {
@@ -177,6 +191,84 @@ export default function App() {
     []
   );
 
+  // ── Financial Statements conversations ──────────────────────────────────
+  const fsMode = useMemo(() => modes.find((m) => m.id === 'financial-statement') || null, [modes]);
+
+  const refreshConversations = useCallback(async () => {
+    if (!fsMode) return;
+    setConvoState((s) => ({ ...s, loading: true, error: null }));
+    try {
+      setConversations(await listConversations(fsMode));
+      setConvoState({ loading: false, error: null });
+    } catch (err) {
+      // A 401 has already dropped the session; anything else is worth showing
+      // in place of the list rather than silently rendering it empty.
+      setConvoState({ loading: false, error: err.status === 401 ? null : err.message });
+    }
+  }, [fsMode]);
+
+  // Loaded when the mode is first opened, so a signed-in user sees their
+  // history immediately rather than after asking something.
+  useEffect(() => {
+    if (activeId === 'financial-statement' && fsMode) refreshConversations();
+  }, [activeId, fsMode, refreshConversations]);
+
+  const openConversation = useCallback(
+    async (id) => {
+      if (!fsMode || id === convoId) return;
+      setConvoState((s) => ({ ...s, error: null }));
+      try {
+        const { messages } = await fetchConversation(fsMode, id);
+        // Rehydrated into exactly the shape ChatView already renders, so it
+        // needs no loading code of its own. `payload` is the verbatim stored
+        // response, which is why a reopened turn shows its evidence cards
+        // identically to a live one.
+        setThreads((prev) => ({
+          ...prev,
+          ['financial-statement']: (messages || []).map((m, i) =>
+            m.role === 'user'
+              ? { role: 'user', text: m.content, id: `u-${id}-${i}` }
+              : { role: 'assistant', result: m.payload || { final_answer: m.content }, id: `a-${id}-${i}` }
+          ),
+        }));
+        setConvoId(id);
+      } catch (err) {
+        setConvoState((s) => ({ ...s, error: err.message }));
+      }
+    },
+    [fsMode, convoId]
+  );
+
+  const newConversation = useCallback(() => {
+    setConvoId(null);
+    setThreads((prev) => ({ ...prev, ['financial-statement']: [] }));
+  }, []);
+
+  const removeConversation = useCallback(
+    async (id) => {
+      if (!fsMode) return;
+      try {
+        await deleteConversation(fsMode, id);
+        setConversations((prev) => prev.filter((c) => c.conversation_id !== id));
+        if (id === convoId) newConversation();
+      } catch (err) {
+        setConvoState((s) => ({ ...s, error: err.message }));
+      }
+    },
+    [fsMode, convoId, newConversation]
+  );
+
+  // The server assigns the id on the first turn; adopt it and refresh the list
+  // so the new thread appears with its derived title.
+  const onConversationChange = useCallback(
+    (id) => {
+      if (!id) return;
+      setConvoId((cur) => (cur === id ? cur : id));
+      refreshConversations();
+    },
+    [refreshConversations]
+  );
+
   if (booting) {
     return (
       <div className="boot">
@@ -224,7 +316,22 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar modes={sidebarModes} activeId={activeId} onSelect={setActiveId} health={health} />
+      <Sidebar modes={sidebarModes} activeId={activeId} onSelect={setActiveId} health={health}>
+        {/* Only Financial Statements persists a thread, so only it gets a
+            history list. Rendering this for every mode would advertise a
+            feature the others do not have. */}
+        {activeId === 'financial-statement' && (
+          <ConversationList
+            conversations={conversations}
+            activeId={convoId}
+            loading={convoState.loading}
+            error={convoState.error}
+            onSelect={openConversation}
+            onNew={newConversation}
+            onDelete={removeConversation}
+          />
+        )}
+      </Sidebar>
 
       <main className="main">
         {activeMode && (
@@ -293,13 +400,27 @@ export default function App() {
                   // Self-contained mocked view; the gateway's ModeHeader already
                   // renders the title/pill/path, so it runs in `embedded` mode.
                   <FdrAnalysis embedded />
-                ) : (
+                ) : activeMode.ui === 'chat' ? (
                   <ChatView
                     mode={activeMode}
                     health={health[activeMode.id]}
                     thread={threads[activeMode.id] || []}
                     setThread={setThreadFor(activeMode.id)}
+                    conversationId={convoId}
+                    onConversationChange={onConversationChange}
                   />
+                ) : (
+                  // ChatView used to be the `else` fallback. It is now an
+                  // explicit match, because a future mode with an unrecognised
+                  // `ui` would otherwise silently inherit the FS chat surface —
+                  // and with it FS conversation persistence, writing that mode's
+                  // turns into artha_fs_messages.
+                  <div className="main__notice">
+                    <Notice tone="warn" title="This mode has no interface yet">
+                      The gateway describes this mode as <code>{activeMode.ui}</code>,
+                      which this build does not know how to render.
+                    </Notice>
+                  </div>
                 )}
               </motion.div>
             </div>

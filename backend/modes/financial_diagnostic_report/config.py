@@ -115,6 +115,13 @@ class Settings:
     # it does not replace it.
     rerank_blend: float
     rerank_enabled: bool
+    # A reranker SERVICE, preferred over the local cross-encoder when set. Same
+    # model either way (bge-reranker-v2-m3), so the scores are the same
+    # quantity and `rerank_min_logit` keeps its calibration -- see rerank.py on
+    # the sigmoid inversion that makes that true.
+    rerank_url: str
+    rerank_model: str
+    rerank_timeout: float
     # Verify the generated answer against its own cited sources with a second
     # model call. The source project asserted groundedness on this path without
     # checking it; this actually checks.
@@ -198,6 +205,15 @@ def load() -> Settings:
         rerank_min_logit=_float("FDR_RERANK_MIN_LOGIT", -1.0),
         rerank_blend=_float("FDR_RERANK_BLEND", 0.15),
         rerank_enabled=_flag("FDR_RERANK_ENABLED", True),
+        # Falls back to the names the Financial Statement mode already uses for
+        # the same service, so one endpoint is configured once rather than
+        # twice. FDR_RERANK_URL overrides it for this mode alone.
+        rerank_url=(os.environ.get("FDR_RERANK_URL")
+                    or os.environ.get("RERANKER_BASE_URL") or "").strip(),
+        rerank_model=(os.environ.get("FDR_RERANK_MODEL")
+                      or os.environ.get("RERANKER_MODEL")
+                      or "bge-reranker").strip(),
+        rerank_timeout=_float("FDR_RERANK_TIMEOUT", 30.0),
         adaptive_expansion=_flag("FDR_ADAPTIVE_EXPANSION", True),
         query_expansion=_flag("FDR_QUERY_EXPANSION", True),
         max_query_variants=_int("FDR_MAX_QUERY_VARIANTS", 3, low=1, high=8),

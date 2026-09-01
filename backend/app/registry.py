@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from app.mode_loader import failure_for
+
 from modes.financial_diagnostic_report import adapter as fdr_adapter
 from modes.financial_statement import adapter as fs_adapter
 from modes.sar_chat import adapter as sar_chat_adapter
@@ -127,6 +129,28 @@ def describe(mode: Mode, probe: bool = True) -> dict:
     connections, and that can take tens of seconds.
     """
     available, reason = (False, None)
+
+    # A mode whose router would not import has no routes at all, so its own
+    # status probe is not the interesting answer — and for some modes it would
+    # even succeed, reporting a mode "available" whose endpoints all 503.
+    # Reported here, at any probe setting, because the UI needs to show this
+    # one without waiting for a probe it never asked for.
+    load_error = failure_for(mode.id)
+    if load_error:
+        return {
+            "id": mode.id,
+            "label": mode.label,
+            "short_label": mode.short_label,
+            "description": mode.description,
+            "branch": mode.branch,
+            "ui": mode.ui,
+            "base_path": mode.base_path,
+            "integrated": mode.integrated,
+            "companion_of": mode.companion_of,
+            "available": False,
+            "reason": load_error,
+        }
+
     if probe:
         try:
             available, reason = mode.status()
