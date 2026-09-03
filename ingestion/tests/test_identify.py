@@ -1,0 +1,208 @@
+"""Identification tests, checked against the sample corpus.
+
+The ``data/`` directory layout encodes the entity and financial year in the path
+(``data/MH-CPSU-IAM-052/2022-23/MH-CPSU-ITSL-048_2022-23_SFS_....pdf``). That
+layout is used **here, as ground truth to test against** -- and nowhere in the
+service itself. See the module docstring in ``app/identify.py``.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app.identify import (                              # noqa: E402
+    _fy_from_reporting_date,
+    classify_statement,
+    detect_framework,
+    detect_units,
+    identify,
+)
+
+
+# --------------------------------------------------------------------------
+# Financial year
+# --------------------------------------------------------------------------
+
+def test_indian_fy_boundary():
+    """The Indian year runs 1 April to 31 March, so a statement 'as at 31 March
+    2023' closes FY 2022-23. Getting this backwards mislabels every upload by a
+    year and silently misaligns multi-year comparison."""
+    assert _fy_from_reporting_date(31, 3, 2023) == "2022-23"
+    assert _fy_from_reporting_date(31, 3, 2022) == "2021-22"
+    assert _fy_from_reporting_date(1, 4, 2022) == "2022-23"
+    assert _fy_from_reporting_date(31, 3, 2000) == "1999-00"
+
+
+# Transcribed from data/MH-CPSU-IAM-052/2022-23/..._SFS_....pdf, pages 3, 5, 10.
+MH_2022_23 = [
+    """IDBI Trusteeship Services Limited
+Universal Insurance Building, Ground Floor, Sir P M Road, Fort, Mumbai - 400 001
+Statement of changes in equity as at 31st March 2023
+A. Equity share capital""",
+    """IDBI Trusteeship Services Limited
+Notes to balance sheet for the year ended 31st March, 2023
+Note 10- Share capital
+| Particulars | For the year ended 31st March 2022 | For the year ended 31st March 2023 |""",
+    """IDBI Trusteeship Services Limited
+Balance Sheet as at 31st March, 2023
+(Amount in '000)
+prepared in accordance with Indian Accounting Standards (Ind AS)
+Other Comprehensive Income for the year""",
+]
+
+# Transcribed from data/OD-SPSU-SO-032/2021-22/..._SFS_....PDF, pages 6 and 10.
+OD_2021_22 = [
+    """Startup Odisha
+(A Company Registered under section 8 of The Companies Act, 2013)
+Balance Sheet as at 31st March, 2022
+(Amount in INR)""",
+    """We have audited the internal financial controls over financial reporting of
+M/S. STARTUP ODISHA as on 31st March 2022 in conjunction with our audit of the
+standalone financial statements. Significant Accounting Policies.
+Accounting Standard - 2 per the Companies (Accounting Standards) Rules""",
+]
+
+
+def test_fy_matches_directory_ground_truth():
+    assert identify(MH_2022_23).financial_year == "2022-23"
+    assert identify(OD_2021_22).financial_year == "2021-22"
+
+
+def test_fy_prefers_the_statement_title_over_a_comparative_column():
+    """The comparative column header carries the prior year in exactly the same
+    form as the current one, so a naive scan is a coin flip. Page 2 of the MH
+    fixture has '31st March 2022' in a column header and '31st March, 2023' in
+    the title; the title must win."""
+    ident = identify(MH_2022_23)
+    assert ident.financial_year == "2022-23"
+    assert ident.fy_confidence == "high"
+    assert any("statement title" in e for e in ident.fy_evidence)
+
+
+def test_entity_comes_from_the_repeated_page_header():
+    assert identify(MH_2022_23).entity_name == "IDBI Trusteeship Services Limited"
+
+
+# --------------------------------------------------------------------------
+# Framework
+# --------------------------------------------------------------------------
+
+def test_ind_as_detected_from_policy_socie_and_oci():
+    ident = identify(MH_2022_23)
+    assert ident.framework == "Ind AS"
+    assert ident.framework_division == "II"
+    assert ident.framework_confidence == "high"
+
+
+def test_as_detected_for_a_division_i_filing():
+    ident = identify(OD_2021_22)
+    assert ident.framework == "AS"
+    assert ident.framework_division == "I"
+
+
+def test_as_short_form_is_case_sensitive():
+    """'AS 22' is a standard; 'as at' is English. Matching the short form
+    case-insensitively fires on almost every page of every filing."""
+    assert detect_framework("Balance Sheet as at 31 March 2023, as on that date")[0] is None
+    assert detect_framework("Deferred tax per AS-22 and the Companies (Accounting Standards) Rules")[0] == "AS"
+
+
+def test_banks_and_insurers_do_not_use_schedule_iii():
+    """Running Schedule III checks against an IRDAI or BR Act filing produces a
+    page of findings that are all artefacts of the wrong rulebook."""
+    bank, _, _, _, conflicts = detect_framework(
+        "presented under the Third Schedule to the Banking Regulation Act, 1949"
+    )
+    assert bank is not None and "Banking" in bank
+    assert conflicts
+
+    ins, _, _, _, _ = detect_framework("prepared in the formats prescribed by IRDAI")
+    assert ins is not None and "Insurance" in ins
+
+
+# --------------------------------------------------------------------------
+# Statement classification and units
+# --------------------------------------------------------------------------
+
+def test_statement_types_match_the_existing_tool_vocabulary():
+    """These four strings are the keys of
+    ``ComplianceTools._STATEMENT_TITLE_KEYWORDS``. Emitting anything else means
+    ``_find_statement_tables`` finds no statements at all."""
+    assert classify_statement("Balance Sheet as at 31st March, 2022") == "balance_sheet"
+    assert classify_statement("Statement of Profit and Loss") == "profit_loss"
+    assert classify_statement("Cash Flow Statement") == "cash_flow"
+    assert classify_statement("Statement of changes in equity as at 31st March 2023") == "statement_of_equity"
+    # A note schedule is not a face statement.
+    assert classify_statement("Note 1 (a) - Property, plant and equipment") is None
+
+
+def test_units_are_read_but_never_guessed():
+    assert detect_units("(Amount in '000)") == ("thousand", None)
+    assert detect_units("(Amount in INR)") == (None, "INR")
+    assert detect_units("Rs. in crore") == ("crore", "INR")
+    # The important one: silence stays silence. UnitResolver is explicit that a
+    # guessed scale is worse than an absent one, because the same digits mean
+    # different things three orders of magnitude apart.
+    assert detect_units("Particulars | Amount") == (None, None)
+
+
+# --------------------------------------------------------------------------
+# Entity detection, against what real OCR output looks like
+# --------------------------------------------------------------------------
+
+# Each string is one PAGE, as docling exports it: a markdown heading for the
+# running header, then the lines beneath it.
+MH_PAGES = ["""## IDBI Trusteeship Services Ltd
+Universal Insurance Building, Ground Floor, Sir P M Road, Fort, Mumbai - 400 001
+Balance Sheet as at 31st March, 2023"""] * 3
+
+OD_PAGES = ["""## Startup Odisha
+(A Company Registered under section 8 of The Companies Act, 2013)
+2nd Floor, Tower-A, Odisha Startup Incubation Centre(O-Hub)"""] * 3
+
+AUDITOR_PAGES = ["""## K SWAIN & CO
+Chartered Accountants
+Annexure "A" to the Independent Auditors' Report"""] * 2
+
+
+def test_entity_from_a_repeated_header_with_a_legal_suffix():
+    name, evidence = identify(MH_PAGES).entity_name, None
+    assert name == "IDBI Trusteeship Services Ltd"
+
+
+def test_entity_without_a_legal_suffix_is_still_found():
+    """OD-SPSU-SO-032 is a section 8 company registered simply as 'Startup
+    Odisha'. Requiring a legal suffix leaves every such entity unidentified, and
+    section 8 companies are a real part of this corpus."""
+    assert identify(OD_PAGES).entity_name == "Startup Odisha"
+
+
+def test_a_parenthetical_description_is_not_the_entity():
+    """'(A Company Registered under section 8 of The Companies Act, 2013)' sits
+    under the name on every OD sheet and matches the legal-suffix rule on the
+    word 'Company'. It must not outrank the heading above it."""
+    assert "Registered under" not in (identify(OD_PAGES).entity_name or "")
+
+
+def test_the_auditors_letterhead_is_not_the_entity():
+    """An audit firm's letterhead is two lines -- the firm, then 'Chartered
+    Accountants'. Filtering only the same line returns the auditor as the
+    reporting entity, which is wrong in a way that looks entirely plausible."""
+    assert identify(AUDITOR_PAGES).entity_name is None
+    assert identify(AUDITOR_PAGES + OD_PAGES).entity_name == "Startup Odisha"
+
+
+def test_a_note_heading_is_not_the_statement_it_mentions():
+    """'Notes to balance sheet for the year ended 31st March, 2023' heads a
+    share-capital note page in this corpus. Classifying it as the balance sheet
+    puts the wrong table in front of every tie-out check."""
+    from app.identify import classify_statement_from_page
+    assert classify_statement_from_page(
+        "## IDBI Trusteeship Services Ltd\nNotes to balance sheet for the year ended 31st March, 2023"
+    ) is None
+    assert classify_statement_from_page(
+        "## IDBI Trusteeship Services Ltd\nBalance Sheet as at 31st March, 2023"
+    ) == "balance_sheet"

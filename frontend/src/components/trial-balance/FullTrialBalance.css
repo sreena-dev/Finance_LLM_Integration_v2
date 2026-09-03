@@ -1,0 +1,65 @@
+.tbfull { display: flex; flex-direction: column; gap: 10px; }
+
+.tbfull__note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-500);
+}
+
+.tbfull__halts { display: flex; flex-direction: column; gap: 4px; }
+.tbfull__halt {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--err-600);
+}
+.tbfull__halt strong { font-family: var(--font-mono); font-size: 12px; }
+
+/* The table is wide — up to 13 columns in comparison mode — so it scrolls inside
+   its own box rather than forcing the panel to scroll sideways. */
+.tbfull__scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.tbfull__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tbfull__table th,
+.tbfull__table td {
+  padding: 5px 9px;
+  text-align: right;              /* figures right-align; text columns opt out */
+  border-bottom: 1px solid var(--border);
+}
+.tbfull__table th.is-text,
+.tbfull__table td.is-text { text-align: left; }
+
+.tbfull__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--ink-50);
+  color: var(--ink-600);
+  font-weight: 620;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.tbfull__table tbody tr:hover { background: var(--navy-50); }
+.tbfull__table tbody tr:last-child td { border-bottom: none; }
+
+/* Ledger names can be long; let that one column ellipsize instead of stretching
+   the table past the point where the figures are readable. */
+.tbfull__table td.is-text:nth-child(2) {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

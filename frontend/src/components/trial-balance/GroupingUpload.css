@@ -1,0 +1,47 @@
+.tbgrp {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Upload button — a styled <label> wrapping a hidden file input, same
+   pattern as the trial balance upload button. */
+.tbgrp__btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--navy-800);
+  background: var(--white);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+.tbgrp__btn:hover { background: var(--navy-50); border-color: var(--navy-600); }
+.tbgrp__btn.is-busy { opacity: 0.55; cursor: default; }
+.tbgrp__btn.is-busy:hover { background: var(--white); border-color: var(--border-strong); }
+.tbgrp__btn input { display: none; }
+
+.tbgrp__file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+}
+.tbgrp__file-row svg { color: var(--ok-600); flex: none; }
+.tbgrp__filename {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-800);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

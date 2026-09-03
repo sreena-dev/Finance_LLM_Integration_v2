@@ -1,0 +1,154 @@
+/* Fixed width, not resizable, for this pass — see the plan's note that
+   drag-resize is a reasonable follow-up rather than part of it. */
+.docpane {
+  flex: 0 0 42%;
+  max-width: 560px;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.docpane__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink-800);
+}
+
+.docpane__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.docpane__toggle {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--ink-100);
+}
+
+.docpane__toggle button {
+  border: 0;
+  background: none;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-500);
+  border-radius: calc(var(--radius-sm) - 2px);
+  cursor: pointer;
+}
+
+.docpane__toggle button.is-active {
+  background: var(--surface);
+  color: var(--ink-900);
+  box-shadow: var(--shadow-sm);
+}
+
+.docpane__close {
+  border: 0;
+  background: none;
+  color: var(--ink-500);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.docpane__close:hover { color: var(--ink-900); }
+
+/* Same reasoning as CitationViewer's .cite__body: the page is the whole
+   point, so it scrolls at full size rather than being shrunk to fit. */
+.docpane__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  background: var(--ink-100);
+}
+
+.docpane__img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  background: var(--white);
+}
+
+.docpane__text {
+  background: var(--white);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  padding: 14px 16px;
+}
+
+.docpane__chunk {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-800);
+  margin: 0 0 10px;
+}
+
+.docpane__chunk--heading {
+  font-weight: 700;
+  color: var(--ink-900);
+}
+
+.docpane__loading,
+.docpane__error,
+.docpane__empty {
+  margin: 24px 0;
+  font-size: 12.5px;
+  color: var(--ink-500);
+  text-align: center;
+}
+
+.docpane__error { color: var(--err-600); }
+
+.docpane__nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.docpane__nav button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  color: var(--ink-700);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.docpane__nav button:disabled {
+  color: var(--ink-300);
+  cursor: default;
+}
+
+.docpane__nav-label {
+  font-size: 11.5px;
+  color: var(--ink-500);
+  min-width: 120px;
+  text-align: center;
+}
+
+/* `chevron` is a downward-pointing arrow — rotated here into prev/next. */
+.docpane__nav-prev { transform: rotate(90deg); }
+.docpane__nav-next { transform: rotate(-90deg); }

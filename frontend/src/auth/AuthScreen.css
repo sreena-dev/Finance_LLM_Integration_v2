@@ -1,0 +1,162 @@
+/* Sign-in / sign-up.
+ *
+ * A NEW file rather than an addition to an existing one: ChatView.css is shared
+ * with SAR Q&A (ReportView imports it) and index.css is global, so neither is a
+ * safe place to put screen-specific rules. Every value below is an existing
+ * token — no new colours, no new radii.
+ *
+ * `.auth__input` is the app's first text-input styling; it is scoped to this
+ * screen so it cannot alter the trial-balance mappers' inputs, which have their
+ * own look. */
+
+.auth {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 20px;
+  background: var(--bg);
+}
+
+.auth__card {
+  width: 100%;
+  max-width: 420px;
+  padding: 30px 30px 26px;
+  box-shadow: var(--shadow-md);
+}
+
+.auth__brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 22px;
+}
+
+.auth__name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink-900);
+}
+
+.auth__tag {
+  margin: 1px 0 0;
+  font-size: 11.5px;
+  color: var(--ink-500);
+}
+
+.auth__title {
+  margin: 0 0 5px;
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  color: var(--ink-900);
+}
+
+.auth__sub {
+  margin: 0 0 20px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-600);
+}
+
+.auth__notice {
+  margin-bottom: 16px;
+}
+
+.auth__form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.auth__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Mirrors `.sel__label` in Select.css, which is the only existing field-label
+   pattern in the app. */
+.auth__label {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-600);
+}
+
+.auth__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--ink-900);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
+}
+
+.auth__input::placeholder {
+  color: var(--ink-400);
+}
+
+.auth__input:hover {
+  border-color: var(--border-strong);
+}
+
+/* The global :focus-visible outline is for keyboard traversal; a text field is
+   focused by clicking too, so it gets a persistent ring of its own. */
+.auth__input:focus {
+  outline: none;
+  border-color: var(--navy-600);
+  box-shadow: 0 0 0 3px var(--navy-100);
+}
+
+.auth__hint {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-500);
+}
+
+.auth__submit {
+  width: 100%;
+  justify-content: center;
+  margin-top: 4px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.auth__switch {
+  margin: 18px 0 0;
+  font-size: 13px;
+  text-align: center;
+  color: var(--ink-600);
+}
+
+.auth__link {
+  padding: 0;
+  font: inherit;
+  color: var(--navy-600);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.auth__link:hover {
+  color: var(--navy-800);
+}
+
+@media (max-width: 480px) {
+  .auth {
+    padding: 18px 14px;
+  }
+
+  .auth__card {
+    padding: 24px 20px 20px;
+  }
+}

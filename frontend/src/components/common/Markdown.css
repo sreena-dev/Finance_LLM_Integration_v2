@@ -1,0 +1,101 @@
+.md {
+  color: var(--ink-800);
+  font-size: 14px;
+  line-height: 1.72;
+  overflow-wrap: anywhere;
+}
+
+.md > *:first-child { margin-top: 0; }
+.md > *:last-child  { margin-bottom: 0; }
+
+.md h1, .md h2, .md h3, .md h4 {
+  color: var(--ink-900);
+  font-weight: 620;
+  line-height: 1.32;
+  letter-spacing: -0.011em;
+  margin: 1.6em 0 0.6em;
+}
+.md h1 { font-size: 20px; }
+.md h2 {
+  font-size: 16.5px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border);
+}
+.md h3 { font-size: 14.5px; }
+.md h4 { font-size: 13.5px; color: var(--ink-700); }
+
+.md p { margin: 0 0 0.9em; }
+
+.md ul, .md ol { margin: 0 0 0.9em; padding-left: 1.35em; }
+.md li { margin: 0.25em 0; }
+.md li::marker { color: var(--ink-400); }
+
+.md strong { font-weight: 620; color: var(--ink-900); }
+
+.md a { color: var(--navy-600); text-decoration: underline; text-underline-offset: 2px; }
+.md a:hover { color: var(--navy-800); }
+
+.md blockquote {
+  margin: 1em 0;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--gold-600);
+  background: var(--gold-100);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--ink-700);
+}
+.md blockquote > * { margin-left: 6px; margin-right: 6px; }
+
+.md code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--ink-100);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.md pre {
+  background: var(--ink-50);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 13px 15px;
+  overflow-x: auto;
+  margin: 0 0 1em;
+}
+.md pre code { background: none; border: none; padding: 0; font-size: 12.5px; }
+
+.md hr { border: none; border-top: 1px solid var(--border); margin: 1.8em 0; }
+
+/* Tables — the wrapper is what scrolls, never the page. */
+.md__table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.1em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.md table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.md thead th {
+  position: sticky;
+  top: 0;
+  background: var(--ink-50);
+  color: var(--ink-700);
+  font-weight: 600;
+  font-size: 11.5px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  text-align: left;
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+.md tbody td {
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--ink-100);
+  vertical-align: top;
+}
+.md tbody tr:last-child td { border-bottom: none; }
+.md tbody tr { transition: background 0.14s var(--ease); }
+.md tbody tr:hover { background: var(--navy-50); }
+
+/* Numeric columns read far better right-aligned in financial tables. */
+.md td:not(:first-child) { font-variant-numeric: tabular-nums; }

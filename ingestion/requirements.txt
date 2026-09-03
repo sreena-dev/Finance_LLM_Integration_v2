@@ -1,0 +1,98 @@
+# ---------------------------------------------------------------------------
+# Ingestion service — scanned financial-statement PDF -> verified tables.
+#
+# This is a SEPARATE image from backend/. It carries torch, docling and an OCR
+# engine, none of which the gateway needs; the gateway runs read_only:true on 4
+# CPUs and also serves chat, and a minutes-long OCR job does not belong there.
+# ---------------------------------------------------------------------------
+
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.6.0
+python-multipart>=0.0.9
+python-dotenv>=1.0.0
+httpx>=0.27.0
+
+# Docling. PINNED, not >=: the vendored checkout at ../docling is 2.123.1 (one
+# commit past the tag) and the pipeline-options field names this service sets --
+# generate_parsed_pages, do_cell_matching, TableStructureOptions -- have moved
+# between 2.x minors before. A float here is a silent extraction change.
+#
+# `docling-slim`, NOT `docling`. This trips people up and it is worth stating:
+# on PyPI `docling` is a meta-package whose only dependency is
+# `docling-slim[standard]`, and it declares no extras of its own -- asking for
+# `docling[format-pdf,...]` installs successfully while printing
+# "WARNING: docling 2.123.1 does not provide the extra 'format-pdf'" and giving
+# you `standard` regardless. The importable `docling` module is provided by
+# docling-slim either way, so `import docling` works unchanged.
+#
+# Extras, deliberately not `[standard]`:
+#   convert-core        numpy, pillow, rtree, scipy — the conversion machinery
+#   format-pdf          docling-parse + pypdfium2
+#   models-local        torch, torchvision, docling-ibm-models (layout + TableFormer)
+#   feat-ocr-rapidocr   RapidOCR via onnxruntime
+# `standard` would also drag in the office/web/latex/email/iwork format handlers
+# and the chunking, service-client and CLI stacks. This service converts scanned
+# PDFs and nothing else.
+#
+# `convert-core` is NOT optional despite the name suggesting a nicety: docling's
+# base OCR model imports scipy.ndimage at module scope, so without it
+# `from docling.document_converter import DocumentConverter` raises
+# ModuleNotFoundError and the whole service reports docling unavailable. Missed
+# it the first time because the earlier install silently resolved to
+# `[standard]`, which includes convert-core — the same trap the docling-slim
+# note above describes.
+docling-slim[convert-core,format-pdf,models-local,feat-ocr-rapidocr]==2.123.1
+
+# RapidOCR's inference runtime. NOT pulled in by feat-ocr-rapidocr, which
+# installs the `rapidocr` wrapper and nothing to run it on: docling builds its
+# pipeline happily and then dies on the first page with "ImportError:
+# onnxruntime is not installed", from four frames inside RapidOCR. Verified the
+# hard way -- the conversion fails at the first upload, not at startup.
+#
+# Plain `onnxruntime`, not docling's `models-onnxruntime` extra, which resolves
+# to `onnxruntime-gpu` on win32/linux. This service is CPU-only by design (see
+# the torch note below); the GPU build is ~10x the size and needs a CUDA runtime
+# the container does not carry.
+onnxruntime>=1.17.0
+
+# Page rasterisation. Used directly rather than through docling because the
+# preprocessing stage has to see the raw page image BEFORE docling does -- see
+# preprocess.py for why (docling performs no deskew, no upscale, no contrast
+# normalisation, and our corpus needs all three).
+pypdfium2>=4.30.0,!=4.30.1
+pillow>=10.0.0
+
+# Image preprocessing. headless: the container has no X11 and the GUI build
+# pulls ~120MB of libgtk/libavcodec that nothing here calls.
+opencv-python-headless>=4.9.0
+numpy>=1.26.0
+
+# ---------------------------------------------------------------------------
+# torch: install from the CPU index, exactly as backend/requirements.txt already
+# instructs for the FDR reranker --
+#
+#     pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+#
+# docling[models-local] declares a bare `torch`, so a naive install resolves the
+# CUDA build: ~2.5GB of wheels for kernels this service will not reach on a CPU
+# host. The Dockerfile passes the index explicitly.
+#
+# If you DO have a GPU worth using, install torch and torchvision from a CUDA
+# index instead, matching versions exactly (a version mismatch between the two
+# fails to import):
+#
+#     pip install "torch==2.13.0+cu126" "torchvision==0.28.0+cu126" \
+#         --index-url https://download.pytorch.org/whl/cu126 \
+#         --extra-index-url https://pypi.org/simple
+#
+# `INGEST_ACCELERATOR_DEVICE` defaults to "auto" (see config.py), which already
+# resolves to `cuda:0` the moment torch reports CUDA available -- no other
+# change is needed. Measured on an RTX 3050 (4GB): layout + TableFormer peak at
+# ~1.8GB VRAM converting a full scanned filing, comfortable headroom under the
+# 4GB budget. The VLM second read is NOT a local model -- it calls the same
+# self-hosted vLLM endpoint as chat generation over HTTP (see vlm_read.py /
+# Config.VLM_BASE_URL), so it adds no local VRAM regardless of device.
+# RapidOCR stays on `onnxruntime`'s CPU provider either way; nothing above
+# affects it.
+# ---------------------------------------------------------------------------

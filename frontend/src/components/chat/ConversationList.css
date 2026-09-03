@@ -1,0 +1,193 @@
+/* Conversation list, sidebar.
+ *
+ * A new file on purpose — ChatView.css is imported by ReportView and shared with
+ * SAR Q&A. Only existing tokens are used. */
+
+.convo {
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* lets the scroller actually shrink inside the flex column */
+  border-top: 1px solid var(--border);
+  padding: 12px 10px 4px;
+}
+
+.convo__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 6px 6px;
+}
+
+.convo__heading {
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-500);
+}
+
+.convo__new {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--navy-600);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.14s var(--ease), border-color 0.14s var(--ease);
+}
+
+.convo__new:hover {
+  background: var(--navy-50);
+  border-color: var(--navy-100);
+}
+
+.convo__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+
+.convo__empty {
+  margin: 4px 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-500);
+}
+
+.convo__empty--err {
+  color: var(--err-600);
+}
+
+.convo__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.convo__active-bg {
+  position: absolute;
+  inset: 0;
+  background: var(--navy-50);
+  border-radius: var(--radius-sm);
+  z-index: 0;
+}
+
+.convo__item {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  font-family: var(--font-sans);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.convo__row:hover .convo__item {
+  background: var(--ink-50);
+}
+
+.convo__row.is-active:hover .convo__item {
+  background: transparent;
+}
+
+.convo__title {
+  overflow: hidden;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--ink-800);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.convo__row.is-active .convo__title {
+  font-weight: 600;
+  color: var(--navy-800);
+}
+
+.convo__meta {
+  font-size: 10.5px;
+  color: var(--ink-400);
+}
+
+.convo__del {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  color: var(--ink-400);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.14s var(--ease), color 0.14s var(--ease);
+}
+
+.convo__row:hover .convo__del,
+.convo__del:focus-visible {
+  opacity: 1;
+}
+
+.convo__del:hover {
+  color: var(--err-600);
+  background: var(--err-100);
+}
+
+.convo__confirm {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  gap: 3px;
+  padding-right: 2px;
+}
+
+.convo__confirm-yes,
+.convo__confirm-no {
+  padding: 2px 6px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.convo__confirm-yes {
+  color: var(--err-600);
+  border-color: var(--err-100);
+  background: var(--err-100);
+}
+
+.convo__confirm-no {
+  color: var(--ink-600);
+}
+
+/* On the mobile layout the sidebar becomes a horizontal strip; a vertical
+   thread list there would consume the whole screen. */
+@media (max-width: 900px) {
+  .convo {
+    display: none;
+  }
+}
