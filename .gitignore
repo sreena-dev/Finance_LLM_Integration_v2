@@ -85,3 +85,14 @@ FS_AI_Audit_Final_Detailed_Team_Edition v4.0.pdf
 data/
 data.zip
 
+# yukta's per-agent auto-save (AgentConfig.auto_save_chat=True, on by default
+# in every SAR/Financial-Statement/Trial-Balance agent factory) — written
+# relative to the process's cwd, so it can land at the repo root, under a
+# mode's own directory, or both, depending on where the backend was started
+# from. These hold real extracted report content from whatever entity was
+# last processed, not source — confirmed accumulating here from a live SAR
+# pipeline test run (see backend/modes/statutory_auditor_report/sar_prod_v3/
+# GAP_CLOSURE_LOG.md, Phase 5) and would otherwise get committed by a plain
+# `git add -A` without anyone noticing.
+agent_chats/
+chats/
