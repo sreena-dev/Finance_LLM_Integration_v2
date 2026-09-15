@@ -351,6 +351,66 @@ def build_report_writer(llm=None):
 # Writer user message assembler (called by pipeline, not by the LLM)
 # ===========================================================================
 
+def _format_formal_checks_summary(formal_checks_summary: dict | None) -> str:
+    """Renders the Gap-closure Phase 1 deterministic formal-checks summary
+    (UDIN, SA 706.8 EoM closing sentence, report-date-vs-FS-approval-date
+    sequencing) into three lines the writer can quote directly in section
+    1.3 / 2.1, instead of judging any of the three itself from raw text.
+
+    See formal_review.run_formal_checks() for what populates this dict, and
+    GAP_CLOSURE_LOG.md for why these three checks moved out of the writer's
+    judgment and into deterministic code.
+    """
+    if not formal_checks_summary:
+        return "Not available for this run."
+
+    udin = formal_checks_summary.get("udin") or {}
+    if udin.get("checks"):
+        udin_line = (
+            "All present and ICAI-format-valid."
+            if udin.get("all_valid")
+            else "; ".join(c["observation"] for c in udin["checks"] if not c["passed"])
+        )
+    else:
+        udin_line = "Not verified — no auditor/UDIN block was extracted."
+
+    eom = formal_checks_summary.get("eom_closing_sentence")
+    if eom is None:
+        eom_line = "Not applicable — no Emphasis of Matter section was identified."
+    else:
+        eom_line = eom["observation"]
+
+    date_seq = formal_checks_summary.get("report_date_sequence")
+    if date_seq is None:
+        date_line = "Not verified — report date and/or FS approval date were not both extracted."
+    else:
+        date_line = date_seq["observation"]
+
+    return (
+        f"- UDIN: {udin_line}\n"
+        f"- SA 706.8 Emphasis-of-Matter closing sentence: {eom_line}\n"
+        f"- Report date vs. FS approval date (s.134(1)): {date_line}"
+    )
+
+
+def _format_applicability_summary(applicability: dict | None) -> str:
+    """Renders the Gap-closure Phase 2 (Gap #4) applicability verdicts —
+    CARO / IFC / KAM — into three lines telling the writer which areas are
+    confirmed-applicable (reason freely about their clause/opinion data),
+    and which are unresolved (do not raise a "missing clause"/"missing KAM"
+    finding — that has already been raised as its own AUDIT_POINTER;
+    source spec §22 / §19.1)."""
+    if not applicability:
+        return "Not available for this run."
+    lines = []
+    labels = {"caro": "CARO 2020", "ifc": "IFC (s.143(3)(i))", "kam": "Key Audit Matters"}
+    for area, label in labels.items():
+        result = applicability.get(area) or {}
+        status = result.get("status", "uncertain")
+        lines.append(f"- {label}: {status.upper()} — {result.get('basis', '')}")
+    return "\n".join(lines)
+
+
 def build_writer_user_message(
     merged_json: dict,
     coherence_observations: list[dict],
@@ -362,10 +422,28 @@ def build_writer_user_message(
     company: str,
     fy_label: str,
     scope: str = "standalone",
+    formal_checks_summary: dict | None = None,
+    review_status: str = "complete",
+    review_status_reasons: list[str] | None = None,
+    applicability: dict | None = None,
 ) -> str:
     """
     Assembles the user message for the SAR_REPORT_WRITER agent.
     Called by the pipeline after all data has been gathered and coherence checked.
+
+    `formal_checks_summary`, `review_status` and `review_status_reasons` are
+    Gap-closure Phase 1 additions (Gap #5 — see GAP_CLOSURE_LOG.md): the
+    three formal checks (UDIN, SA 706.8 closing sentence, report-date
+    sequencing) and the package-level completeness verdict are now computed
+    deterministically before this message is built, and handed to the
+    writer as already-settled facts — mirroring how PRE-FLIGHT SUMMARY
+    below already tells the writer "do NOT re-raise" pre-flight findings.
+
+    `applicability` is a Gap-closure Phase 2 addition (Gap #4 — see
+    applicability.py): tells the writer which of CARO / IFC / KAM are
+    confirmed applicable versus unresolved, so it does not independently
+    conclude "clause X is missing" or "KAM is missing" on an area whose
+    applicability this package cannot confirm (source spec §22 / §19.1).
     """
     import json as _json
 
@@ -374,6 +452,16 @@ def build_writer_user_message(
         f"{o['component']} — {o['observation']}"
         for o in coherence_observations
     ) or "No coherence observations raised."
+
+    review_status_line = ""
+    if review_status != "complete":
+        reasons_text = " ".join(review_status_reasons or [])
+        review_status_line = (
+            f"\n**REVIEW STATUS: {review_status.upper()}** — {reasons_text} "
+            f"Label the memorandum's Memorandum Status accordingly "
+            f"(e.g. 'PROVISIONAL — PENDING UDIN CONFIRMATION') and reduce confidence "
+            f"language for report-dependent observations; do not withhold analysis.\n"
+        )
 
     fs_text = ""
     if financial_tables:
@@ -388,10 +476,16 @@ def build_writer_user_message(
         fs_text = "\n\n".join(parts)
 
     return (
-        f"**SCOPE:** {scope.upper()} | **COMPANY:** {company} | **FY:** {fy_label}\n\n"
+        f"**SCOPE:** {scope.upper()} | **COMPANY:** {company} | **FY:** {fy_label}\n"
+        f"{review_status_line}\n"
         f"**STRUCTURED DATA PACKAGE (from Extractor Agents):**\n"
         f"```json\n{_json.dumps(merged_json, indent=2)}\n```\n\n"
         f"**PRE-FLIGHT SUMMARY:**\n{preflight_summary}\n\n"
+        f"**FORMAL CHECKS SUMMARY (deterministic — already verified, do NOT re-derive from raw text; "
+        f"cite these verdicts directly in 1.3 and 2.1):**\n{_format_formal_checks_summary(formal_checks_summary)}\n\n"
+        f"**APPLICABILITY SUMMARY (deterministic — do NOT raise a new 'missing clause'/'missing KAM' "
+        f"finding on an area marked UNCERTAIN below; that has already been raised as its own AUDIT_POINTER):**\n"
+        f"{_format_applicability_summary(applicability)}\n\n"
         f"**COHERENCE OBSERVATIONS (already tagged — reference in your report):**\n{obs_text}\n\n"
         f"**SA 700 / SA 705 / SA 706 REFERENCE EXCERPTS:**\n{sa_reference}\n\n"
         f"**CARO 2020 REFERENCE EXCERPTS:**\n{caro_reference}\n\n"

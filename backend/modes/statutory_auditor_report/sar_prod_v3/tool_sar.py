@@ -47,6 +47,28 @@ logger = logging.getLogger("sar_prod_v3.tool_sar")
 
 
 # ===========================================================================
+# Shared date parsing (used by CheckTools.check_report_date_sequence and
+# ComputeTools.compute_report_date_gap — extracted here, Gap-closure Phase 1,
+# so both checks parse the same set of formats identically instead of the
+# closing-sentence-style drift you get from two copies of the same regex-ish
+# logic maintained separately. See GAP_CLOSURE_LOG.md.)
+# ===========================================================================
+
+def _parse_flexible_date(ds: str) -> Optional[date]:
+    """Best-effort parse of a date string in any of the formats this pipeline
+    has actually seen come out of extracted SAR text. Returns None (never
+    raises) when nothing matches — callers treat that as "could not verify",
+    not as a parse error worth crashing over."""
+    for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y",
+                "%d %B %Y", "%d %b %Y", "%B %d, %Y", "%b %d, %Y"]:
+        try:
+            return datetime.strptime(ds.strip(), fmt).date()
+        except (ValueError, AttributeError):
+            continue
+    return None
+
+
+# ===========================================================================
 # DB CONNECTION HELPER
 # ===========================================================================
 
@@ -448,21 +470,53 @@ class FetchTools:
     def fetch_caro_text(cls, doc_id: str) -> ToolResult:
         """
         Fetches CARO 2020 annexure text.
-        Primary routing: regulation_reference ILIKE '%CARO%'
-        Fallback: heading/title keywords + tsvector.
+        Primary routing: regulation_reference ILIKE '%CARO%', OR the
+        "Annexure A to the Independent Auditors' Report" naming convention
+        (see below). Fallback: narrower heading keywords + tsvector.
+
+        BUG FIX (found against real ingested data, not hypothetical):
+        most real Indian SARs never put the literal word "CARO" in the
+        annexure's own heading at all — they head it "Annexure A/'A'/- A to
+        the Independent Auditors' Report" and only use "CARO" / "the Order"
+        in body prose. Confirmed on RVNL_2024_2025: the real CARO annexure
+        is headed "Annexure - A To The Independent Auditors' Report", which
+        neither of the old regulation_patterns matched — so this always fell
+        through to the fallback tier, whose bare "%annexure%" pattern then
+        matched EVERY unrelated annexure in the annual report (director
+        Code-of-Conduct declarations, CSR-committee annexures, etc.) and
+        concatenated all of that non-CARO text as if it were the CARO
+        annexure. The extractor LLM, given that garbage, correctly reported
+        `caro_applicable: false` — a false "not applicable" rather than a
+        genuine one. `%annexure%` alone is removed below for exactly this
+        reason; the "Annexure - A" family of patterns is specific enough
+        (verified against real data) not to sweep in unrelated annexures.
+
+        SECOND BUG FOUND FIXING THE FIRST ONE: the old `toc_patterns=
+        ["%auditor%"]` AND-filter on the primary tier is itself unreliable
+        on real data and was dropped. Confirmed on the same document: every
+        chunk under "Annexure - A To The Independent Auditors' Report" has
+        `toc_section = 'CNK & Associates LLP Chartered Accountants'` (the
+        audit firm's own name — the nearest top-level TOC entry ingestion
+        attached to this whole page range) — no "auditor" substring in it
+        at all, so the AND-filter silently zeroed out every otherwise-
+        correct match. The new regulation_patterns above are already
+        specific enough that this extra restriction was doing more harm
+        (real false negatives) than good.
         """
         try:
             rows = cls._fetch_text_chunks(
                 doc_id,
-                regulation_patterns=["%CARO%", "%Companies Auditor%Report%Order%"],
-                toc_patterns=["%auditor%"],
+                regulation_patterns=[
+                    "%CARO%", "%Companies Auditor%Report%Order%",
+                    "%annexure - a%", "%annexure-a%", "%annexure a %", "%annexure 'a'%",
+                ],
                 limit=60,
             )
 
             if not rows:
                 rows = cls._fetch_text_chunks(
                     doc_id,
-                    heading_patterns=["%caro%", "%auditor%report%order%", "%annexure%"],
+                    heading_patterns=["%caro%", "%auditor%report%order%"],
                     tsquery="caro & clause",
                     limit=40,
                 )
@@ -500,9 +554,20 @@ class FetchTools:
         try:
             rows = cls._fetch_text_chunks(
                 doc_id,
-                regulation_patterns=["%143(3A)%", "%internal financial control%", "%IFC%"],
+                # "Annexure B/'B'/- B to the Independent Auditors' Report" added
+                # alongside the literal-phrase patterns for the same reason as
+                # fetch_caro_text's "Annexure A" fix above — a filing that only
+                # labels this "Annexure B" (no literal "internal financial
+                # control" in the heading itself) would otherwise be missed.
+                regulation_patterns=[
+                    "%143(3A)%", "%internal financial control%", "%IFC%",
+                    "%annexure - b%", "%annexure-b%", "%annexure b %", "%annexure 'b'%",
+                ],
                 heading_patterns=["%internal financial control%"],
-                toc_patterns=["%auditor%"],
+                # toc_patterns=["%auditor%"] deliberately dropped — see the
+                # matching note in fetch_caro_text above: real `toc_section`
+                # values under an annexure are frequently the audit firm's
+                # own name, not anything containing "auditor".
                 limit=30,
             )
 
@@ -788,6 +853,52 @@ class FetchTools:
             source_meta={"company": company, "fy_end": prior_fy},
         )
 
+    @classmethod
+    def save_sar_result(cls, company: str, fy_end: int, result_json: dict) -> None:
+        """
+        Persists a compact trend record (see prior_year_continuity.
+        build_prior_year_summary — NOT the full merged JSON or memorandum)
+        so `fetch_prior_year_result` finds something on the *next* run for
+        this company. Gap-closure Phase 3, Gap #6.
+
+        `fetch_prior_year_result` above has been dormant since it was
+        written — its own EXISTS check confirms `sar_results` has never
+        existed in this deployment, and until now nothing ever wrote to it
+        either. Rather than requiring a manual migration this codebase has
+        no way to apply here, this method creates the table itself
+        (`CREATE TABLE IF NOT EXISTS`) on first use: the very first report
+        generated after this change creates the table and writes one row;
+        from the *second* report for the same company onward,
+        `fetch_prior_year_result` starts finding it.
+
+        Best-effort by design: the caller (SARReportPipeline.run) wraps
+        this in a try/except and logs a warning on failure rather than
+        letting a trend-record write failure fail report generation —
+        losing this year's trend record is a next-year inconvenience, not
+        a reason to withhold this year's report.
+        """
+        conn = _get_db_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS sar_results (
+                        id SERIAL PRIMARY KEY,
+                        company TEXT NOT NULL,
+                        fy_end INTEGER NOT NULL,
+                        result_json JSONB NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+                cur.execute(
+                    "INSERT INTO sar_results (company, fy_end, result_json) VALUES (%s, %s, %s)",
+                    [company, fy_end, json.dumps(result_json)],
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
 
 # ===========================================================================
 # HTML TABLE HELPER
@@ -1029,7 +1140,76 @@ class CheckTools:
                 "Statements is not modified in respect of the above matters' — was NOT found. "
                 "Its absence is a departure from SA 706."
             ),
-            evidence="", risk_rating="High",
+            # Absence is still directly verifiable from the package (a reviewer
+            # can read this same text and confirm the sentence isn't in it) —
+            # so the evidence carries the searched text itself, not a quote of
+            # the (absent) sentence. This is what keeps this a traceable
+            # FINDING under the lineage rule in observation.py rather than
+            # being downgraded to an AUDIT_POINTER for lack of a source trace.
+            evidence=(eom_text[:500] + " …") if len(eom_text) > 500 else eom_text,
+            risk_rating="High",
+        )
+
+    @staticmethod
+    def check_report_date_sequence(fs_approval_date: str, report_date: str) -> CheckResult:
+        """
+        Deterministic date-logic check (Gap-closure Phase 1, Gap #5 / source
+        spec §30 "Date Logic" and §35.1's own example of a FINDING: "report
+        date before approval date").
+
+        Companies Act 2013 s.134(1): the financial statements must be
+        approved by the Board before the auditor's report on them is dated.
+        A report dated before that approval is a direct, package-internal
+        contradiction — no external evidence is needed to see it, which is
+        exactly the wiki's test for FINDING (§35.1).
+
+        Deliberately does NOT apply any fixed numeric day-range benchmark —
+        the source spec is explicit that SA 700 sets none (§30, and the
+        writer prompt's own "Do NOT apply any fixed numeric day-range
+        benchmark" instruction in PROMPT.md §2.9). That is a different,
+        already-existing check: ComputeTools.compute_report_date_gap, which
+        measures the FY-end-to-report-date gap for informational/timeliness
+        purposes only and is not a substitute for this ordering check (nor
+        vice versa) — see GAP_CLOSURE_LOG.md for why both exist.
+        """
+        approval = _parse_flexible_date(fs_approval_date)
+        report = _parse_flexible_date(report_date)
+
+        if not approval or not report:
+            return CheckResult(
+                check_id="CHK-DATE-01", tag="AUDIT_POINTER",
+                component="Formal Checks — Report Date Sequence (s.134(1))", passed=False,
+                observation=(
+                    f"Could not verify the sequence of the report date and the financial "
+                    f"statement approval date — one or both could not be parsed from the "
+                    f"extracted text (fs_approval_date='{fs_approval_date}', report_date='{report_date}')."
+                ),
+                evidence="", risk_rating="Information request only",
+            )
+
+        if report < approval:
+            return CheckResult(
+                check_id="CHK-DATE-01", tag="FINDING",
+                component="Formal Checks — Report Date Sequence (s.134(1))", passed=False,
+                observation=(
+                    f"The auditor's report is dated {report.isoformat()}, which is before the "
+                    f"financial statements' approval date of {approval.isoformat()}. Under "
+                    f"s.134(1) of the Companies Act 2013, the report cannot be dated earlier "
+                    f"than the date the financial statements were approved."
+                ),
+                evidence=f"FS approval date: {approval.isoformat()} | Report date: {report.isoformat()}",
+                risk_rating="High",
+            )
+
+        return CheckResult(
+            check_id="CHK-DATE-01", tag="FINDING",
+            component="Formal Checks — Report Date Sequence (s.134(1))", passed=True,
+            observation=(
+                f"The report date ({report.isoformat()}) is on or after the financial "
+                f"statements' approval date ({approval.isoformat()}); no s.134(1) sequencing "
+                f"issue identified."
+            ),
+            evidence=f"FS approval date: {approval.isoformat()} | Report date: {report.isoformat()}",
         )
 
     @staticmethod
@@ -1165,17 +1345,8 @@ class ComputeTools:
         Calculates the gap in days between FY end and report signing date.
         Normal range: 60–90 days. PSUs with C&AG audit: 90–180 days.
         """
-        def _parse(ds: str) -> Optional[date]:
-            for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y",
-                        "%d %B %Y", "%d %b %Y", "%B %d, %Y", "%b %d, %Y"]:
-                try:
-                    return datetime.strptime(ds.strip(), fmt).date()
-                except ValueError:
-                    continue
-            return None
-
-        fy_end = _parse(fy_end_date)
-        rep = _parse(report_date)
+        fy_end = _parse_flexible_date(fy_end_date)
+        rep = _parse_flexible_date(report_date)
         if not fy_end or not rep:
             return {
                 "gap_days": None, "fy_end_date": fy_end_date, "report_date": report_date,
@@ -1284,7 +1455,32 @@ class ReferenceTools:
     If REFERENCE_DSN is not set, all methods return empty strings gracefully.
     """
 
-    _FIXED_SA_CODES = ["SA 700", "SA 705", "SA 706", "SA 701", "SA 570", "SA 720"]
+    # BUG FIX — this used to be a list of "standard_code" values
+    # ("SA 700", "CARO_2020", ...) filtered against a single unified
+    # `reference_chunks` table via `WHERE standard_code IN (...)`. That
+    # table has never existed in this deployment's REFERENCE_DSN — confirmed
+    # against a real live run (RVNL_2024_2025): every single call logged
+    # "relation \"reference_chunks\" does not exist" and silently returned
+    # empty context, meaning the writer has never actually received a real
+    # SA 700/705 or CARO framework citation from this class. The real
+    # database instead has one physical table per corpus (`sa_700_chunks`,
+    # `cag_caro_chunks`, `cag_directions_chunks`, ...), each with its own
+    # column names — no shared `standard_code`/`content`/`paragraph_no`
+    # schema to filter across. `_vector_search` below now takes real table
+    # names and looks up each one's column mapping in `_TABLE_SCHEMAS`,
+    # rather than one WHERE-IN clause over a table that isn't there.
+    #
+    # There is no per-row "which SA number" column inside `sa_700_chunks`
+    # (it holds the whole SA 700/705/706/701/570/720 series together) — the
+    # query text itself is what narrows relevance via embedding similarity,
+    # so one table name covers the whole "SA standards" corpus.
+    _TABLE_SCHEMAS: dict[str, dict[str, str | None]] = {
+        "sa_700_chunks": {"content": "chunk", "section": "section_title", "para": "para_no", "doc": "doc_name", "page": "page_no"},
+        "cag_caro_chunks": {"content": "txt", "section": None, "para": None, "doc": "doc_name", "page": None},
+        "cag_directions_chunks": {"content": "txt", "section": None, "para": None, "doc": "doc_name", "page": "page_no"},
+    }
+    _SA_TABLES = ["sa_700_chunks"]
+    _CARO_FRAMEWORK_TABLES = ["cag_caro_chunks", "cag_directions_chunks"]
 
     _SAR_REPORT_SA_QUERIES = [
         "auditor opinion qualified adverse disclaimer modified SA 705 basis reporting unmodified",
@@ -1332,8 +1528,14 @@ class ReferenceTools:
             return None
 
     @classmethod
-    def _vector_search(cls, query: str, standard_codes: list[str], top_k: int = 5) -> list[dict]:
-        """Vector similarity search on reference DB. Returns empty list if unavailable."""
+    def _vector_search(cls, query: str, tables: list[str], top_k: int = 5) -> list[dict]:
+        """Vector similarity search on the reference DB, across one or more
+        real physical tables (see `_TABLE_SCHEMAS` — each table is queried
+        separately since they don't share column names, then merged and
+        re-sorted by score). Returns empty list if unavailable, and silently
+        skips any table name not in `_TABLE_SCHEMAS` rather than raising —
+        a typo here should degrade like "no results", not crash the caller.
+        """
         conn = cls._get_ref_db_conn()
         if not conn:
             return []
@@ -1343,38 +1545,44 @@ class ReferenceTools:
             conn.close()
             return []
 
+        all_rows: list[dict] = []
         try:
             vec_literal = "[" + ",".join(str(v) for v in query_vec) + "]"
-            ph = ",".join(["%s"] * len(standard_codes))
-            sql = f"""
-                SELECT standard_code, section_title, paragraph_no, content,
-                       source_doc, page_no,
-                       1 - (embedding <=> %s::vector) AS score
-                FROM reference_chunks
-                WHERE standard_code IN ({ph})
-                ORDER BY embedding <=> %s::vector
-                LIMIT %s
-            """
             with conn.cursor() as cur:
-                cur.execute(sql, [vec_literal] + standard_codes + [vec_literal, top_k])
-                rows = cur.fetchall()
-                return [
-                    {
-                        "standard_code": r[0], "section_title": r[1], "paragraph_no": r[2],
-                        "content": r[3], "source_doc": r[4], "page_no": r[5], "score": r[6],
-                    }
-                    for r in rows
-                ]
-        except Exception as exc:
-            logger.warning("Reference vector search failed: %s", exc)
-            return []
+                for table in tables:
+                    schema = cls._TABLE_SCHEMAS.get(table)
+                    if not schema:
+                        logger.warning("ReferenceTools: unknown reference table %r — skipped.", table)
+                        continue
+                    section_expr = schema["section"] or "NULL"
+                    para_expr = schema["para"] or "NULL"
+                    page_expr = schema["page"] or "NULL"
+                    sql = f"""
+                        SELECT {schema['doc']}, {section_expr}, {para_expr}, {schema['content']},
+                               {page_expr}, 1 - (embedding <=> %s::vector) AS score
+                        FROM {table}
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT %s
+                    """
+                    try:
+                        cur.execute(sql, [vec_literal, vec_literal, top_k])
+                        for r in cur.fetchall():
+                            all_rows.append({
+                                "standard_code": table, "source_doc": r[0], "section_title": r[1],
+                                "paragraph_no": r[2], "content": r[3], "page_no": r[4], "score": r[5],
+                            })
+                    except Exception as exc:
+                        logger.warning("Reference vector search failed for table %s: %s", table, exc)
+                        conn.rollback()  # a failed statement poisons the transaction for the next table otherwise
+            all_rows.sort(key=lambda r: r.get("score", 0), reverse=True)
+            return all_rows[:top_k]
         finally:
             conn.close()
 
     @staticmethod
     def _format_blocks(rows: list[dict], cap: int = 1200) -> str:
         if not rows:
-            return "Reference context not available (REFERENCE_DSN not configured)."
+            return "Reference context not available (REFERENCE_DSN not configured, or no matching chunks found)."
         blocks = []
         for r in rows:
             para = r.get("paragraph_no") or ""
@@ -1396,7 +1604,7 @@ class ReferenceTools:
         """
         all_rows, seen = [], set()
         for query in cls._SAR_REPORT_SA_QUERIES:
-            for row in cls._vector_search(query, cls._FIXED_SA_CODES, top_k_per_query):
+            for row in cls._vector_search(query, cls._SA_TABLES, top_k_per_query):
                 uid = (row.get("standard_code"), row.get("paragraph_no"))
                 if uid not in seen:
                     seen.add(uid)
@@ -1412,7 +1620,7 @@ class ReferenceTools:
         """
         all_rows, seen = [], set()
         for query in cls._SAR_REPORT_CARO_QUERIES:
-            for row in cls._vector_search(query, ["CARO_2020", "CAG_DIRECTIONS"], top_k_per_query):
+            for row in cls._vector_search(query, cls._CARO_FRAMEWORK_TABLES, top_k_per_query):
                 uid = (row.get("standard_code"), row.get("paragraph_no"))
                 if uid not in seen:
                     seen.add(uid)
@@ -1422,14 +1630,64 @@ class ReferenceTools:
 
     @classmethod
     def fetch_sa_standard_chunks(
-        cls, query: str, standard_codes: list[str] | None = None, top_k: int = 5
+        cls, query: str, tables: list[str] | None = None, top_k: int = 5
     ) -> str:
         """Public API: retrieve relevant SA standard chunks for a specific query."""
-        rows = cls._vector_search(query, standard_codes or cls._FIXED_SA_CODES, top_k)
+        rows = cls._vector_search(query, tables or cls._SA_TABLES, top_k)
         return cls._format_blocks(rows)
 
     @classmethod
     def fetch_caro_framework_chunks(cls, query: str, top_k: int = 5) -> str:
         """Public API: retrieve relevant CARO 2020 / CAG directions chunks."""
-        rows = cls._vector_search(query, ["CARO_2020", "CAG_DIRECTIONS"], top_k)
+        rows = cls._vector_search(query, cls._CARO_FRAMEWORK_TABLES, top_k)
         return cls._format_blocks(rows)
+
+    # ---------------------------------------------------------------------------
+    # C&AG §143(5) directions — date-window applicability (Gap-closure Phase 5,
+    # Gap #2). See cag_directions_engine.py's module docstring for why the
+    # match key is the auditor's REPORT DATE, not the entity or FY: this is a
+    # standing government-wide document, not an entity-specific one, and its
+    # own text (chunk 7 in the live data) states its own applicability window.
+    # ---------------------------------------------------------------------------
+
+    @classmethod
+    def fetch_cag_directions_for_date(cls, report_date_str: str) -> list[dict]:
+        """Returns every direction chunk in `cag_directions_chunks` whose
+        [effective_from, effective_to] window covers `report_date_str`.
+        Empty list (never an error) when REFERENCE_DSN is unset, the
+        connection fails, the date can't be parsed, or nothing covers it —
+        all three are "nothing to test against", not failures.
+        """
+        report_date = _parse_flexible_date(report_date_str)
+        if not report_date:
+            return []
+
+        conn = cls._get_ref_db_conn()
+        if not conn:
+            return []
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT chunk_id, doc_name, page_no, txt, effective_from, effective_to
+                    FROM cag_directions_chunks
+                    WHERE effective_from IS NOT NULL
+                      AND effective_from::date <= %s
+                      AND (effective_to IS NULL OR effective_to::date >= %s)
+                    ORDER BY chunk_id
+                    """,
+                    [report_date, report_date],
+                )
+                rows = cur.fetchall()
+            return [
+                {
+                    "chunk_id": r[0], "doc_name": r[1], "page_no": r[2], "txt": r[3],
+                    "effective_from": r[4], "effective_to": r[5],
+                }
+                for r in rows
+            ]
+        except Exception as exc:
+            logger.warning("fetch_cag_directions_for_date failed: %s", exc)
+            return []
+        finally:
+            conn.close()
