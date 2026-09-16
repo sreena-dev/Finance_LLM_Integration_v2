@@ -1,8 +1,30 @@
+import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import Icon from '../common/Icon';
 import Markdown from '../common/Markdown';
 import CopyButton from '../common/CopyButton';
 import './ReportDocument.css';
+// The format-switcher tabs below reuse ReportView's .scope/.scope__* segmented-
+// control classes (same idiom as its own Report/Chat toggle). Imported
+// explicitly rather than relying on ReportView.jsx having already loaded it —
+// that's only true because this component currently always renders as
+// ReportView's child; see ReportView.jsx's own identical note about ChatView.css
+// for why that assumption isn't one to build on silently.
+import './ReportView.css';
+
+// The three formats LLM_Output_Specification_CAG_Statutory_Auditor_Report_
+// Review.md requires (§2/§3/§4), in the order a reviewer would actually want
+// them — shortest/most-material first. `report_md` (the pre-existing writer
+// narrative, PART 1/2) is kept as a last-resort fallback only: a response
+// from before this field set existed, or a run where the newer fields came
+// back empty for some other reason, still has *something* to show rather
+// than a blank sheet.
+const FORMAT_TABS = [
+  { key: 'display', label: 'Display Response', field: 'display_response', mono: true },
+  { key: 'executive', label: 'Executive Summary', field: 'executive_summary' },
+  { key: 'detailed', label: 'Detailed Report', field: 'detailed_report' },
+  { key: 'legacy', label: 'Full Narrative', field: 'report_md' },
+];
 
 const FLAG_TONE = {
   reliable: 'ok',
@@ -38,11 +60,11 @@ function humanise(key) {
   return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function download(report) {
-  const name = `SAR_${report.entity}_${report.fy_label}_${report.scope}`
+function download(report, activeTab, content) {
+  const name = `SAR_${report.entity}_${report.fy_label}_${report.scope}_${activeTab.key}`
     .replace(/[^\w-]+/g, '_')
     .replace(/_+/g, '_');
-  const blob = new Blob([report.report_md || ''], {
+  const blob = new Blob([content || ''], {
     type: 'text/markdown;charset=utf-8',
   });
   const url = URL.createObjectURL(blob);
@@ -60,7 +82,6 @@ export default function ReportDocument({ report }) {
     entity,
     fy_label: fyLabel,
     scope,
-    report_md: markdown,
     observations = [],
     quality_flags: flags = {},
     doc_meta: meta = {},
@@ -68,6 +89,23 @@ export default function ReportDocument({ report }) {
   } = report;
 
   const flagEntries = Object.entries(flags);
+
+  // Only offer a tab for a format the pipeline actually returned something
+  // for — an older cached response (before display_response/executive_
+  // summary/detailed_report existed) still shows its report_md under "Full
+  // Narrative" rather than three empty tabs and a fourth with content.
+  const availableTabs = useMemo(
+    () => FORMAT_TABS.filter((tab) => (report[tab.field] || '').trim().length > 0),
+    [report]
+  );
+
+  // Default to the most complete format (Detailed Report) when it's present;
+  // otherwise whatever the first available tab is.
+  const defaultTab =
+    availableTabs.find((tab) => tab.key === 'detailed') || availableTabs[0];
+  const [activeKey, setActiveKey] = useState(defaultTab?.key);
+  const activeTab = availableTabs.find((tab) => tab.key === activeKey) || defaultTab;
+  const activeContent = activeTab ? report[activeTab.field] || '' : '';
 
   return (
     <div className="doc">
@@ -113,12 +151,12 @@ export default function ReportDocument({ report }) {
         </div>
 
         <div className="doc__actions">
-          <CopyButton text={markdown} label="Copy" />
+          <CopyButton text={activeContent} label="Copy" />
           <button
             type="button"
             className="btn btn--ghost btn--sm"
-            onClick={() => download(report)}
-            disabled={!markdown}
+            onClick={() => download(report, activeTab, activeContent)}
+            disabled={!activeContent}
           >
             <Icon name="download" size={14} />
             Download
@@ -154,7 +192,7 @@ export default function ReportDocument({ report }) {
       {observations.length > 0 && (
         <section className="doc__obs card">
           <h3 className="doc__section-title">
-            Coherence observations
+            Observations
             <span className="pill pill--mute">{observations.length}</span>
           </h3>
           <ul className="obs__list">
@@ -174,12 +212,51 @@ export default function ReportDocument({ report }) {
         </section>
       )}
 
+      {/* ── Format switcher ─────────────────────────────────────────────
+          LLM_Output_Specification_CAG_Statutory_Auditor_Report_Review.md
+          §2/§3/§4: three distinct outputs generated from the same
+          observation register, not one narrative — this is what lets a
+          reviewer actually reach all three instead of only ever seeing
+          report_md (which is what this view rendered exclusively before,
+          regardless of what the API returned alongside it). */}
+      {availableTabs.length > 1 && (
+        <div className="scope doc__format-tabs">
+          <span className="scope__label">Output format</span>
+          <div className="scope__group" role="radiogroup" aria-label="Report output format">
+            {availableTabs.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                role="radio"
+                aria-checked={activeTab?.key === tab.key}
+                className={`scope__btn ${activeTab?.key === tab.key ? 'is-on' : ''}`}
+                onClick={() => setActiveKey(tab.key)}
+              >
+                {activeTab?.key === tab.key && (
+                  <motion.span
+                    className="scope__bg"
+                    layoutId="sar-format-active"
+                    transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                  />
+                )}
+                <span className="scope__text">{tab.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── The memorandum ───────────────────────────────────────────── */}
       <section className="doc__sheet">
-        {markdown ? (
-          <Markdown className="doc__md">{markdown}</Markdown>
-        ) : (
+        {!activeContent ? (
           <p className="doc__blank">The pipeline returned an empty report.</p>
+        ) : activeTab?.mono ? (
+          // display_response is plain structured text (§2), not markdown —
+          // a <pre> preserves the indentation the format relies on to read
+          // as sections, which a markdown renderer would collapse.
+          <pre className="doc__plain">{activeContent}</pre>
+        ) : (
+          <Markdown className="doc__md">{activeContent}</Markdown>
         )}
       </section>
     </div>
