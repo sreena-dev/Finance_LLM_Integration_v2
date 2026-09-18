@@ -43,12 +43,23 @@ from typing import Dict, List
 
 # ---------------------------------------------------------------------------
 # Path bootstrap — works on any machine, no hardcoded user paths.
+#
+# This file lives at backend/modes/statutory_auditor_report/sar_prod_v3/, so:
+#   parents[0] = sar_prod_v3   parents[1] = statutory_auditor_report
+#   parents[2] = modes         parents[3] = backend
+# The previous version used `_HERE.parent.parent / "backend"`, which resolved to
+# modes/backend — a directory that does not exist — so neither entry it added
+# was real. `yukta` still imported only because it was pip-installed; the vendor
+# wheel fallback was dead. Fixed to the actual backend/ and its vendor/, plus
+# the mode directory so `import sar_prod_v3.*` resolves when this module is
+# imported directly.
 # ---------------------------------------------------------------------------
-_HERE    = Path(__file__).resolve().parent          # Finance_llm_v2/Prod/
-_BACKEND = _HERE.parent.parent / "backend"          # Finance_llm_v2/backend/
-_VENDOR  = _BACKEND / "vendor"                      # Finance_llm_v2/backend/vendor/
+_HERE     = Path(__file__).resolve().parent          # .../sar_prod_v3/
+_MODE_DIR = _HERE.parent                              # .../statutory_auditor_report/
+_BACKEND  = _HERE.parents[3]                          # .../backend/
+_VENDOR   = _BACKEND / "vendor"                       # .../backend/vendor/
 
-for _p in (_BACKEND, _VENDOR):
+for _p in (_MODE_DIR, _BACKEND, _VENDOR):
     _ps = str(_p)
     if _ps not in sys.path:
         sys.path.insert(0, _ps)
