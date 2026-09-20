@@ -637,18 +637,37 @@ already documents for Trial Balance. A contributor who needs it fetches it out
 of band and places it at the repo root; without it the accuracy harness fails
 open with `FileNotFoundError` rather than silently reporting a false pass.
 
-### A known, unfixed gap: a borderless table can be read as narrative text
+### Tables docling's layout model never finds
 
-Table *location* is entirely delegated to docling's own layout model
-(`ingestion/app/convert.py`'s `_extract_tables` only ever reads
-`document.tables` — whatever the layout model already clustered as a table).
-A statement with almost no ruling lines can fail to be classified as a table
-at all; its content then falls through to the narrative-text path
-(`emit.py`'s `build_text_records`, which explicitly skips only lines that
-already look like a markdown table row) as ordinary headings and paragraphs —
-with the numbers not even flagged `[unreadable]`, since they never entered the
-table pipeline to be withheld in the first place. This is upstream of, and
-unaddressed by, every other extraction-quality mechanism described above. Not
-yet fixed; scoping it needs a real reproduction case (a scan of exactly this
-shape) run through the pipeline with instrumentation on docling's raw layout
-scores.
+Table *location* is delegated to docling's own layout model
+(`ingestion/app/convert.py`'s `_extract_tables` reads `document.tables`). A
+statement with almost no ruling lines can come back with no table cluster at
+all -- measured on a real filing (Startup Odisha's Statement of Income &
+Expenditure): 55 layout clusters, none a table, every cell its own tiny
+low-confidence text item. OCR read every figure correctly, but each was then
+dropped as a short text block (`emit.py` skips blocks under 25 characters), with
+no marker and no note.
+
+Handled in `ingestion/app/structure_repair.py`, from docling's own text items and
+their positions, and switchable with `INGEST_SYNTHESIZE_MISSED_TABLES`:
+
+- **Rebuild.** Standalone figures outside any table that share a right-aligned
+  column, with a label on most rows, are rebuilt as a table. It goes through the
+  same footing, withholding and vision second read as any detected table, and a
+  note in `quality["notes"]` says it was rebuilt.
+- **Continuation.** Figures printed just below a detected table, in its columns,
+  where its box stopped short (a balance sheet's whole assets side, in the same
+  filing) are rebuilt as more rows under that table's headings.
+- **Refuse, don't guess.** Ambiguous columns, a gap of several lines, too few
+  labelled rows, or an overlap with a real table all fall back to a note naming
+  the page and the number of figures that were read but are in no table.
+
+Separately, `tables.py` now chooses the label column by how many text cells a
+column holds (a spanned first row used to make it pick a blank column) and splits
+a merged "Notes As at ..." header, so lookups by row label and period work.
+
+Regression case: `ingestion/tests/accuracy/cases/od_2021_22_sfs.yaml`. Still
+open: a rebuilt table depends on OCR reading its figures, so a page OCR cannot
+read stays a withheld or missing figure; and the 2023-24 balance sheet's
+"Property, Plant and Equipment" row is found but its cells are empty -- a
+different defect, not covered here.

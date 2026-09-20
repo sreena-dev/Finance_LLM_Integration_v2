@@ -1188,3 +1188,353 @@ def repair_from_geometry(ct):
         ct.page_no, original[0], candidate[0], original[1], candidate[1],
     )
     return replace(ct, markdown=candidate_markdown)
+
+
+# ---------------------------------------------------------------------------
+# A table layout analysis never found
+# ---------------------------------------------------------------------------
+#
+# Everything above REPAIRS a table docling already located. This section covers
+# the case where docling's layout model produced no `table` cluster at all --
+# measured on a real filing (Startup Odisha, "Statement of Income &
+# Expenditure", almost no ruling lines): 55 layout clusters, none a table, every
+# cell its own tiny low-confidence `text` cluster. OCR read every figure
+# correctly; nothing ever assembled them, and `emit.build_text_records` then
+# discarded each one for being under 25 characters -- a silent, total loss.
+#
+# The rebuild below works from docling's own text items (label + position) and
+# emits ordinary pipe markdown that flows through the SAME verification as any
+# detected table (footing checks, withholding, the vision second read). It
+# refuses rather than guesses: it only fires when several figures share a
+# right-aligned column AND most of them sit on a row with a label.
+
+#: Fewest right-aligned figures that make a value column, and fewest labelled
+#: figure rows that make a table. Below either, prose with a few numbers in it
+#: would qualify.
+_MIN_COLUMN_FIGURES = 3
+_MIN_LABELLED_ROWS = 3
+#: Figures whose RIGHT edges sit within this many points share a column.
+#: Right-aligned money columns on this corpus agree to a few points.
+_RIGHT_EDGE_TOL_PT = 12.0
+#: Share of a table's figures that must land on a labelled row.
+_MIN_BOUND_FRACTION = 0.8
+#: Two fragments are on one printed line when their vertical spans overlap by
+#: at least this fraction of the shorter one.
+_SAME_LINE_OVERLAP = 0.4
+#: Docling labels whose text is never a table's label or figure.
+_NOT_TABLE_TEXT = frozenset({"page_footer", "page_header", "picture"})
+
+_FIGURE_RE = re.compile(
+    r"^\s*[\(\-]?\s*(?:₹|rs\.?)?\s*\d[\d,]*(?:\.\d+)?\s*\)?\s*$", re.I
+)
+
+
+@dataclass
+class TextFragment:
+    """One docling text item, positioned in page points, TOP-LEFT origin."""
+
+    text: str
+    bbox: tuple[float, float, float, float]  # (l, t, r, b)
+    label: str = "text"
+
+
+@dataclass
+class SynthesizedTable:
+    markdown: str
+    bbox: tuple[float, float, float, float]  # (l, t, r, b), TOP-LEFT origin
+    title: str | None
+    figures: int
+
+
+def _is_figure(text: str) -> bool:
+    return bool(_FIGURE_RE.match(text or "")) and parse_cell(text).value is not None
+
+
+def _inside(box, outer) -> bool:
+    cx, cy = (box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0
+    return outer[0] <= cx <= outer[2] and outer[1] <= cy <= outer[3]
+
+
+def _v_overlap(a, b) -> float:
+    lo, hi = max(a[1], b[1]), min(a[3], b[3])
+    shorter = min(a[3] - a[1], b[3] - b[1])
+    return (hi - lo) / shorter if shorter > 0 and hi > lo else 0.0
+
+
+def orphan_figures(fragments, table_boxes, picture_boxes) -> list[TextFragment]:
+    """Standalone figures on a page that sit in NO detected table.
+
+    Excludes page furniture and anything inside a picture region (stamps,
+    signatures), so a page number or a seal cannot count as a lost figure.
+    """
+    out = []
+    for f in fragments:
+        if f.label in _NOT_TABLE_TEXT or not _is_figure(f.text):
+            continue
+        if any(_inside(f.bbox, b) for b in table_boxes):
+            continue
+        if any(_inside(f.bbox, b) for b in picture_boxes):
+            continue
+        out.append(f)
+    return out
+
+
+def _value_columns(figures) -> list[list[TextFragment]]:
+    """Groups of >= _MIN_COLUMN_FIGURES figures sharing a right edge, left to
+    right."""
+    ordered = sorted(figures, key=lambda f: f.bbox[2])
+    groups: list[list[TextFragment]] = []
+    for f in ordered:
+        if groups and f.bbox[2] - groups[-1][-1].bbox[2] <= _RIGHT_EDGE_TOL_PT:
+            groups[-1].append(f)
+        else:
+            groups.append([f])
+    return [g for g in groups if len(g) >= _MIN_COLUMN_FIGURES]
+
+
+def synthesize_table(fragments, orphans, table_boxes) -> "SynthesizedTable | None":
+    """Assemble a table from a page's text items, or ``None`` on any doubt."""
+    columns = _value_columns(orphans)
+    if not columns:
+        return None
+
+    figures = [f for col in columns for f in col]
+    heights = [f.bbox[3] - f.bbox[1] for f in figures if f.bbox[3] > f.bbox[1]]
+    median_h = _median(heights) or 12.0
+
+    bands_lr = [(min(f.bbox[0] for f in col), max(f.bbox[2] for f in col)) for col in columns]
+    left_of_values = min(lo for lo, _ in bands_lr)
+    first_top = min(f.bbox[1] for f in figures)
+    last_bottom = max(f.bbox[3] for f in figures)
+    region_bottom = last_bottom + median_h * 0.5
+
+    figure_ids = {id(f) for f in figures}
+    prose = [
+        f for f in fragments
+        if id(f) not in figure_ids and f.label not in _NOT_TABLE_TEXT
+        and not _is_figure(f.text) and f.text.strip()
+    ]
+
+    # ---- header: the nearest printed line above the first figure ---------
+    def over_column(f, pad=20.0):
+        return any(f.bbox[0] <= hi + pad and f.bbox[2] >= lo - pad for lo, hi in bands_lr)
+
+    above = [f for f in prose if f.bbox[3] <= first_top + median_h * 0.25 and over_column(f)]
+    header_anchor = max(above, key=lambda f: f.bbox[3], default=None)
+    if header_anchor is None:
+        return None
+    header_line = [
+        f for f in prose
+        if f.bbox[3] <= first_top + median_h * 0.25
+        and _v_overlap(f.bbox, header_anchor.bbox) >= _SAME_LINE_OVERLAP
+    ]
+    header_bottom = max(f.bbox[3] for f in header_line)
+    header_top = min(f.bbox[1] for f in header_line)
+
+    value_headers = []
+    for i, (lo, hi) in enumerate(bands_lr):
+        cands = [f for f in header_line if f.bbox[0] <= hi + 20.0 and f.bbox[2] >= lo - 20.0]
+        value_headers.append(
+            " ".join(f.text.strip() for f in sorted(cands, key=lambda f: f.bbox[0]))
+            or f"Column {i + 1}"
+        )
+    label_header = " ".join(
+        f.text.strip() for f in sorted(header_line, key=lambda f: f.bbox[0])
+        if f.bbox[2] < left_of_values - 20.0
+    ) or "Particulars"
+
+    # ---- rows: labels and figures between the header and the last figure --
+    labels = [
+        f for f in prose
+        if f.bbox[1] >= header_bottom - 1.0 and f.bbox[3] <= region_bottom
+        and f.bbox[0] < left_of_values - 20.0
+    ]
+    if not labels:
+        return None
+
+    members = sorted(labels + figures, key=lambda f: (f.bbox[1], f.bbox[0]))
+    bands: list[list[TextFragment]] = []
+    span = None
+    for f in members:
+        if span is not None and _v_overlap(f.bbox, span) >= _SAME_LINE_OVERLAP:
+            bands[-1].append(f)
+            span = (0, min(span[1], f.bbox[1]), 0, max(span[3], f.bbox[3]))
+        else:
+            bands.append([f])
+            span = (0, f.bbox[1], 0, f.bbox[3])
+
+    rows, bound, labelled_figure_rows = [], 0, 0
+    for band in bands:
+        label_parts = sorted((f for f in band if id(f) not in figure_ids), key=lambda f: f.bbox[0])
+        row_label = " ".join(f.text.strip() for f in label_parts).replace("|", "/")
+        cells = [""] * len(columns)
+        placed = 0
+        for f in band:
+            if id(f) not in figure_ids:
+                continue
+            for i, col in enumerate(columns):
+                if any(f is c for c in col):
+                    cells[i] = (cells[i] + " " + f.text.strip()).strip()
+                    placed += 1
+        if placed and row_label:
+            bound += placed
+            labelled_figure_rows += 1
+        if row_label or placed:
+            rows.append([row_label, *cells])
+
+    if labelled_figure_rows < _MIN_LABELLED_ROWS or bound / len(figures) < _MIN_BOUND_FRACTION:
+        return None
+
+    used = [f for band in bands for f in band]
+    left = min(f.bbox[0] for f in used + header_line)
+    right = max(f.bbox[2] for f in used + header_line)
+    top, bottom = header_top, max(f.bbox[3] for f in used)
+    if any(not (b[2] < left or b[0] > right or b[3] < top or b[1] > bottom) for b in table_boxes):
+        return None
+
+    titles = [
+        f for f in fragments
+        if f.label == "section_header" and f.bbox[3] <= top and top - f.bbox[3] <= 150.0
+    ]
+    title = max(titles, key=lambda f: f.bbox[3], default=None)
+
+    header = [label_header, *value_headers]
+    return SynthesizedTable(
+        markdown=_rows_to_markdown(header, rows),
+        bbox=(left, top, right, bottom),
+        title=title.text.strip() if title else None,
+        figures=len(figures),
+    )
+
+
+def synthesize_continuation(
+    fragments, orphans, markdown, ocr_lines, table_bbox,
+) -> "tuple[SynthesizedTable, list[TextFragment]] | None":
+    """Rows printed BELOW a detected table that its box stopped short of.
+
+    Measured on a real balance sheet (Startup Odisha, page 1): docling's table
+    box ended at the liabilities subtotal, so the liabilities TOTAL, the whole
+    ASSETS section and the closing TOTAL sat outside it -- read by OCR, in the
+    same columns, and dropped. Those figures already have a header and column
+    layout: the table above. So instead of demanding a header of their own
+    (`synthesize_table` does), this borrows the detected table's, matching each
+    figure column to a detected column by the FIGURES THEMSELVES -- the OCR
+    tokens the detected table holds at the same right edge -- never by guess.
+
+    Returns the rebuilt rows as their own table plus the fragments it
+    consumed, or ``None`` on any doubt (the caller then reports the figures).
+    """
+    from .tables import parse_markdown_tables
+
+    parsed = parse_markdown_tables(markdown or "", 1, prefix="c")
+    if not parsed:
+        return None
+    table = parsed[0]
+
+    # Anchors: right edges where the detected table's own OCR figures line up.
+    tokens = build_number_ledger(ocr_lines)
+    tokens.sort(key=lambda t: t.bbox[2])
+    anchors: list[list] = []
+    for tok in tokens:
+        if anchors and tok.bbox[2] - anchors[-1][-1].bbox[2] <= _RIGHT_EDGE_TOL_PT:
+            anchors[-1].append(tok)
+        else:
+            anchors.append([tok])
+    anchors = [a for a in anchors if len(a) >= 2]
+    if not anchors:
+        return None
+
+    def column_of(anchor) -> int | None:
+        texts = {t.text.strip() for t in anchor}
+        best, best_hits = None, 0
+        for c in range(len(table.header)):
+            hits = sum(1 for r in table.rows if c < len(r) and r[c].strip() in texts)
+            if hits > best_hits:
+                best, best_hits = c, hits
+        return best if best_hits >= max(2, len(anchor) // 2) else None
+
+    mapped = []  # (anchor right edge, table column)
+    for a in anchors:
+        col = column_of(a)
+        if col is not None and col != table.label_col:
+            mapped.append((sum(t.bbox[2] for t in a) / len(a), col))
+    if not mapped:
+        return None
+    if len({col for _, col in mapped}) != len(mapped):
+        return None  # two anchors claim one column: ambiguous, refuse
+
+    table_bottom = table_bbox[3]
+    below = [f for f in orphans if f.bbox[1] >= table_bottom - 2.0]
+    grouped: dict[int, list[TextFragment]] = {}
+    for f in below:
+        for edge, col in mapped:
+            if abs(f.bbox[2] - edge) <= _RIGHT_EDGE_TOL_PT:
+                grouped.setdefault(col, []).append(f)
+                break
+    figures = [f for col in sorted(grouped) for f in grouped[col]]
+    if not figures:
+        return None
+    heights = [f.bbox[3] - f.bbox[1] for f in figures if f.bbox[3] > f.bbox[1]]
+    median_h = _median(heights) or 12.0
+    if min(f.bbox[1] for f in figures) - table_bottom > median_h * 3.0:
+        return None  # not a continuation: a gap of several lines separates them
+
+    columns = sorted(grouped)
+    left_of_values = min(
+        min(f.bbox[0] for f in grouped[c]) for c in columns
+    )
+    last_bottom = max(f.bbox[3] for f in figures)
+    figure_ids = {id(f) for f in figures}
+    labels = [
+        f for f in fragments
+        if id(f) not in figure_ids and f.label not in _NOT_TABLE_TEXT and f.text.strip()
+        and f.bbox[1] >= table_bottom - 2.0 and f.bbox[3] <= last_bottom + median_h * 0.5
+        and f.bbox[0] < left_of_values - 20.0
+    ]
+    if not labels:
+        return None
+
+    members = sorted(labels + figures, key=lambda f: (f.bbox[1], f.bbox[0]))
+    bands: list[list[TextFragment]] = []
+    span = None
+    for f in members:
+        if span is not None and _v_overlap(f.bbox, span) >= _SAME_LINE_OVERLAP:
+            bands[-1].append(f)
+            span = (0, min(span[1], f.bbox[1]), 0, max(span[3], f.bbox[3]))
+        else:
+            bands.append([f])
+            span = (0, f.bbox[1], 0, f.bbox[3])
+
+    rows, bound, labelled = [], 0, 0
+    for band in bands:
+        parts = sorted((f for f in band if id(f) not in figure_ids), key=lambda f: f.bbox[0])
+        row_label = " ".join(f.text.strip() for f in parts).replace("|", "/")
+        cells = [""] * len(columns)
+        placed = 0
+        for f in band:
+            if id(f) in figure_ids:
+                for i, c in enumerate(columns):
+                    if any(f is g for g in grouped[c]):
+                        cells[i] = (cells[i] + " " + f.text.strip()).strip()
+                        placed += 1
+        if placed and row_label:
+            bound += placed
+            labelled += 1
+        if row_label or placed:
+            rows.append([row_label, *cells])
+
+    if labelled < 2 or bound / len(figures) < _MIN_BOUND_FRACTION:
+        return None
+
+    header = [table.header[table.label_col] or "Particulars"]
+    header += [(table.header[c] if c < len(table.header) else "") or f"Column {c}" for c in columns]
+    used = [f for band in bands for f in band]
+    box = (
+        min(f.bbox[0] for f in used), min(f.bbox[1] for f in used),
+        max(f.bbox[2] for f in used), max(f.bbox[3] for f in used),
+    )
+    return (
+        SynthesizedTable(markdown=_rows_to_markdown(header, rows), bbox=box,
+                         title=None, figures=len(figures)),
+        figures,
+    )

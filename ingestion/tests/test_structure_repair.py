@@ -868,3 +868,215 @@ def test_a_section_heading_is_never_reported_lost_even_with_figures_beside_it():
     )
     headings, lost = sr.classify_label_only_rows(table, ct)
     assert 0 in headings and lost == set()
+
+
+# ---------------------------------------------------------------------------
+# A table layout analysis never found
+#
+# Positions are transcribed from a real docling conversion of OD-SPSU-SO-032
+# 2021-22 SFS page 2 ("Statement of Income & Expenditure", almost no ruling
+# lines). Docling produced 55 layout clusters and none was a table; OCR read
+# every figure correctly; emit.build_text_records then dropped each one for
+# being under 25 characters. Coordinates: (left, top, right, bottom), page
+# points, TOP-LEFT origin.
+# ---------------------------------------------------------------------------
+
+def _frag(text, l, t, r, b, label="text"):
+    return sr.TextFragment(text=text, bbox=(l, t, r, b), label=label)
+
+
+def _income_expenditure_page():
+    return [
+        _frag("Statement of Income & Expenditure for the period From 30th March, 2022 to 31st March, 2022",
+              234, 187, 689, 233, "section_header"),
+        _frag("Partculars", 140, 291, 229, 310, "section_header"),
+        _frag("Notes", 566, 289, 619, 308),
+        _frag("For the year ended 31st March, 2022", 690, 282, 845, 323),
+        _frag("Revenue from operation", 139, 326, 307, 347, "list_item"),
+        _frag("Other Income", 98, 350, 241, 371, "list_item"),
+        _frag("III. Total Income (I+II)", 96, 379, 284, 399, "section_header"),
+        _frag("Expenses:", 139, 407, 218, 428, "section_header"),
+        _frag("Employee Benefit Expenses", 140, 430, 333, 451),
+        _frag("Finance Cost", 140, 450, 234, 469),
+        _frag("7", 586, 451, 601, 469),
+        _frag("460", 811, 450, 844, 471),
+        _frag("Other Expenses", 140, 473, 251, 492),
+        _frag("8", 586, 472, 601, 491),
+        _frag("25,000", 791, 471, 844, 492),
+        _frag("Total Expenditure", 162, 494, 300, 514, "section_header"),
+        _frag("25,460", 790, 494, 844, 514),
+        _frag("V. (Defecit)/Surplus before Tax expenses (III-IV)", 98, 538, 475, 557, "section_header"),
+        _frag("VI. (Defecit)/Surplus after Tax expenses (III-IV)", 98, 652, 470, 672, "section_header"),
+        _frag("(25,460)", 786, 651, 849, 673),
+        _frag("Earnings per equity share- Basic", 83, 692, 296, 710, "section_header"),
+        _frag("9", 587, 691, 602, 709),
+        _frag("(0.17)", 809, 691, 850, 711),
+        # Page furniture and the signature block: must never be figures.
+        _frag("Significant Accounting Policies", 83, 723, 282, 740),
+        _frag("2", 456, 722, 470, 739),
+        _frag("Membership No: 059274", 83, 806, 270, 845),
+        _frag("11", 817, 1139, 837, 1160, "page_footer"),
+    ]
+
+
+def test_orphan_figures_find_every_lost_figure_and_no_furniture():
+    frags = _income_expenditure_page()
+    orphans = sr.orphan_figures(frags, table_boxes=[], picture_boxes=[])
+    assert sorted(f.text for f in orphans) == sorted(
+        ["7", "460", "8", "25,000", "25,460", "(25,460)", "9", "(0.17)", "2"]
+    )  # "11" is a page_footer; "059274" sits inside a longer text item
+
+
+def test_a_figure_inside_a_detected_table_is_not_an_orphan():
+    frags = _income_expenditure_page()
+    assert sr.orphan_figures(frags, [(0, 0, 2000, 2000)], []) == []
+
+
+def test_a_figure_inside_a_picture_region_is_not_an_orphan():
+    frags = _income_expenditure_page()
+    stamp = (780, 640, 860, 680)  # around "(25,460)"
+    left = {f.text for f in sr.orphan_figures(frags, [], [stamp])}
+    assert "(25,460)" not in left
+
+
+def test_synthesizes_the_income_and_expenditure_table():
+    frags = _income_expenditure_page()
+    orphans = sr.orphan_figures(frags, [], [])
+    built = sr.synthesize_table(frags, orphans, [])
+    assert built is not None
+    lines = built.markdown.splitlines()
+    assert lines[0] == "| Partculars | Notes | For the year ended 31st March, 2022 |"
+    body = {l.split("|")[1].strip(): [c.strip() for c in l.split("|")[2:-1]] for l in lines[2:]}
+    assert body["Finance Cost"] == ["7", "460"]
+    assert body["Other Expenses"] == ["8", "25,000"]
+    assert body["Total Expenditure"] == ["", "25,460"]
+    assert body["VI. (Defecit)/Surplus after Tax expenses (III-IV)"] == ["", "(25,460)"]
+    assert body["Earnings per equity share- Basic"] == ["9", "(0.17)"]
+    # Rows with no printed figure stay blank -- nothing is invented for them.
+    assert body["Revenue from operation"] == ["", ""]
+    assert built.title.startswith("Statement of Income & Expenditure")
+    assert built.figures == 8  # "2" is a lone figure, not a column
+
+
+def test_the_rebuilt_table_foots():
+    from app.tables import parse_markdown_tables
+    from app.verify import verify_table
+
+    frags = _income_expenditure_page()
+    built = sr.synthesize_table(frags, sr.orphan_figures(frags, [], []), [])
+    table = parse_markdown_tables(built.markdown, 1, prefix="t1_")[0]
+    footings, _ = verify_table(table, 1)
+    passed = {f.subtotal_label: f.passed for f in footings}
+    assert passed.get("Total Expenditure") is True  # 460 + 25,000 = 25,460
+
+
+def test_prose_with_a_few_numbers_does_not_synthesize():
+    frags = [
+        _frag("Auditor's remarks", 90, 100, 300, 120, "section_header"),
+        _frag("The company has 3 divisions", 90, 130, 400, 150),
+        _frag("12", 700, 130, 720, 150),
+        _frag("Other matters", 90, 160, 300, 180),
+        _frag("15", 700, 160, 720, 180),
+    ]
+    orphans = sr.orphan_figures(frags, [], [])
+    assert sr.synthesize_table(frags, orphans, []) is None  # only 2 in the column
+
+
+def test_a_column_of_figures_with_no_labels_does_not_synthesize():
+    frags = [_frag(str(n), 700, 100 + 25 * i, 730, 120 + 25 * i) for i, n in enumerate((10, 20, 30, 40))]
+    frags.append(_frag("Heading", 700, 60, 760, 80))
+    assert sr.synthesize_table(frags, sr.orphan_figures(frags, [], []), []) is None
+
+
+def test_a_rebuild_never_overlaps_a_detected_table():
+    frags = _income_expenditure_page()
+    orphans = sr.orphan_figures(frags, [], [])
+    assert sr.synthesize_table(frags, orphans, [(300, 300, 700, 500)]) is None
+
+
+# ---------------------------------------------------------------------------
+# Rows below a detected table that its box stopped short of
+#
+# Real docling conversion of OD-SPSU-SO-032 2021-22 SFS page 1 (balance sheet).
+# The detected table's box ends at y=526 (the liabilities subtotal); the
+# liabilities TOTAL, the whole ASSETS section and the closing TOTAL lie below
+# it. Fragment positions are transcribed from that run. The detected table's
+# own figures are represented by their columns' right edges (amounts ~841,
+# notes ~559, from its cell bands); their Y values are not needed by the
+# anchor logic and are placeholders.
+# ---------------------------------------------------------------------------
+
+_BS_DETECTED_MD = """\
+|                           | Partculars                    | Notes | As at 31st March, 2022 |
+|---------------------------|-------------------------------|-------|-----------|
+| I. EQUITY AND LIABILITIES | I. EQUITY AND LIABILITIES     |       |           |
+|                           | (a) Share Capital             | 3     | 15,00,000 |
+|                           | (b) Surplus                   | 4     | (25,460)  |
+|                           |                               |       | 14,74,540 |
+|                           | (c) Other current liabilities | 5     | 25,000    |
+"""
+
+
+def _bs_ocr():
+    def line(text, r, y):
+        return NS(text=text, confidence=0.99, bbox=(r - 60, y, r, y + 17))
+    return [
+        line("15,00,000", 841, 250), line("(25,460)", 840, 270), line("14,74,540", 842, 300),
+        line("25,000", 841, 470), line("3", 559, 250), line("4", 559, 270), line("5", 559, 470),
+    ]
+
+
+def _bs_fragments():
+    return [
+        _frag("TOTAL", 308, 529, 366, 546, "section_header"),
+        _frag("14,99,540", 777, 529, 841, 547),
+        _frag("II. ASSETS", 81, 568, 171, 585, "section_header"),
+        _frag("1", 156, 587, 168, 603),
+        _frag("Non-current assets", 212, 587, 336, 604),
+        _frag("(a) Tangible Assets assets", 213, 607, 370, 623),
+        _frag("Less: Depreciation", 223, 644, 339, 661),
+        _frag("2", 156, 733, 169, 750),
+        _frag("Current assets", 213, 735, 308, 750),
+        _frag("(a) Cash and cash equivalents", 212, 752, 394, 770, "list_item"),
+        _frag("14,99,540", 778, 752, 841, 770),
+        _frag("6", 548, 754, 559, 768),
+        _frag("(c) Other current assets", 213, 808, 355, 826, "list_item"),
+        _frag("14,99,540", 778, 830, 842, 847),
+        _frag("TOTAL", 330, 868, 388, 886),
+        _frag("14,99,540", 778, 869, 842, 886),
+        _frag("Significant Accounting Policies The accompanying notes 1-9", 74, 899, 520, 947),
+        _frag("2.", 588, 899, 605, 916),
+    ]
+
+
+_BS_BOX = (70.0, 184.0, 845.0, 526.5)
+
+
+def test_rows_below_a_detected_table_are_rebuilt_under_its_headings():
+    frags = _bs_fragments()
+    orphans = sr.orphan_figures(frags, [_BS_BOX], [])
+    built = sr.synthesize_continuation(frags, orphans, _BS_DETECTED_MD, _bs_ocr(), _BS_BOX)
+    assert built is not None
+    table, consumed = built
+    lines = table.markdown.splitlines()
+    assert lines[0] == "| Partculars | Notes | As at 31st March, 2022 |"
+    body = {l.split("|")[1].strip(): [c.strip() for c in l.split("|")[2:-1]] for l in lines[2:]}
+    assert body["(a) Cash and cash equivalents"] == ["6", "14,99,540"]
+    assert body["1 Non-current assets"] == ["", ""]
+    assert len(consumed) == 5  # four 14,99,540 and the note 6
+
+
+def test_continuation_refuses_when_the_figures_are_not_in_the_tables_columns():
+    frags = [_frag("x", 0, 0, 1, 1)] + [
+        _frag(str(n), 300, 540 + 25 * i, 330, 560 + 25 * i) for i, n in enumerate((10, 20, 30))
+    ]
+    orphans = sr.orphan_figures(frags, [_BS_BOX], [])
+    assert sr.synthesize_continuation(frags, orphans, _BS_DETECTED_MD, _bs_ocr(), _BS_BOX) is None
+
+
+def test_continuation_refuses_when_a_gap_separates_it_from_the_table():
+    frags = [_frag("Cash", 212, 900, 300, 918)] + [
+        _frag("14,99,540", 778, 900 + 25 * i, 842, 918 + 25 * i) for i in range(3)
+    ]
+    orphans = sr.orphan_figures(frags, [_BS_BOX], [])
+    assert sr.synthesize_continuation(frags, orphans, _BS_DETECTED_MD, _bs_ocr(), _BS_BOX) is None

@@ -1,0 +1,67 @@
+name: OD-SPSU-SO-032 2021-22 SFS
+pdf: OD-SPSU-SO-032/2021-22/OD-SPSU-SO-032_2021-22_SFS_20260522161923156.PDF
+
+# Startup Odisha's first (one-day) period, 30-31 March 2022. Ground truth read
+# off the printed pages by eye, pages 1-2 of the PDF.
+#
+# THE case for a table docling's layout model never detects: page 2 (the
+# Statement of Income & Expenditure) has almost no ruling lines, so layout
+# analysis produced 55 clusters and none a table. OCR read every figure; before
+# structure_repair.synthesize_table nothing assembled them and
+# emit.build_text_records dropped each for being under 25 characters -- every
+# figure below scored MISSING with no marker anywhere.
+#
+# Page 1 (balance sheet) had two further defects, both now fixed and pinned
+# here: the grid came back with the label in the SECOND column (a spanned first
+# row made tables.py choose the blank first column, so every label read blank),
+# and docling's table box stopped at the liabilities subtotal, so the whole
+# assets side (Cash 14,99,540) was read by OCR and dropped. See
+# tables._resolve_roles and structure_repair.synthesize_continuation.
+
+expectations:
+
+  # --- Statement of Income & Expenditure, page 2 -----------------------
+
+  - row_label: Finance Cost
+    column_label: For the year ended 31st March, 2022
+    page: 2
+    value: 460.0
+    verified: true
+  - row_label: Other Expenses
+    column_label: For the year ended 31st March, 2022
+    page: 2
+    value: 25000.0
+    verified: true
+  - row_label: Total Expenditure
+    column_label: For the year ended 31st March, 2022
+    page: 2
+    value: 25460.0
+    verified: true
+  - row_label: VI. (Defecit)/Surplus after Tax expenses (III-IV)
+    column_label: For the year ended 31st March, 2022
+    page: 2
+    value: -25460.0
+    verified: true
+  - row_label: Earnings per equity share- Basic
+    column_label: For the year ended 31st March, 2022
+    page: 2
+    value: -0.17
+    verified: true
+
+  # --- Balance Sheet, page 1 -------------------------------------------
+
+  - row_label: (a) Share Capital
+    column_label: As at 31st March, 2022
+    page: 1
+    value: 1500000.0
+    verified: true
+  - row_label: (c) Other current liabilities
+    column_label: As at 31st March, 2022
+    page: 1
+    value: 25000.0
+    verified: true
+  - row_label: (a) Cash and cash equivalents
+    column_label: As at 31st March, 2022
+    page: 1
+    value: 1499540.0
+    verified: true

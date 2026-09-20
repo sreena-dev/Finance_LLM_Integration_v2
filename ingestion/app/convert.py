@@ -149,6 +149,9 @@ class Converted:
     tables: list[ConvertedTable] = field(default_factory=list)
     page_markdown: dict[int, str] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    #: Caveats about how tables were found (rebuilt from positions, or figures
+    #: read but never assembled). Reach `quality["notes"]` via pipeline.
+    notes: list[str] = field(default_factory=list)
 
 
 def pages_to_pdf(images: list["np.ndarray"]) -> bytes:
@@ -363,6 +366,10 @@ def convert(images: list["np.ndarray"], qualities: list[PageQuality]) -> Convert
     # byte-identical.
     from . import structure_repair
     converted.tables = [structure_repair.repair_from_geometry(t) for t in tables]
+    if Config.SYNTHESIZE_MISSED_TABLES:
+        extra, notes = _missed_tables(document, _page_geometry(result), converted.tables)
+        converted.tables.extend(extra)
+        converted.notes.extend(notes)
     return converted
 
 
@@ -518,6 +525,138 @@ def _table_geometry(item, page_no, page_geometry) -> tuple[list[TableCellGeom], 
             lines = []
 
     return cells, lines, height
+
+
+def _label_name(item) -> str:
+    label = getattr(item, "label", None)
+    return str(getattr(label, "value", label) or "text")
+
+
+def _item_box(item, page_geometry):
+    """``(page_no, (l, t, r, b) TOP-LEFT)`` for one docling item, or ``None``."""
+    prov = (getattr(item, "prov", None) or [None])[0]
+    bbox = getattr(prov, "bbox", None) if prov is not None else None
+    if bbox is None:
+        return None
+    page_no = getattr(prov, "page_no", None)
+    _, height = (page_geometry or {}).get(page_no, (None, None))
+    box = _topleft_box(bbox.l, bbox.t, bbox.r, bbox.b, getattr(bbox, "coord_origin", None), height)
+    return None if box is None else (page_no, box)
+
+
+def _missed_tables(document, page_geometry, detected) -> tuple[list[ConvertedTable], list[str]]:
+    """Tables docling's layout model missed, rebuilt from text positions.
+
+    Also the caveat for the case where figures were read but no table could be
+    assembled: without it those figures vanish (short text blocks are dropped
+    when narrative chunks are built) and nothing says so.
+    """
+    from . import structure_repair as sr
+
+    frags: dict[int, list] = {}
+    tables_at: dict[int, list] = {}
+    pictures_at: dict[int, list] = {}
+    for item in getattr(document, "texts", None) or []:
+        placed = _item_box(item, page_geometry)
+        if placed is not None:
+            frags.setdefault(placed[0], []).append(
+                sr.TextFragment(text=_clean(getattr(item, "text", "")) or "", bbox=placed[1],
+                                label=_label_name(item)))
+    for item in getattr(document, "tables", None) or []:
+        placed = _item_box(item, page_geometry)
+        if placed is not None:
+            tables_at.setdefault(placed[0], []).append(placed[1])
+    for item in getattr(document, "pictures", None) or []:
+        placed = _item_box(item, page_geometry)
+        if placed is not None:
+            pictures_at.setdefault(placed[0], []).append(placed[1])
+
+    extra: list[ConvertedTable] = []
+    notes: list[str] = []
+    for page_no in sorted(frags):
+        table_boxes = tables_at.get(page_no, [])
+        orphans = sr.orphan_figures(frags[page_no], table_boxes, pictures_at.get(page_no, []))
+        # First: rows a detected table's box stopped short of, printed in its
+        # own columns just below it. These borrow that table's header.
+        for ct in detected:
+            if ct.page_no != page_no or not ct.bbox or not ct.markdown or not orphans:
+                continue
+            h = (page_geometry.get(page_no) or (None, None))[1]
+            if not h:
+                continue
+            box_tl = (ct.bbox[0], h - ct.bbox[1], ct.bbox[2], h - ct.bbox[3])
+            try:
+                cont = sr.synthesize_continuation(frags[page_no], orphans, ct.markdown,
+                                                  ct.ocr_lines, box_tl)
+            except Exception:  # noqa: BLE001
+                logger.exception("continuation rebuild failed on page %s", page_no)
+                cont = None
+            if cont is None:
+                continue
+            built_cont, consumed = cont
+            l, t, r, b = built_cont.bbox
+            box_bl = [l, h - t, r, h - b]
+            _, lines, _ = _table_geometry(_GeomItem(page_no, box_bl), page_no, page_geometry)
+            extra.append(ConvertedTable(
+                page_no=page_no, markdown=built_cont.markdown,
+                title=f"{ct.title} (continued)" if ct.title else None,
+                bbox=box_bl, cells=[], ocr_lines=lines, page_height_pt=h,
+            ))
+            notes.append(
+                f"Page {page_no}: {built_cont.figures} figure(s) printed below the detected "
+                "table, in its columns, were outside the box layout analysis drew. They were "
+                "rebuilt as a continuation of that table under its column headings and are "
+                "verified like any other table."
+            )
+            gone = {id(f) for f in consumed}
+            orphans = [f for f in orphans if id(f) not in gone]
+        if len(orphans) < 3:
+            continue
+        built = None
+        try:
+            built = sr.synthesize_table(frags[page_no], orphans, table_boxes)
+        except Exception:  # noqa: BLE001 - a rebuild failure must never fail the document
+            logger.exception("table rebuild failed on page %s", page_no)
+        height = (page_geometry.get(page_no) or (None, None))[1]
+        if built is None or not height:
+            notes.append(
+                f"Page {page_no}: {len(orphans)} figure(s) were read from the scan but the "
+                "layout analysis found no table for them and none could be assembled from "
+                "their positions. They are NOT in any table or extracted text -- check "
+                "this page against the original before relying on its figures."
+            )
+            continue
+        l, t, r, b = built.bbox
+        box_bl = [l, height - t, r, height - b]  # docling's BOTTOMLEFT box, as _provenance
+        geom_item = _GeomItem(page_no, box_bl)
+        cells, lines, _ = _table_geometry(geom_item, page_no, page_geometry)
+        extra.append(ConvertedTable(
+            page_no=page_no, markdown=built.markdown, title=built.title, bbox=box_bl,
+            cells=[], ocr_lines=lines, page_height_pt=height,
+        ))
+        notes.append(
+            f"Page {page_no}: the layout analysis did not detect a table here (few or no "
+            f"ruling lines); a table of {built.figures} figure(s) was rebuilt from the OCR "
+            "text positions and is verified like any other table."
+        )
+    return extra, notes
+
+
+class _GeomItem:
+    """Just enough of a docling table item for `_table_geometry`."""
+
+    def __init__(self, page_no, box_bl):
+        from docling_core.types.doc import BoundingBox, CoordOrigin
+
+        l, t, r, b = box_bl
+        bbox = BoundingBox(l=l, t=t, r=r, b=b, coord_origin=CoordOrigin.BOTTOMLEFT)
+
+        class _P:
+            pass
+
+        prov = _P()
+        prov.bbox, prov.page_no = bbox, page_no
+        self.prov, self.data = [prov], None
 
 
 def _extract_tables(document, page_geometry=None) -> list[ConvertedTable]:

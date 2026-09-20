@@ -271,6 +271,7 @@ def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestR
     advance("convert", "Detecting layout and reading tables")
     converted = convert_mod.convert(kept_images, kept_qualities)
     notes.extend(converted.errors)
+    notes.extend(converted.notes)
 
     empty_note = _empty_page_note(kept_qualities, converted)
     if empty_note:

@@ -303,6 +303,13 @@ class Config:
     # switch than resurrecting the discredited comparator).
     GEOMETRY_REPAIR_COVERAGE_GATE = _bool("INGEST_GEOMETRY_REPAIR_COVERAGE_GATE", True)
 
+    # Rebuild a table docling's layout model never found (a statement with
+    # almost no ruling lines) from its text items' positions, and say so when
+    # figures were read but could not be assembled
+    # (`structure_repair.synthesize_table`). Rebuilt tables go through the same
+    # verification as any other. False skips the rebuild AND the caveat.
+    SYNTHESIZE_MISSED_TABLES = _bool("INGEST_SYNTHESIZE_MISSED_TABLES", True)
+
     # Rejoin a caption that wrapped onto a second printed line with the row
     # carrying its figures, deterministically from the page's own geometry
     # (`structure_repair.join_wrapped_labels`). On by default: it moves no

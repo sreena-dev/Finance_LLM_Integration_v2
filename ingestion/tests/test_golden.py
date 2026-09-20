@@ -420,3 +420,53 @@ def test_arithmetic_still_corroborates_a_vlm_only_row():
     table = parse_markdown_tables(md, 1)[0]
     _, findings = verify_table(table, 1, vlm_only_rows={1})
     assert findings == [], [f.marker for f in findings]
+
+
+# ---------------------------------------------------------------------------
+# A spanned first row must not choose the label column
+#
+# Real docling output: OD-SPSU-SO-032 2021-22 SFS page 1 (Startup Odisha's
+# balance sheet). The first row's caption spans columns 0-1, so column 0 holds
+# ONE long cell while every other caption sits in column 1; the header was
+# OCR'd "Partculars" (missing letter), so the header rule could not settle it;
+# and the period heading is merged into the Notes cell with the amounts under a
+# blank header. Picking column 0 read every row's label as blank.
+# ---------------------------------------------------------------------------
+
+_STARTUP_ODISHA_BS = """\
+|                           | Partculars                    |   Notes As at 31st March, 2022 |           |
+|---------------------------|-------------------------------|--------------------------------|-----------|
+| I. EQUITY AND LIABILITIES | I. EQUITY AND LIABILITIES     |                                |           |
+|                           | 1 Shareholder's Funds         |                                |           |
+|                           | (a) Share Capital             |                              3 | 15,00,000 |
+|                           | (b) Surplus                   |                              4 | (25,460)  |
+|                           |                               |                                | 14,74,540 |
+|                           | (c) Other current liabilities |                              5 | 25,000    |
+"""
+
+
+def test_a_spanned_first_row_does_not_pick_the_label_column():
+    from app.tables import parse_markdown_tables
+
+    t = parse_markdown_tables(_STARTUP_ODISHA_BS, 1)[0]
+    assert t.label_col == 1
+    labels = [t.label(r) for r in range(len(t.rows))]
+    assert "(a) Share Capital" in labels and "(c) Other current liabilities" in labels
+    assert t.value_cols == [3] and t.note_col == 2
+
+
+def test_a_merged_notes_and_period_header_is_split():
+    from app.tables import parse_markdown_tables
+
+    t = parse_markdown_tables(_STARTUP_ODISHA_BS, 1)[0]
+    assert t.header[t.note_col].strip() == "Notes"
+    assert t.header[t.value_cols[0]] == "As at 31st March, 2022"
+    assert t.cell(2, 3).value == 1500000.0
+
+
+def test_a_notes_header_with_no_period_text_is_left_alone():
+    from app.tables import parse_markdown_tables
+
+    md = "| Particulars | Notes | 2023 |\n| --- | --- | --- |\n| Revenue | 4 | 100 |\n| Cost | 5 | 40 |\n| Profit | | 60 |\n"
+    t = parse_markdown_tables(md, 1)[0]
+    assert t.header == ["Particulars", "Notes", "2023"]

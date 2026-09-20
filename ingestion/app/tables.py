@@ -368,7 +368,7 @@ def _resolve_roles(table: Table) -> None:
     # level markers in their own narrow columns to the left of the caption, and
     # those are also non-numeric.
     label_col = 0
-    best_len = -1.0
+    best_score = None
     for c in range(width):
         if ratios[c] > 0.5:
             continue
@@ -381,8 +381,16 @@ def _resolve_roles(table: Table) -> None:
         if _LABEL_HDR_RE.search(header or ""):
             label_col = c
             break
-        if mean_len > best_len:
-            best_len, label_col = mean_len, c
+        # Most POPULATED text cells first, mean length only as the tie-break.
+        # Mean length alone picked a column holding a single long cell: when
+        # docling spans the first row's caption across two columns, that
+        # column-0 cell ("I. EQUITY AND LIABILITIES") out-averaged the real
+        # caption column, every other row's label read blank, and a
+        # header OCR'd as "Partculars" (missing letter) could not settle it.
+        # Level markers in narrow columns still lose: they have fewer cells.
+        score = (len(cells), mean_len)
+        if best_score is None or score > best_score:
+            best_score, label_col = score, c
     table.label_col = label_col
 
     note_col = None
@@ -412,6 +420,38 @@ def _resolve_roles(table: Table) -> None:
     table.value_cols = value_cols
 
 
+_NOTE_WITH_PERIOD_RE = re.compile(r"^\s*(notes?|appendix)\b[\s.:/-]*(\S.*)$", re.I)
+
+
+def _split_note_header(table: Table) -> None:
+    """Give a merged "Notes As at 31st March, 2022" header its two halves.
+
+    When docling merges the Notes caption and the period heading into one
+    header cell, the amounts sit in the next column under a BLANK header, so
+    no column is called by its period and a lookup by column finds nothing.
+    Only fires when the note column's header starts with the note word, has
+    more text after it, and the first value column's header is empty --
+    nothing is invented: both halves are text OCR read in that header cell.
+    """
+    if table.note_col is None or not table.value_cols:
+        return
+    header = list(table.header)
+    width = max(len(header), max(table.value_cols) + 1)
+    header += [""] * (width - len(header))
+    m = _NOTE_WITH_PERIOD_RE.match(header[table.note_col] or "")
+    if not m:
+        return
+    target = next(
+        (c for c in table.value_cols if c > table.note_col and not (header[c] or "").strip()),
+        None,
+    )
+    if target is None:
+        return
+    header[table.note_col] = re.match(r"\s*\S+", header[table.note_col]).group().strip()
+    header[target] = m.group(2).strip()
+    table.header = header
+
+
 def parse_markdown_tables(md: str, page_no: int, prefix: str = "t") -> list[Table]:
     """Split a markdown document into its pipe tables, roles resolved.
 
@@ -439,6 +479,7 @@ def parse_markdown_tables(md: str, page_no: int, prefix: str = "t") -> list[Tabl
                 rows=rows,
             )
             _resolve_roles(t)
+            _split_note_header(t)
             # AFTER roles are resolved (label_col needs the original column
             # shape), BEFORE anything downstream sees the rows: verify.py's
             # footing checks and vlm_read.py's row alignment both operate on
