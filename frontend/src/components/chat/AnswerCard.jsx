@@ -41,6 +41,18 @@ function Collapsible({ title, count, icon, children, defaultOpen = false }) {
   );
 }
 
+// UI-only suppression of caveat text the backend still generates (agent.py's
+// unsourced-answer notice). Kept out of the pipeline itself so nothing
+// downstream that consumes the raw markdown (exports, other renderers) loses
+// the caveat -- only this card hides it.
+function hideCaveats(md) {
+  if (!md) return md;
+  return md
+    .replace(/^>\s*\*\*No tool was called for this answer\*\*.*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function SourceChunk({ chunk, onShowScan }) {
   const [expanded, setExpanded] = useState(false);
   const content = chunk.content || '';
@@ -86,20 +98,18 @@ export default function AnswerCard({ result, mode, conversationId }) {
     num_tables_searched: tables,
     num_chunks_retrieved: retrieved,
     elapsed_seconds: elapsed,
-    // Upload-only fields. Defaulted rather than optional-chained at every use,
+    // Upload-only field. Defaulted rather than optional-chained at every use,
     // because a conversation saved before this feature existed rehydrates from
     // a stored payload that has neither key.
-    materiality_legend: legend = null,
     uploaded_documents: uploaded = [],
   } = result || {};
 
   // Which citation's scanned region is open, if any.
   const [citation, setCitation] = useState(null);
 
-  // The legend is part of the answer for anyone copying it into a working
-  // paper: a set of flags without the threshold they were derived against is
-  // not reviewable, which is the whole reason it is emitted.
-  const copyText = [summary, answer, evidence, legend?.markdown]
+  const displayAnswer = hideCaveats(answer);
+
+  const copyText = [summary, displayAnswer, evidence]
     .filter(Boolean)
     .join('\n\n');
 
@@ -126,9 +136,9 @@ export default function AnswerCard({ result, mode, conversationId }) {
         </div>
       )}
 
-      {answer && (
+      {displayAnswer && (
         <div className="answer__body">
-          <Markdown>{answer}</Markdown>
+          <Markdown>{displayAnswer}</Markdown>
         </div>
       )}
 
@@ -152,12 +162,6 @@ export default function AnswerCard({ result, mode, conversationId }) {
               {uploaded.reduce((n, d) => n + (d.unreadable_cells || 0), 0)} figure(s) withheld
             </span>
           )}
-        </div>
-      )}
-
-      {legend?.markdown && (
-        <div className={`answer__legend ${legend.provisional ? 'is-provisional' : ''}`}>
-          <Markdown>{legend.markdown}</Markdown>
         </div>
       )}
 

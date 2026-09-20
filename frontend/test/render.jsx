@@ -27,7 +27,7 @@ import UploadPanel from '../src/components/ingestion/UploadPanel';
 import DocumentChips from '../src/components/ingestion/DocumentChips';
 import Composer from '../src/components/chat/Composer';
 import ChatView from '../src/components/chat/ChatView';
-import DocumentPane from '../src/components/ingestion/DocumentPane';
+import DocumentPane, { EditableTable } from '../src/components/ingestion/DocumentPane';
 
 const MODE = { id: 'financial-statement', base_path: '/api/financial-statement', short_label: 'FS' };
 
@@ -136,13 +136,40 @@ const CASES = [
   ['DocumentPane', <DocumentPane mode={MODE} conversationId="c1" doc={DOC} onClose={() => {}} />],
   ['DocumentPane (no conversation)', <DocumentPane mode={MODE} conversationId={null} doc={DOC} onClose={() => {}} />],
   ['DocumentPane (null doc)', <DocumentPane mode={MODE} conversationId="c1" doc={null} onClose={() => {}} />],
+
+  // A table with one flagged cell -- the exact shape `page_text` returns
+  // when ARTHA_FS_UPLOAD_USER_EDITS is on (see edits.cells_for_table). Only
+  // this shape switches a table off the plain <Markdown> path, so this is
+  // the one render case that actually exercises the button/badge/ARIA label,
+  // not just the "Loading…" placeholder every other DocumentPane case stops
+  // at (renderToString runs no effects, so PageText's own fetch never fires).
+  ['EditableTable (one flagged cell)', <EditableTable
+    mode={MODE} conversationId="c1" docId="up_a" pageNo={5} onSaved={() => {}}
+    table={{
+      table_id: 'up_a_t1',
+      table_md: '| Particulars | Amount |\n| --- | --- |\n'
+        + '| Revenue | [unreadable: page 5, table t1, row "Revenue", col "Amount"] |',
+      cells: [{
+        row_index: 0, col_index: 1, state: 'unreadable',
+        marker: '[unreadable: page 5, table t1, row "Revenue", col "Amount"]',
+        recovered_text: null, confidence: null, row_label: 'Revenue', column: 'Amount',
+      }],
+    }}
+  />, (html) => {
+    if (!html.includes('docpane__cellbtn--unreadable')) throw new Error('no state badge class');
+    if (!html.includes('<button')) throw new Error('the flagged cell did not render as a button');
+    if (!html.includes('Unreadable figure, row Revenue, column Amount')) {
+      throw new Error('the ARIA label did not name the row/column');
+    }
+  }],
 ];
 
 let failed = 0;
-for (const [name, element] of CASES) {
+for (const [name, element, check] of CASES) {
   try {
     const html = renderToString(element);
     if (typeof html !== 'string') throw new Error('did not produce markup');
+    check?.(html);
     console.log(`  ok    ${name}`);
   } catch (e) {
     failed += 1;

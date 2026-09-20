@@ -39,6 +39,7 @@ import hashlib
 import re
 
 from . import vlm_read
+from .config import Config
 from .identify import classify_statement, classify_statement_from_page, detect_units
 from .models import (
     CHUNK_HEADING,
@@ -100,6 +101,7 @@ def build_table_record(
     snippet_jpeg_b64: str | None = None,
     source_file: str | None = None,
     toc_root: str | None = None,
+    recovered: list | None = None,
 ) -> TableRecord:
     # Caption first, then the page's own heading. See
     # classify_statement_from_page: a scanned filing marks up no captions, so
@@ -139,6 +141,7 @@ def build_table_record(
         source_file=source_file,
         findings=findings,
         footings=footings,
+        recovered=recovered or [],
     )
 
 
@@ -356,15 +359,28 @@ def build_result(
 
     unreadable: list[CellFinding] = []
     failed: list[FootingCheck] = []
+    # Merged reporting view: every arithmetic-PROMOTED cell (tagged
+    # promoted=True) plus every display-only recovered CellFinding (tagged
+    # promoted=False) -- the latter is deliberately ALSO still counted in
+    # `unreadable` above via table.findings, so a consumer that only knows
+    # the pre-recovery `unreadable_cells` count never under-warns: its figure
+    # is still not usable, whatever this merged view additionally says about it.
+    recovered: list[dict] = []
     for table in tables:
         unreadable.extend(table.findings)
         failed.extend(f for f in table.footings if not f.passed)
+        for rc in table.recovered:
+            recovered.append({**rc.as_dict(), "promoted": True})
+        for f in table.findings:
+            if f.recovered_text is not None:
+                recovered.append({**f.as_dict(), "promoted": False})
 
     quality = DocumentQuality(
         pages=qualities,
         duplicate_pages=[q.page_no for q in qualities if q.duplicate_of],
         unreadable_cells=unreadable,
         failed_footings=failed,
+        recovered_cells=recovered,
         vlm_used=vlm_used,
         notes=notes,
     )
@@ -380,6 +396,7 @@ def build_result(
         total_tables=len(tables),
         total_chunks=len(texts),
         sha256=hashlib.sha256(data).hexdigest(),
+        ingest_version=Config.PIPELINE_VERSION,
     )
 
     return IngestResult(

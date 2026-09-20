@@ -188,6 +188,15 @@ class Orchestrator:
             r"|\bfair value\b|\bfinancial risk\b|\bmanagerial remuneration\b"
             r"|\bcapital management\b|\bcontingent liabilit|\bexceptional items?\b|\bgovernment grants?\b|\bsuspense\b"
         ),
+        # \bgovernment grants?\b is deliberately NOT repeated here — a bare
+        # "government grants" question stays in Account Area Review above;
+        # this playbook needs an ownership/PSU-status/exemption signal, not
+        # just any mention of the word "government".
+        "Government-Company & PSU Review": (
+            r"\bpsu\b|\bgovernment compan(y|ies)\b|\bcpsu\b|\bstate.owned\b|\bpublic sector\b"
+            r"|\bmaharatna\b|\bnavratna\b|\bminiratna\b|\b143\(6\)\b|\bred flags?\b"
+            r"|\bsubsidy dependence\b|\bbudgetary support\b|\bsection 197\b|\bsection 185\b|\bsection 186\b"
+        ),
     }
 
     # At most this many playbooks per request — two covers a genuine compound
@@ -243,11 +252,15 @@ class Orchestrator:
         "Annual Report Summary": {"summarize_annual_report"},
         "Auditor's Report & CARO": {
             "check_caro_clauses", "check_rule_11g", "get_audit_report_highlights",
+            "cross_check_caro_vs_notes",
         },
         # get_schedule_note: same reason as Trend — check the note before inferring.
         "Going Concern & Subsequent Events": {"assess_going_concern", "get_schedule_note"},
         "Account Area Review": {
             "review_account_area", "search_company_disclosures", "get_accounting_policy_note",
+        },
+        "Government-Company & PSU Review": {
+            "scan_psu_red_flags", "get_schedule_note", "search_company_disclosures",
         },
     }
 
@@ -486,7 +499,7 @@ class Orchestrator:
             model_name=tool_names.Config.LLM_MODEL_NAME,
             base_url=tool_names.Config.LLM_BASE_URL,
             max_tokens=max_tokens,
-            timeout=120,
+            timeout=tool_names.Config.LLM_TIMEOUT_SECONDS,
             **kwargs,
         )
 
@@ -925,7 +938,39 @@ class Orchestrator:
                 "knowledge base or the annual reports. Treat it as unsourced."
             )
 
-        return "\n".join(md_lines), intent
+        rendered = "\n".join(md_lines)
+        hits = self._scan_prohibited_wording(f"{summary}\n{final_answer}")
+        if hits:
+            warning = (
+                "> ⚠ This answer used wording flagged by the prohibited-wording check "
+                f"({', '.join(hits)}) — review before relying on it."
+            )
+            rendered = f"{warning}\n{rendered}"
+
+        return rendered, intent
+
+    # A small, fixed, literal-phrase backstop mirroring prompt.md's "Prohibited
+    # wording — safe framing table" 1:1. Deliberately NOT a broad semantic
+    # filter — the table is short and closed, so a literal scan stays cheap to
+    # maintain and won't false-positive on ordinary hedged audit language.
+    # This never rewrites the model's prose (that risks mangling grammar or
+    # hiding a real problem); it only surfaces a visible warning, the same
+    # human-in-the-loop posture the confidence cap above already takes.
+    _PROHIBITED_PHRASES = (
+        "committed fraud",
+        "receivables are not recoverable",
+        "receivable is not recoverable",
+        "the accounts are wrong",
+        "failed to audit",
+        "not a going concern",
+    )
+
+    @classmethod
+    def _scan_prohibited_wording(cls, text: str) -> list[str]:
+        if not text:
+            return []
+        lowered = text.lower()
+        return [phrase for phrase in cls._PROHIBITED_PHRASES if phrase in lowered]
 
     # ------------------------------------------------------------------
     # Confidence capping
@@ -953,6 +998,12 @@ class Orchestrator:
         "no chunks were retrieved",
         "data quality note",
         "coverage caveat",
+        # A tool's output carried an unconfirmed second-read recovery -- a
+        # figure shown but not vouched for by arithmetic (see verify.py /
+        # upload/quality.py). An arithmetic-PROMOTED recovery has no marker
+        # at all and never reaches this list, which is exactly right: it
+        # needs no confidence cap.
+        "[recovered",
     )
 
     @classmethod

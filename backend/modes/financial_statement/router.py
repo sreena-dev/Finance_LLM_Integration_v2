@@ -26,6 +26,7 @@ from app.schemas import QueryRequest, QueryResponse
 from . import adapter
 from . import conversations as convo
 from .upload import client as ingest_client
+from .upload import edits as upload_edits
 from .upload import materiality as upload_materiality
 from .upload import quality as upload_quality
 from .upload import store as upload_store
@@ -258,9 +259,19 @@ async def upload_health():
     """
     ingest_available, ingest_reason = await asyncio.to_thread(ingest_client.status)
     store_available, store_reason = await asyncio.to_thread(upload_store.STORE.ping)
+
+    # The durable half, reported separately. An upload that converts and caches
+    # but cannot be persisted is not a healthy upload -- it is one that will
+    # disappear at the next cache expiry with nothing to say why, which is the
+    # exact failure persistence was added to end. `persistence_status` returns
+    # (True, None) when persistence is deliberately switched off, so a
+    # Redis-only deployment still reports healthy.
+    persist_available, persist_reason = await asyncio.to_thread(
+        upload_store.persistence_status
+    )
     return {
-        "available": ingest_available and store_available,
-        "reason": ingest_reason or store_reason,
+        "available": ingest_available and store_available and persist_available,
+        "reason": ingest_reason or store_reason or persist_reason,
     }
 
 
@@ -395,6 +406,49 @@ async def upload_events(job_id: str, user: CurrentUser = Depends(require_user)):
                         texts=payload.get("texts") or [],
                         pages=payload.get("pages") or [],
                     )
+
+                    # Carry forward any prior user-entered figures (see
+                    # edits.py) before this re-extraction overwrites the
+                    # document — `doc_id` is content-addressed, so re-
+                    # uploading the same file replaces rather than
+                    # accumulates, and would otherwise silently wipe them.
+                    # Gated on the flag: with it off, no document can carry
+                    # `user_edits` in the first place, so skip the extra read.
+                    carried_applied = carried_dropped = 0
+                    if upload_store.USER_EDITS_ENABLED:
+                        try:
+                            existing = await asyncio.to_thread(
+                                upload_store.STORE.get, user.user_id,
+                                conversation_id, document.doc_id,
+                            )
+                        except upload_store.UploadStoreError as exc:
+                            logger.warning(
+                                "could not check %s for prior edits to carry "
+                                "forward (%s); proceeding without them",
+                                document.doc_id, exc,
+                            )
+                            existing = None
+                        if existing is not None and upload_edits.active_edits(existing.quality):
+                            try:
+                                carried_applied, carried_dropped = upload_edits.carry_forward(
+                                    existing.quality, document
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                logger.warning(
+                                    "carry_forward failed for %s (%s); proceeding "
+                                    "with no edits carried forward",
+                                    document.doc_id, exc,
+                                )
+                        if carried_dropped:
+                            notes = list((document.quality or {}).get("notes") or [])
+                            notes.append(
+                                f"{carried_dropped} figure(s) a user previously entered by "
+                                "hand could not be carried forward to this re-extraction "
+                                "-- the cell no longer reads the same way it did before. "
+                                "Re-enter them if they are still needed."
+                            )
+                            document.quality["notes"] = notes
+
                     try:
                         await asyncio.to_thread(upload_store.STORE.put, document)
                     except upload_store.UploadStoreError as exc:
@@ -405,10 +459,14 @@ async def upload_events(job_id: str, user: CurrentUser = Depends(require_user)):
                         yield "event: error\ndata: " + json.dumps({"error": str(exc)}) + "\n\n"
                         continue
                     logger.info(
-                        "upload stored: user=%s conversation=%s doc_id=%s tables=%d withheld=%d",
+                        "upload stored: user=%s conversation=%s doc_id=%s tables=%d withheld=%d recovered=%d",
                         user.username, conversation_id, document.doc_id,
                         len(document.tables),
                         len((document.quality or {}).get("unreadable_cells") or []),
+                        sum(
+                            1 for c in ((document.quality or {}).get("recovered_cells") or [])
+                            if c.get("promoted")
+                        ),
                     )
                     # The browser gets the compact summary plus the quality
                     # report, not the whole extracted document: the tables run to
@@ -416,6 +474,10 @@ async def upload_events(job_id: str, user: CurrentUser = Depends(require_user)):
                     body = json.dumps({
                         **upload_quality.as_payload(document),
                         "conversation_id": conversation_id,
+                        **(
+                            {"carried_forward_edits": carried_applied, "dropped_edits": carried_dropped}
+                            if (carried_applied or carried_dropped) else {}
+                        ),
                     })
                     yield "event: result\ndata: " + body + "\n\n"
                     continue
@@ -482,6 +544,63 @@ async def delete_document(doc_id: str, conversation_id: str,
     if not removed:
         raise HTTPException(status_code=404, detail="No such uploaded document.")
     return None
+
+
+@router.patch("/documents/{doc_id}/tables/{table_id}/cells")
+async def edit_table_cell(doc_id: str, table_id: str, conversation_id: str,
+                          req: dict, user: CurrentUser = Depends(require_user)):
+    """Set, confirm or revert one cell the extraction flagged `[unreadable
+    ...]` or `[recovered ...]`, from a figure the user read off the scan.
+
+    Off by default (`ARTHA_FS_UPLOAD_USER_EDITS`) — see `edits.py`'s module
+    docstring and `store.USER_EDITS_ENABLED` for why. All the policy —
+    scope, validation, idempotency, the advisory footing re-check — lives in
+    `edits.apply`; this route only resolves the document, calls into the
+    narrow single-table write path, and translates `edits.EditError` into the
+    HTTP status it already carries.
+    """
+    if not upload_store.USER_EDITS_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    conversation_id = conversation_id.strip()
+    try:
+        document = await asyncio.to_thread(
+            upload_store.STORE.get, user.user_id, conversation_id, doc_id
+        )
+    except upload_store.UploadStoreError as exc:
+        raise _upload_store_unavailable(exc) from exc
+    if document is None:
+        raise HTTPException(status_code=404, detail="No such uploaded document.")
+    if not any(t.get("table_id") == table_id for t in document.tables):
+        raise HTTPException(status_code=404, detail="No such table in that document.")
+
+    def mutate(table_md, quality):
+        return upload_edits.apply(
+            table_md, quality, doc_id=doc_id, stored_table_id=table_id,
+            request=req, user_id=user.user_id,
+        )
+
+    try:
+        outcome = await asyncio.to_thread(
+            upload_store.STORE.update_cell, user.user_id, conversation_id, doc_id,
+            table_id, mutate,
+        )
+    except upload_edits.EditError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.as_dict()) from exc
+    except upload_store.UploadStoreError as exc:
+        raise _upload_store_unavailable(exc) from exc
+    if outcome is None:
+        raise HTTPException(status_code=404, detail="No such uploaded document or table.")
+
+    try:
+        refreshed = await asyncio.to_thread(
+            upload_store.STORE.get, user.user_id, conversation_id, doc_id
+        )
+    except upload_store.UploadStoreError as exc:
+        raise _upload_store_unavailable(exc) from exc
+    summary = refreshed.summary() if refreshed is not None else None
+
+    return {**outcome, "summary": summary}
 
 
 @router.post("/materiality")
@@ -668,4 +787,13 @@ async def page_text(doc_id: str, page_no: int, conversation_id: str,
         raise HTTPException(status_code=404, detail="No such uploaded document.")
     narrative = [c for c in document.narrative() if c.get("page_ocr_start") == page_no]
     tables = [t for t in document.financial_tables() if t.get("page_ocr_start") == page_no]
+    if upload_store.USER_EDITS_ENABLED:
+        # Flagged cells addressed by (row_index, col_index), never derived by
+        # the client from marker text — a marker string is not unique across
+        # a table (two "Additions" rows), the exact case ingestion's own
+        # redaction had to fix by switching to index-keyed lookups.
+        for table in tables:
+            table["cells"] = upload_edits.cells_for_table(
+                document.quality, doc_id, table.get("table_id") or "", table.get("table_md") or "",
+            )
     return {"doc_id": doc_id, "page_no": page_no, "narrative": narrative, "tables": tables}

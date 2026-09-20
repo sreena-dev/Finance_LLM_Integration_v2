@@ -72,4 +72,16 @@ research_agent_tested.zip
 *.iml
 FS_AI_Audit_Final_Detailed_Team_Edition v4.0.pdf
 
+# The local sample corpus the ingestion accuracy harness and manual upload
+# testing read from (`tests/accuracy/cases/*.yaml` point `pdf:` paths into
+# this directory, and `runner.py`'s `DATA` constant resolves them there) —
+# real scanned financial statements for named entities. Same reasoning as
+# `backend/modes/sessions/` above: this is client data, not source, and does
+# not belong in a shared/public remote. A contributor who needs the corpus to
+# run the accuracy harness fetches it out of band and places it here; without
+# it, the harness fails open (`FileNotFoundError` on the missing PDF) rather
+# than silently reporting a false pass.
+data/
+data.zip
+
 

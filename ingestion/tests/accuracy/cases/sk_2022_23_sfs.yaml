@@ -1,0 +1,138 @@
+name: SK-SPSU-SSLSA-010 2022-23 SFS
+pdf: SK-SPSU-SSLSA-010/2022-23/SK-SPSU-SSLSA-010_2022-23_SFS_20260616222625590.pdf
+
+# Ground truth read off the rendered pages by eye, the same discipline
+# tests/fixtures/README.md sets out. Two pages: Form-1 Income and Expenditure
+# Account, Form-2 Balance Sheet. A clean, well-ruled scan -- every row has its
+# own rule -- which is what makes it a good measuring stick: anything this
+# document gets wrong is the pipeline's doing, not the scan's.
+#
+# Deliberately includes figures the pipeline does NOT currently produce. That is
+# the point of a scoreboard: the withheld pair on page 1 and the Appendix
+# confusion on page 2 are the defects this work exists to remove, so they are
+# recorded as truth and allowed to score against us until they are fixed.
+
+expectations:
+
+  # --- Form-1: Income and Expenditure Account, page 1 --------------------
+  # The header prints "Currrent Year" (sic) in the original; column matching is
+  # fuzzy, so the correctly-spelled form here still resolves.
+
+  - row_label: Grants/Subsidies
+    column_label: Current Year
+    page: 1
+    value: 85566264.00
+    verified: true
+  - row_label: Grants/Subsidies
+    column_label: Previous Year
+    page: 1
+    value: 63738574.00
+    verified: true
+  - row_label: Interest Earned
+    column_label: Current Year
+    page: 1
+    value: 120650.00
+    verified: true
+  - row_label: Other Income
+    column_label: Current Year
+    page: 1
+    value: 559000.00
+    verified: true
+  - row_label: Total (A)
+    column_label: Current Year
+    page: 1
+    value: 86245914.00
+    verified: true
+  - row_label: Total (A)
+    column_label: Previous Year
+    page: 1
+    value: 64230777.00
+    verified: true
+  - row_label: Establishment Expenses
+    column_label: Current Year
+    page: 1
+    value: 52629289.00
+    verified: true
+  - row_label: Other Administrative Expenses, etc.
+    column_label: Current Year
+    page: 1
+    value: 15238947.00
+    verified: true
+  - row_label: Expenditure on Grants, Subsidies, etc.
+    column_label: Current Year
+    page: 1
+    value: 5440000.00
+    verified: true
+  - row_label: Total (B)
+    column_label: Current Year
+    page: 1
+    value: 74171451.95
+    verified: true
+
+  # The two figures that motivated this work. Both are printed plainly on a
+  # clean page and both are withheld today as `readers_disagree`: the first
+  # because its row was merged with "Transfer to Special Reserve", the second
+  # as collateral damage from that merge throwing off row alignment for the
+  # rest of the block. Expect WITHHELD now, CORRECT once arbitration lands.
+  - row_label: Balance being excess of Expenditure over Income (B-A)
+    column_label: Current Year
+    page: 1
+    value: 12074462.05
+    verified: true
+    note: withheld today (readers_disagree) -- merged with the row beneath it
+  - row_label: Balance being Surplus/(Deficit) Carried to Corpus/Capital Fund
+    column_label: Current Year
+    page: 1
+    value: 12074462.05
+    verified: true
+    note: withheld today, though this row is not itself merged
+  - row_label: Balance being Surplus/(Deficit) Carried to Corpus/Capital Fund
+    column_label: Previous Year
+    page: 1
+    value: -2481167.55
+    verified: true
+    note: printed in parentheses as (24,81,167.55)
+
+  # --- Form-2: Balance Sheet, page 2 ------------------------------------
+  # This table is where the "Appendix" column is dense enough to be mistaken
+  # for money: Fixed Assets currently extracts as 8 (its appendix number)
+  # rather than 24,91,771.03, because the note-column pattern in
+  # tables._resolve_roles matches "Note"/"Notes" and not "Appendix".
+
+  - row_label: Corpus/Capital Fund
+    column_label: Current Year
+    page: 2
+    value: 15185562.98
+    verified: true
+  - row_label: Corpus/Capital Fund
+    column_label: Previous Year
+    page: 2
+    value: 3111100.93
+    verified: true
+  - row_label: Earmarked/Endownment Funds
+    column_label: Current Year
+    page: 2
+    value: 2469.00
+    verified: true
+  - row_label: Fixed Assets
+    column_label: Current Year
+    page: 2
+    value: 2491771.03
+    verified: true
+    note: extracts as 8.0 today -- the Appendix number read as a figure
+  - row_label: Fixed Assets
+    column_label: Previous Year
+    page: 2
+    value: 1331113.98
+    verified: true
+  - row_label: Current Assets, Loans, Advances, etc.
+    column_label: Current Year
+    page: 2
+    value: 12696260.95
+    verified: true
+    note: extracts as 11.0 today -- same Appendix confusion
+  - row_label: Current Assets, Loans, Advances, etc.
+    column_label: Previous Year
+    page: 2
+    value: 1782455.95
+    verified: true

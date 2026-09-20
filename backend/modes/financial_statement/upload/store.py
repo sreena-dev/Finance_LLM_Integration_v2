@@ -1,26 +1,32 @@
 """Where an uploaded document lives, and for how long.
 
-Backed by Redis, not a database and not this process's own memory. The original
-requirement — an uploaded file itself is never stored anywhere — still holds:
-the PDF is dropped the moment the ingestion service's job ends (see
-``ingestion/app/jobs.py``), and only the extracted result ever reaches here.
-What changed is *where* that extracted result lives while its conversation is
-alive: a plain in-process dict could not survive a gateway restart, which meant
-restarting the gateway to deploy new code silently threw away every document a
-user had uploaded moments before, with no way to recover it short of
-re-uploading. Redis, with AOF persistence enabled (see ``docker-compose.yml``'s
-``redis`` service), survives that — and survives a Redis restart too, which a
-dict obviously never could.
+**Two stores, with different jobs.** Postgres is the system of record and holds
+an extraction for ``ARTHA_FS_UPLOAD_RETENTION_DAYS`` (30); Redis is the hot
+cache in front of it and holds one for ``ARTHA_FS_UPLOAD_TTL_SECONDS`` (2h).
+See ``pgstore.py`` and ``schema.py``.
 
-**Lifetime is still the conversation's.** That answer to "how long should a
-document stay analysable" has not changed: as long as the conversation it
-belongs to is alive. A document is dropped when its conversation is deleted
-(the primary path — ``drop_conversation`` below, called from ``DELETE
-/conversations/{id}``), when the conversation has been idle past
-``ARTHA_FS_UPLOAD_TTL_SECONDS`` (the backstop, enforced by Redis's own native
-per-key ``EXPIRE`` rather than a lazy sweep), or when a user's resident
-documents exceed ``ARTHA_FS_UPLOAD_MAX_DOCS`` and the oldest is evicted to make
-room.
+The original requirement — **an uploaded file itself is never stored anywhere**
+— still holds exactly as before. The PDF is dropped the moment the ingestion
+service's job ends (see ``ingestion/app/jobs.py``), and only the extracted
+result ever reaches either store. What is persisted is markdown tables,
+narrative chunks, page images and the quality report: what the tools read, not
+the document.
+
+**Why not Redis alone.** It was Redis alone, on the 2-hour TTL, and when that
+lapsed there was no recovery path at all — the source PDF was already gone, so
+the user had to re-upload and pay for a full re-conversion, minutes of OCR.
+Simply raising the TTL does not work either: Redis runs ``maxmemory 3gb`` with
+``maxmemory-policy noeviction`` and one document is several MB of mostly base64
+page images, so a few dozen users' retained documents fill the instance and
+Redis then *rejects new uploads* rather than evicting old ones.
+
+**Lifetime.** A document is dropped when its conversation is deleted (the
+primary path — ``drop_conversation`` below, called from ``DELETE
+/conversations/{id}``, which now clears both stores), when its retention window
+expires (``_maybe_sweep``), or — from the cache only — when the conversation
+has been idle past the TTL or the user's resident documents exceed
+``ARTHA_FS_UPLOAD_MAX_DOCS``. Falling out of the cache is no longer a loss: the
+next read reloads from Postgres and warms Redis again.
 
 Note what is *still not* kept in the model's context: the documents themselves.
 The tools reach into this store on demand, exactly as they reach into Postgres
@@ -65,6 +71,40 @@ def _int_env(name: str, default: int) -> int:
 TTL_SECONDS = _int_env("ARTHA_FS_UPLOAD_TTL_SECONDS", 7200)
 MAX_DOCS_PER_USER = _int_env("ARTHA_FS_UPLOAD_MAX_DOCS", 12)
 MAX_UPLOAD_BYTES = _int_env("ARTHA_FS_UPLOAD_MAX_BYTES", 64 * 1024 * 1024)
+
+# How long an extraction survives in POSTGRES, which is a different question
+# from how long it stays hot in Redis. TTL_SECONDS above bounds the cache; this
+# bounds the record. It cannot simply be TTL_SECONDS raised to 30 days: Redis
+# runs `maxmemory 3gb` with `maxmemory-policy noeviction` and a document is
+# several MB of mostly base64 page images, so a few dozen users' retained
+# documents would fill the instance and Redis would then REJECT new uploads
+# rather than evict old ones.
+RETENTION_DAYS = _int_env("ARTHA_FS_UPLOAD_RETENTION_DAYS", 30)
+
+# Whether Postgres is used at all. Off leaves the pre-existing Redis-only
+# behaviour exactly as it was, which is what makes this safe to roll back
+# without a code change if the platform database is unavailable.
+PERSIST_TO_POSTGRES = (
+    (os.getenv("ARTHA_FS_UPLOAD_PERSIST", "") or "1").strip().lower()
+    not in ("0", "false", "no", "off")
+)
+
+# Whether a user may edit a cell the extraction flagged `[unreadable ...]` or
+# `[recovered ...]`. Default OFF: this changes the trust model for every
+# downstream answer (a figure with no machine evidence can enter the system),
+# so the owner opts in deliberately rather than it landing on by rollout.
+USER_EDITS_ENABLED = (
+    (os.getenv("ARTHA_FS_UPLOAD_USER_EDITS", "") or "0").strip().lower()
+    not in ("0", "false", "no", "off")
+)
+
+# At most one expiry sweep per process per this many seconds. The sweep is
+# opportunistic (see _maybe_sweep) rather than scheduled, matching the
+# self-healing style `list` and `_enforce_cap` already use rather than adding a
+# scheduler this service does not have.
+_SWEEP_INTERVAL_SECONDS = _int_env("ARTHA_FS_UPLOAD_SWEEP_SECONDS", 3600)
+_last_sweep = 0.0
+_sweep_lock = threading.Lock()
 
 # How long the per-user cap-tracking ZSET (fs:cap:{user}) is allowed to sit
 # untouched before Redis reclaims it on its own. Deliberately much longer than
@@ -251,12 +291,29 @@ class UploadedDocument:
             "framework": self.identification.get("framework"),
             "framework_division": self.identification.get("framework_division"),
             "statement_flavour": self.identification.get("statement_flavour"),
+            "flavour_confidence": self.identification.get("flavour_confidence"),
             "pages": self.document.get("total_pages_pdf"),
             "tables": len(self.tables),
             "grade": quality.get("grade"),
             "low_grade": quality.get("low_grade"),
             "unreadable_cells": len(quality.get("unreadable_cells") or []),
+            #: Of the cells still counted above, how many carry a second
+            #: reader's figure that the arithmetic did NOT confirm -- these
+            #: are the "[recovered ...]" ones, still un-computable, but shown
+            #: rather than blank. Does NOT include an arithmetic-promoted
+            #: figure: that one is no longer withheld at all, so it is not in
+            #: `unreadable_cells` either.
+            "recovered_cells": sum(
+                1 for c in (quality.get("recovered_cells") or []) if not c.get("promoted")
+            ),
             "failed_footings": len(quality.get("failed_footings") or []),
+            #: Figures a user typed after reading the scan (see edits.py).
+            #: Counted separately from `unreadable_cells`/`recovered_cells`
+            #: above, which an edit removes the cell from -- so this is the
+            #: only place the total number of user-supplied figures shows up.
+            "user_entered_cells": len(
+                [e for e in (quality.get("user_edits") or []) if e.get("active", True)]
+            ),
             "vlm_used": quality.get("vlm_used"),
             "uploaded_at": self.uploaded_at,
         }
@@ -348,6 +405,12 @@ class DocumentStore:
     # ---- writing -------------------------------------------------------
 
     def put(self, document: UploadedDocument) -> None:
+        # Postgres FIRST, and a failure here fails the upload: it is the system
+        # of record, and reporting a successful conversion for a document that
+        # was never durably written would leave the user believing they had a
+        # document that vanishes at the next cache expiry.
+        _persist(document)
+
         r = self._redis()
         doc_key = _doc_key(document.user_id, document.conversation_id, document.doc_id)
         conv_key = _conv_set_key(document.user_id, document.conversation_id)
@@ -362,8 +425,123 @@ class DocumentStore:
             pipe.expire(cap_key, USER_CAP_TTL_SECONDS)
             pipe.execute()
         except redis.exceptions.RedisError as exc:
+            # The cache failing is NOT the upload failing, now that the
+            # document is safe in Postgres -- the next read repopulates. Before
+            # persistence existed this had to be fatal, because Redis was the
+            # only copy.
+            if PERSIST_TO_POSTGRES:
+                logger.warning(
+                    "cached %s to Redis failed (%s); serving it from Postgres",
+                    document.doc_id, exc,
+                )
+                return
             raise UploadStoreError(f"Could not store {document.doc_id}: {exc}") from exc
         self._enforce_cap(document.user_id)
+        _maybe_sweep()
+
+    def update_cell(self, user_id: str, conversation_id: str, doc_id: str,
+                     table_id: str, mutate):
+        """Apply one cell edit (`edits.apply`) to a stored document.
+
+        Postgres first, same reasoning as `put()`: it is the system of
+        record, so `mutate` must run exactly once, against it. `mutate` is
+        NOT idempotent -- it appends to `history` and checks `expected_cell`
+        against the value it is given -- so once Postgres has applied it, the
+        Redis cache is patched with the values just committed rather than
+        calling `mutate` again.
+
+        Returns `None` if the document or table does not exist (caller: 404).
+        Raises whatever `mutate` raises (typically `edits.EditError`) with
+        nothing written anywhere. Raises `UploadStoreError` only for a Redis
+        failure in Redis-only mode -- with persistence on, a cache failure
+        after the Postgres commit is logged and the edit still reports success
+        (see below), exactly like `put()`.
+        """
+        if not _persistence_enabled():
+            return self._update_cell_redis_only(user_id, conversation_id, doc_id,
+                                                 table_id, mutate)
+
+        from . import pgstore
+        outcome = pgstore.update_table_cell(user_id, conversation_id, doc_id,
+                                             table_id, mutate)
+        if outcome is None:
+            return None
+        new_md, new_quality, result = outcome
+
+        r = self._redis()
+        doc_key = _doc_key(user_id, conversation_id, doc_id)
+        try:
+            raw = r.get(doc_key)
+            if raw is not None:
+                blob = json.loads(raw)
+                for table in blob.get("tables") or []:
+                    if table.get("table_id") == table_id:
+                        table["table_md"] = new_md
+                        break
+                blob["quality"] = new_quality
+                # KEEPTTL: an edit must not extend how long this document
+                # stays cached -- only a fresh upload/reload resets that clock.
+                r.set(doc_key, json.dumps(blob), keepttl=True)
+            # else: the cache entry has already expired. Nothing to patch --
+            # the next get() reloads from Postgres, which already holds the
+            # edit, and rewarms the cache with it. Nothing lost.
+        except redis.exceptions.RedisError as exc:
+            # The edit is safely in Postgres. A stale cached blob (missing
+            # this edit) must not outlive it, so drop the key rather than
+            # leave it to expire naturally up to TTL_SECONDS later.
+            logger.warning(
+                "could not refresh cached %s after a cell edit (%s); dropping"
+                " the cached copy so it reloads from Postgres", doc_id, exc,
+            )
+            try:
+                r.delete(doc_key)
+            except redis.exceptions.RedisError:
+                pass
+        return result
+
+    def _update_cell_redis_only(self, user_id: str, conversation_id: str, doc_id: str,
+                                 table_id: str, mutate):
+        """`update_cell` when Postgres persistence is off. Redis is then the
+        only copy, so the edit needs its own WATCH/MULTI transaction rather
+        than the plain SET `put()` uses -- two edits racing the same document
+        must not let the second one silently overwrite the first's write with
+        a blob it built from data read before the first edit landed."""
+        r = self._redis()
+        doc_key = _doc_key(user_id, conversation_id, doc_id)
+        for _attempt in range(5):
+            pipe = r.pipeline()
+            try:
+                pipe.watch(doc_key)
+                raw = pipe.get(doc_key)
+                if raw is None:
+                    pipe.unwatch()
+                    return None
+                blob = json.loads(raw)
+                table_md = None
+                target = None
+                for table in blob.get("tables") or []:
+                    if table.get("table_id") == table_id:
+                        table_md = table.get("table_md") or ""
+                        target = table
+                        break
+                if target is None:
+                    pipe.unwatch()
+                    return None
+                new_md, new_quality, result = mutate(table_md, blob.get("quality") or {})
+                target["table_md"] = new_md
+                blob["quality"] = new_quality
+                pipe.multi()
+                pipe.set(doc_key, json.dumps(blob), keepttl=True)
+                pipe.execute()
+                return result
+            except redis.exceptions.WatchError:
+                continue
+            except Exception:
+                pipe.reset()
+                raise
+        raise UploadStoreError(
+            f"Could not save the edit to {doc_id}: too many concurrent edits."
+        )
 
     def delete(self, user_id: str, conversation_id: str, doc_id: str) -> bool:
         r = self._redis()
@@ -375,8 +553,12 @@ class DocumentStore:
             existed, _removed_from_set, _removed_from_cap = pipe.execute()
         except redis.exceptions.RedisError as exc:
             raise UploadStoreError(f"Could not delete {doc_id}: {exc}") from exc
+        # Delete the RECORD too, not just the cache. Leaving the row would
+        # bring the document back on the next cache miss -- a delete the user
+        # watched succeed, silently undone.
+        removed = _unpersist(user_id, conversation_id, doc_id)
         _evict_index_cache(doc_id)
-        return bool(existed)
+        return bool(existed) or removed
 
     def drop_conversation(self, user_id: str, conversation_id: str) -> int:
         """Called when a conversation is deleted. This is the primary
@@ -385,10 +567,15 @@ class DocumentStore:
         r = self._redis()
         conv_key = _conv_set_key(user_id, conversation_id)
         cap_key = _user_cap_key(user_id)
+        # The record goes first and unconditionally: an empty Redis set means
+        # the cache has expired, NOT that there is nothing to delete, and
+        # returning early on it would leave every row behind for the full
+        # retention window after the user deleted the conversation.
+        persisted = _unpersist_conversation(user_id, conversation_id)
         try:
             doc_ids = r.smembers(conv_key)
             if not doc_ids:
-                return 0
+                return persisted
             pipe = r.pipeline()
             for doc_id in doc_ids:
                 pipe.delete(_doc_key(user_id, conversation_id, doc_id))
@@ -401,7 +588,7 @@ class DocumentStore:
             ) from exc
         for doc_id in doc_ids:
             _evict_index_cache(doc_id)
-        return len(doc_ids)
+        return max(len(doc_ids), persisted)
 
     def touch(self, user_id: str, conversation_id: str) -> None:
         """Refresh the TTL on a conversation's documents.
@@ -433,10 +620,22 @@ class DocumentStore:
         try:
             doc_ids = list(r.smembers(conv_key))
             if not doc_ids:
-                return []
+                # Nothing hot. That is not the same as nothing stored -- the
+                # cache expires in hours and the record lives for weeks -- so
+                # this is where a conversation resumed the next day, or after
+                # a Redis restart, gets its documents back instead of the user
+                # being told to upload them again.
+                return self._rehydrate(user_id, conversation_id)
             keys = [_doc_key(user_id, conversation_id, d) for d in doc_ids]
             raws = r.mget(keys)
         except redis.exceptions.RedisError as exc:
+            recovered = self._rehydrate(user_id, conversation_id)
+            if recovered:
+                logger.warning(
+                    "Redis unavailable listing %s (%s); served %d document(s) "
+                    "from Postgres instead", conversation_id, exc, len(recovered),
+                )
+                return recovered
             raise UploadStoreError(f"Could not list documents: {exc}") from exc
 
         documents: list[UploadedDocument] = []
@@ -456,15 +655,77 @@ class DocumentStore:
                 r.srem(conv_key, *stale)
             except redis.exceptions.RedisError:
                 pass  # purely tidiness; the next list() for this user tries again
+            # Those ids expired out of the cache but may still be within their
+            # retention window, so recover them rather than reporting a
+            # conversation that has quietly lost half its documents.
+            known = {d.doc_id for d in documents}
+            documents.extend(
+                d for d in self._rehydrate(user_id, conversation_id)
+                if d.doc_id not in known
+            )
         return sorted(documents, key=lambda d: d.uploaded_at)
+
+    def _rehydrate(self, user_id: str, conversation_id: str) -> list[UploadedDocument]:
+        """Load from Postgres and warm the cache. [] if persistence is off.
+
+        Never raises: this is a recovery path, and a platform-database problem
+        here must degrade to "no uploads in scope" -- which the caller already
+        handles and reports honestly -- rather than failing the question.
+        """
+        if not _persistence_enabled():
+            return []
+        try:
+            from . import pgstore
+            documents = pgstore.load(user_id, conversation_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not load uploads from Postgres: %s", exc)
+            return []
+        for document in documents:
+            try:
+                self._cache(document)
+            except Exception:  # noqa: BLE001
+                pass  # serving the document matters; caching it is an optimisation
+        return documents
+
+    def _cache(self, document: UploadedDocument) -> None:
+        """Write one document into Redis only, without touching Postgres."""
+        r = self._redis()
+        pipe = r.pipeline()
+        pipe.set(
+            _doc_key(document.user_id, document.conversation_id, document.doc_id),
+            json.dumps(_serializable(document)),
+            ex=TTL_SECONDS,
+        )
+        conv_key = _conv_set_key(document.user_id, document.conversation_id)
+        pipe.sadd(conv_key, document.doc_id)
+        pipe.expire(conv_key, TTL_SECONDS)
+        pipe.execute()
 
     def get(self, user_id: str, conversation_id: str, doc_id: str) -> UploadedDocument | None:
         r = self._redis()
         try:
             raw = r.get(_doc_key(user_id, conversation_id, doc_id))
         except redis.exceptions.RedisError as exc:
-            raise UploadStoreError(f"Could not read {doc_id}: {exc}") from exc
-        return _deserialize(raw) if raw is not None else None
+            raw = None
+            if not _persistence_enabled():
+                raise UploadStoreError(f"Could not read {doc_id}: {exc}") from exc
+        if raw is not None:
+            return _deserialize(raw)
+
+        if not _persistence_enabled():
+            return None
+        try:
+            from . import pgstore
+            document = pgstore.load_one(user_id, conversation_id, doc_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not load %s from Postgres: %s", doc_id, exc)
+            return None
+        if document is not None:
+            try:
+                self._cache(document)
+            except Exception:  # noqa: BLE001
+                pass
+        return document
 
     # ---- maintenance ---------------------------------------------------
 
@@ -565,6 +826,11 @@ class Scope:
         to pass the company name exactly as the user typed it, and a user
         naming an uploaded file will as often type the filename, the entity, or
         neither.
+
+        The YEAR is compared through ``_fy_key`` rather than by string
+        equality, because the spellings genuinely differ across the callers and
+        an exact comparison made the commonest multi-document question
+        unanswerable. See ``_fy_key`` for the three real spellings involved.
         """
         if not self.documents:
             return []
@@ -585,13 +851,130 @@ class Scope:
                 # question about an entity the user never uploaded belongs.
                 results = narrowed
         if financial_year and results:
-            wanted = str(financial_year).strip()
-            exact = [d for d in results if (d.financial_year or "") == wanted]
+            wanted = _fy_key(financial_year)
+            if wanted is not None:
+                exact = [d for d in results if _fy_key(d.financial_year) == wanted]
+            else:
+                # Not recognisable as a financial year at all. Fall back to the
+                # literal comparison this used to do, so anything unusual keeps
+                # behaving exactly as it did.
+                literal = str(financial_year).strip()
+                exact = [d for d in results if (d.financial_year or "") == literal]
             if exact:
                 results = exact
         # Collapse into packages LAST, so filtering still happens per file but
         # what the caller gets back is one entry per filing.
         return group_into_packages(results)
+
+
+def _persistence_enabled() -> bool:
+    """Whether to durably store extractions at all.
+
+    Two different situations, deliberately told apart:
+
+    * **No platform database configured** (no FINANCE_DSN / ARTHA_DB_DSN).
+      A deployment choice, not a fault. Uploads fall back to the Redis-only
+      behaviour this feature had before persistence existed, which still
+      works -- documents just live hours instead of weeks.
+    * **Configured but failing.** A real fault, and `_persist` raises so it
+      surfaces rather than silently costing the user their document.
+    """
+    if not PERSIST_TO_POSTGRES:
+        return False
+    try:
+        from app.auth.db import dsn
+        return bool(dsn())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _persist(document: "UploadedDocument") -> None:
+    """Write the extraction to Postgres, the system of record.
+
+    Raises `UploadStoreError` on failure -- deliberately fatal to the upload.
+    A conversion reported as successful for a document that was never durably
+    written leaves the user believing they have a document that will vanish
+    at the next cache expiry, with no way to tell the difference until it does.
+    """
+    if not _persistence_enabled():
+        return
+    try:
+        from . import pgstore
+        pgstore.save(document, RETENTION_DAYS)
+    except Exception as exc:  # noqa: BLE001
+        raise UploadStoreError(
+            f"Could not persist {document.doc_id} to the platform database: {exc}"
+        ) from exc
+
+
+def _unpersist(user_id: str, conversation_id: str, doc_id: str) -> bool:
+    """Delete one record. Never raises -- the cache delete already succeeded."""
+    if not _persistence_enabled():
+        return False
+    try:
+        from . import pgstore
+        return pgstore.delete(user_id, conversation_id, doc_id) > 0
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not delete %s from Postgres: %s", doc_id, exc)
+        return False
+
+
+def _unpersist_conversation(user_id: str, conversation_id: str) -> int:
+    if not _persistence_enabled():
+        return 0
+    try:
+        from . import pgstore
+        return pgstore.drop_conversation(user_id, conversation_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "could not drop conversation %s from Postgres: %s", conversation_id, exc
+        )
+        return 0
+
+
+def persistence_status() -> tuple[bool, str | None]:
+    """(healthy, reason) for the durable store. Never raises.
+
+    Persistence being switched OFF is reported as healthy: a deployment with no
+    platform database is a supported configuration (documents live hours rather
+    than weeks), not a fault. Configured-but-unreachable is a fault, because
+    every upload from here on would be rejected.
+    """
+    if not _persistence_enabled():
+        return True, None
+    try:
+        from . import pgstore
+        return pgstore.ping()
+    except Exception as exc:  # noqa: BLE001
+        return False, f"uploaded-document persistence unavailable: {exc}"
+
+
+def _maybe_sweep() -> None:
+    """Delete expired records, at most once per process per interval.
+
+    Opportunistic rather than scheduled, matching the self-healing style
+    `list` and `_enforce_cap` already use. Never raises: housekeeping failing
+    must not fail the upload that happened to trigger it.
+    """
+    global _last_sweep
+    if not _persistence_enabled():
+        return
+    now = time.time()
+    with _sweep_lock:
+        if now - _last_sweep < _SWEEP_INTERVAL_SECONDS:
+            return
+        _last_sweep = now
+    try:
+        from . import pgstore
+        pgstore.sweep_expired()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("expiry sweep failed: %s", exc)
+
+
+#: Scan grades, best first. Used to report a package's WEAKEST member rather
+#: than its first, so a clean set of statements cannot mask an illegible
+#: annexure bound into the same filing.
+_GRADE_ORDER = ("excellent", "good", "fair", "poor")
 
 
 @dataclass
@@ -686,6 +1069,65 @@ class Package:
         """
         return self.members[0].ensure_index() if self.members else None
 
+    def summary(self) -> dict[str, Any]:
+        """The same shape ``UploadedDocument.summary()`` returns.
+
+        A package is supposed to present itself to the tools as ONE document,
+        and every other accessor here already does. This one was missing, so
+        any caller that iterated packages and asked for a summary raised
+        ``AttributeError`` -- which is what stopped `compare_uploaded_years`
+        being able to report filings rather than files.
+
+        Aggregated rather than delegated to the first member, because the
+        numbers must describe the whole filing: quality is the WEAKEST member's
+        (a clean set of statements does not make an illegible CARO annexure
+        readable), and the counts are sums.
+        """
+        members = self.members or []
+        quality = [m.quality or {} for m in members]
+
+        def worst(key: str) -> str | None:
+            grades = [q.get(key) for q in quality if q.get(key)]
+            if not grades:
+                return None
+            # _GRADE_ORDER runs best -> worst, so the weakest is the HIGHEST
+            # index. An unrecognised grade scores -1 so it never outranks a
+            # real "poor" -- an unknown string must not silently become the
+            # headline quality of the filing.
+            return max(grades, key=lambda g: _GRADE_ORDER.index(g)
+                       if g in _GRADE_ORDER else -1)
+
+        first = members[0] if members else None
+        identification = self.identification or {}
+        return {
+            "doc_id": self.doc_id,
+            "filename": self.filename,
+            "company": self.company,
+            "financial_year": self.financial_year,
+            "fy_confidence": identification.get("fy_confidence"),
+            "framework": identification.get("framework"),
+            "framework_division": identification.get("framework_division"),
+            "statement_flavour": identification.get("statement_flavour"),
+            "flavour_confidence": identification.get("flavour_confidence"),
+            "pages": sum((m.document or {}).get("total_pages_pdf") or 0
+                         for m in members) or None,
+            "tables": len(self.tables),
+            "grade": worst("grade"),
+            "low_grade": worst("low_grade"),
+            "unreadable_cells": sum(len(q.get("unreadable_cells") or [])
+                                    for q in quality),
+            "recovered_cells": sum(
+                1 for q in quality for c in (q.get("recovered_cells") or [])
+                if not c.get("promoted")
+            ),
+            "failed_footings": sum(len(q.get("failed_footings") or [])
+                                   for q in quality),
+            # Only true when EVERY member got a second read; "partly
+            # corroborated" must not present as corroborated.
+            "vlm_used": all(q.get("vlm_used") for q in quality) if quality else False,
+            "uploaded_at": first.uploaded_at if first else None,
+        }
+
 
 def group_into_packages(documents: list[UploadedDocument]) -> list[Package]:
     """Group uploads that are the same filing.
@@ -703,7 +1145,14 @@ def group_into_packages(documents: list[UploadedDocument]) -> list[Package]:
         placed = False
         if document.financial_year and document.company:
             for package in packages:
-                if package.financial_year != document.financial_year:
+                # Compared through _fy_key for the same reason Scope.match is:
+                # two files of ONE filing can be read with different spellings
+                # of the same year ("2023-24" on the statements, "2023-2024" on
+                # the auditor's report), and a string comparison would split
+                # the package in two -- leaving a CARO cross-check with half
+                # its evidence, which is the exact failure packaging exists to
+                # prevent.
+                if _fy_key(package.financial_year) != _fy_key(document.financial_year):
                     continue
                 if _same_entity(package.company, document.company):
                     package.members.append(document)
@@ -717,6 +1166,73 @@ def group_into_packages(documents: list[UploadedDocument]) -> list[Package]:
 _LEGAL_NOISE = re.compile(
     r"\b(limited|ltd|private|pvt|corporation|corpn|company|co)\b\.?", re.I
 )
+
+
+#: A financial year written as a span: "2023-24", "2023-2024", "2023/24",
+#: optionally prefixed "FY". The en/em dashes appear because OCR and the model
+#: both produce them where a filing printed a hyphen.
+_FY_SPAN_RE = re.compile(r"(\d{4})\s*[-/–—]\s*(\d{2,4})")
+#: "FY24" -- a two-digit year, meaning the year it ENDS in.
+_FY_SHORT_RE = re.compile(r"^\s*fy\s*(\d{2})\s*$", re.I)
+_FY_BARE_RE = re.compile(r"\b(\d{4})\b")
+
+
+def _fy_key(value: str | None) -> tuple[int, int] | None:
+    """A financial year reduced to ``(start_year, end_year)``, or None.
+
+    This exists because three parts of the system spell the same year three
+    different ways, and they were being compared with ``==``:
+
+    * ingestion stores ``"2023-24"`` (``identify.py``),
+    * ``entity_resolution._fy_label`` hands the model back ``"FY2023-24"``,
+    * ``TrendAnalysisTools._resolve_reports`` generates ``f"{y}-{y+1}"``,
+      i.e. ``"2023-2024"``.
+
+    None of those three match each other as strings. The measured consequence
+    was not a near-miss but a loop: ``Scope.match`` drops the year filter when
+    nothing matches exactly, so every document came back, the caller saw more
+    than one and asked the user which year they meant -- and the year it
+    suggested failed the same way when the model repeated it back. The
+    multi-year trend tool could therefore never return a figure for an
+    uploaded document at all.
+
+    Normalising here, at the single point every path funnels through, fixes all
+    three without editing the vendored pipeline. **The stored value is never
+    rewritten** -- ``financial_year`` keeps whatever ``identify`` read off the
+    statement, and this is only ever used for comparison.
+
+    A bare four-digit year is read as the year the period ENDS in ("FY2024" is
+    2023-24), which is the Indian convention and matches the ``fy_end`` column
+    already used everywhere else.
+    """
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+
+    span = _FY_SPAN_RE.search(text)
+    if span:
+        start = int(span.group(1))
+        tail = span.group(2)
+        # "2023-2024" gives the end outright; "2023-24" needs its century, and
+        # "1999-00" has to roll forward rather than land in 1900.
+        end = int(tail) if len(tail) == 4 else (start // 100) * 100 + int(tail)
+        if end < start:
+            end += 100
+        return (start, end)
+
+    short = _FY_SHORT_RE.match(text)
+    if short:
+        end = 2000 + int(short.group(1))
+        return (end - 1, end)
+
+    bare = _FY_BARE_RE.search(text)
+    if bare:
+        end = int(bare.group(1))
+        return (end - 1, end)
+
+    return None
 
 
 def _same_entity(a: str | None, b: str | None) -> bool:

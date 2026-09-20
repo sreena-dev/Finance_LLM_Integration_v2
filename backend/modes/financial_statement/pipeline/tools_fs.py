@@ -102,6 +102,16 @@ class Config:
     LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://localhost:8000")
     LLM_MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "gemma-4-31b")
 
+    # Per-request HTTP read timeout against the LLM endpoint, in seconds. A
+    # compound question (multi-entity grouping, two-year comparison, a long
+    # JSON answer at max_tokens=6000) can genuinely take longer to GENERATE
+    # than a short lookup does, on top of whatever queue delay a shared,
+    # concurrently-used endpoint adds -- 120s was observed cutting off a
+    # request that was still generating, not stuck. Every iteration of the
+    # tool-calling loop (up to MAX_TOOL_ITERATIONS) reuses this same timeout,
+    # so it must cover the single slowest call, not the whole turn.
+    LLM_TIMEOUT_SECONDS = int(os.environ.get("LLM_TIMEOUT_SECONDS", "240"))
+
     # -----------------------------------------------------------------
     # Reranker endpoint (bge-reranker)
     # -----------------------------------------------------------------
@@ -2569,10 +2579,22 @@ class RatioReference:
 
 # ===== SECTION 9: RatioExtractionEngine =====
 
+#: The provenance tag the document pane writes after a figure a USER typed for
+#: a cell the extraction could not read ("1,234 [user-entered]"). It is stripped
+#: before parsing so the figure is a real, computable number -- but it stays on
+#: the cell in the table text, so any reader that skips the sidecar record
+#: (a citation snippet, a future tool, the model reading the raw table) still
+#: sees that this figure was typed by a person, not read from the scan.
+USER_ENTERED_TAG = "[user-entered]"
+_USER_ENTERED_TAG_RE = re.compile(r"\s*\[user-entered\]\s*$", re.I)
+
+
 def _re_parse_number(raw: str) -> float | None:
-    """'-' / blank -> None. '(123.45)' -> -123.45. Strips ₹ and commas."""
+    """'-' / blank -> None. '(123.45)' -> -123.45. Strips ₹ and commas.
+    A trailing "[user-entered]" tag is ignored (see USER_ENTERED_TAG)."""
     if raw is None:
         return None
+    raw = _USER_ENTERED_TAG_RE.sub("", raw)
     s = raw.strip().replace("₹", "").replace(",", "").strip()
     if s in ("", "-", "—", "–"):
         return None
@@ -2584,6 +2606,20 @@ def _re_parse_number(raw: str) -> float | None:
     except ValueError:
         return None
     return -value if negative else value
+
+
+# A value cell the upload pipeline refused to vouch for, in either of its two
+# forms. "[unreadable: ...]" withholds the figure entirely; "[recovered N;
+# ...]" prints a second-reader (VLM) re-read that the column's own arithmetic
+# did NOT confirm. Both always parse to None via `_re_parse_number` above (the
+# leading "[" and the letters inside guarantee `float()` fails), and the
+# difference between them must never be decided by which of these two literal
+# words appears -- a bare substring test on just "unreadable" is what this
+# regex replaces, precisely because a recovered marker deliberately does NOT
+# contain that word.
+_CELL_MARKER_RE = re.compile(r"\[\s*(unreadable|recovered)\b", re.I)
+#: Just the recovered half, for `Row.recovered` below.
+_RECOVERED_MARKER_RE = re.compile(r"\[\s*recovered\b", re.I)
 
 
 def _re_clean_label(raw: str) -> str:
@@ -2640,15 +2676,36 @@ class Row:
     from ratio_extraction.py (used by both RatioExtractionEngine and
     TrendAnalysisTools — kept as a small standalone data class per the plan)."""
 
-    __slots__ = ("label", "raw_label", "norm", "values")
+    __slots__ = ("label", "raw_label", "norm", "values", "withheld", "recovered")
 
-    def __init__(self, raw_label: str, values: list[float | None]):
+    def __init__(
+        self, raw_label: str, values: list[float | None],
+        withheld: bool = False, recovered: bool = False,
+    ):
         self.raw_label = raw_label
         self.label = _re_clean_label(raw_label).lower()
         # Additional match-only form; `label` is left byte-identical to what it
         # always was so no existing caller changes behaviour unexpectedly.
         self.norm = _re_normalise_label(self.label)
         self.values = values
+        # True when a value cell of this row carries EITHER upload-pipeline
+        # marker -- "[unreadable: ...]" (no figure emitted at all) or
+        # "[recovered ...]" (a second reader's figure shown but not
+        # arithmetic-confirmed). A blank cell and a withheld one both parse to
+        # None, and the difference matters when a section total is derived by
+        # summing its line items: summing over either kind of marked cell
+        # silently understates the total, which is exactly the kind of quiet
+        # wrongness the markers exist to prevent. Deliberately True for BOTH
+        # marker kinds -- a recovered-but-unconfirmed figure is not
+        # arithmetic-grade either, so every downstream guard that refuses a
+        # withheld row must refuse a recovered one too. Defaulted so every
+        # existing caller (TrendAnalysisTools included) is unaffected.
+        self.withheld = withheld
+        #: True when a value cell carries specifically the "[recovered ...]"
+        #: marker. Purely additive information for caveat text -- nothing
+        #: computes differently based on it; `withheld` alone is what every
+        #: arithmetic guard checks, and it is already True here too.
+        self.recovered = recovered
 
 
 class Source:
@@ -2709,7 +2766,12 @@ class RatioExtractionEngine:
         "current_investments": ["current investments"],
         "trade_receivables": ["trade receivables"],
         "other_current_assets_prepaid": ["prepaid expenses"],
-        "equity_share_capital": ["equity share capital"],
+        # A Division I balance sheet writes plain "Share capital" under
+        # Shareholders' funds; only Division II/Ind AS reliably says "Equity
+        # share capital". The bare form is guarded by LABEL_EXCLUSIONS below,
+        # because "Preference share capital" is a different figure and
+        # "Share capital suspense" is not share capital at all.
+        "equity_share_capital": ["equity share capital", "share capital"],
         "other_equity": ["other equity", "reserves and surplus"],
         "preference_share_capital": ["preference share capital"],
         "borrowings": ["borrowings"],  # section-scoped — see _extract_borrowings
@@ -2723,6 +2785,13 @@ class RatioExtractionEngine:
         "profit_before_tax": [
             "profit before tax", "profit before taxes", "profit before the taxes",
             "profit before income tax",
+            # Section 8 companies (non-profits, registered under the Companies
+            # Act's Section 8) file on the same Schedule III format but call
+            # this line "Surplus/(Deficit) before tax" throughout — Startup
+            # Odisha's actual P&L, for one. Not a different figure, a
+            # different name for the same one.
+            "surplus/(deficit) before tax", "surplus / (deficit) before tax",
+            "deficit before tax",
         ],
         # Distinct figure from profit_before_tax — a P&L that reports both shows
         # PBT-before-exceptional first, then exceptional items, then true PBT.
@@ -2730,8 +2799,14 @@ class RatioExtractionEngine:
         "profit_before_exceptional_and_tax": [
             "profit before exceptional item", "profit before extraordinary item",
             "profit before exceptional and extraordinary item",
+            "surplus/(deficit) before exceptional",
+            "surplus/(deficit) before extraordinary",
         ],
-        "profit_for_period": ["profit for the year", "profit for the period"],
+        "profit_for_period": [
+            "profit for the year", "profit for the period",
+            "surplus/(deficit) for the year", "surplus/(deficit) for the period",
+            "surplus / (deficit) for the period", "deficit for the period",
+        ],
         "finance_costs": ["finance costs", "finance cost"],
         "depreciation_amortisation": ["depreciation"],
         "preference_dividend": ["preference dividend"],
@@ -2757,6 +2832,23 @@ class RatioExtractionEngine:
         # Keep the plain asset total plain; the regulatory-inclusive caption is
         # captured by total_assets_incl_regulatory instead.
         "total_assets": ["regulatory"],
+        # Guards for the bare "share capital" pattern: preference capital is a
+        # separate figure, and suspense / application-money lines are not
+        # issued capital at all.
+        "equity_share_capital": [
+            "preference", "suspense", "application money", "pending allotment",
+        ],
+        # "(a) Current investments (b) Cash and cash equivalents" is a real
+        # merged row from a scanned OD filing -- OCR folded two adjacent
+        # Schedule III lines into one when the row between them was blank.
+        # Without this, `current_investments` and `cash_and_bank` both match
+        # THE SAME row and both take its one value, silently assigning the
+        # cash figure to current investments too and double-counting it in
+        # every ratio that adds them together (Cash Ratio, Basic Defense
+        # Interval) or subtracts them as if independent (Capital Employed,
+        # which went negative on that filing because of it). A genuine
+        # "Current investments" caption has no reason to mention cash.
+        "current_investments": ["cash and cash equivalents", "cash & bank"],
         "profit_before_tax": [
             "exceptional", "extraordinary", "discontinued", "share of profit",
             "share of net profit", "associate", "joint venture",
@@ -2788,6 +2880,15 @@ class RatioExtractionEngine:
         ],
     }
 
+    # Replaced by the regexes _section_bounds now takes (see
+    # _NON_CURRENT_LIABS_SECTION_RE etc., defined below alongside
+    # _CURRENT_ASSETS_SECTION_RE). A plain "current liabilities" substring
+    # pattern matches inside "NON-current liabilities" too — every one of
+    # these four bare forms had that collision, silently pointed
+    # _section_bounds at the wrong subsection's heading, and only stopped
+    # mattering once matching moved from prefix-only to substring-anywhere
+    # (needed for a heading merged onto another row's tail). Kept here,
+    # unused, as the historical record of what broke and why.
     _NON_CURRENT_LIAB_HEADING = ["(1) non-current liabilities", "non-current liabilities"]
     _CURRENT_LIAB_HEADING = ["(2) current liabilities", "current liabilities"]
     _NON_CURRENT_ASSETS_HEADING = ["(1) non-current assets", "non-current assets"]
@@ -2840,7 +2941,9 @@ class RatioExtractionEngine:
             values = [_re_parse_number(c) for c in value_cells]
             if not label and all(v is None for v in values):
                 continue
-            rows.append(Row(label, values))
+            withheld = any(_CELL_MARKER_RE.search(c) for c in value_cells)
+            recovered = any(_RECOVERED_MARKER_RE.search(c) for c in value_cells)
+            rows.append(Row(label, values, withheld=withheld, recovered=recovered))
         return rows
 
     @staticmethod
@@ -2973,26 +3076,232 @@ class RatioExtractionEngine:
             return value, source
         return None, None
 
+    # A section heading, wherever it sits in the label. Anchored on either the
+    # start of the label or a Schedule III enumerator -- "(2)", "(4)" -- rather
+    # than on one hard-coded number, because the numbering runs (1)..(4) down a
+    # Division I balance sheet and which number a section carries varies by
+    # filing. Anchoring is also what keeps "non-current assets" and "other
+    # current assets" from matching: both contain the words, neither has them
+    # immediately after an enumerator or at the start.
+    #
+    # Containment rather than startswith is deliberate. OCR merges adjacent
+    # label cells when the rows between them are blank, and on the OD 2022-23
+    # filing the entire heading arrived as the tail of another row:
+    # "(c) Long-term loans and advances (d) Other non-current assets (2) Current assets".
+    _CURRENT_ASSETS_SECTION_RE = re.compile(
+        r"(?:^|\(\s*\d+\s*\)\s*)current\s+assets\b", re.I
+    )
+    _CURRENT_LIABS_SECTION_RE = re.compile(
+        r"(?:^|\(\s*\d+\s*\)\s*)current\s+liabilities\b", re.I
+    )
+    #: The complements of the two above, used by _section_bounds. A bare
+    #: "current assets"/"current liabilities" pattern matches INSIDE these two
+    #: too ("non-current assets" contains "current assets"), which is exactly
+    #: why the anchor (start-of-label or enumerator) matters here as much as
+    #: it does on the current-side regexes.
+    _NON_CURRENT_ASSETS_SECTION_RE = re.compile(
+        r"(?:^|\(\s*\d+\s*\)\s*)non-current\s+assets\b", re.I
+    )
+    _NON_CURRENT_LIABS_SECTION_RE = re.compile(
+        r"(?:^|\(\s*\d+\s*\)\s*)non-current\s+liabilities\b", re.I
+    )
+    #: "(1) Shareholders' funds" -- share capital + reserves and surplus, with
+    #: no printed subtotal on the same filings that give current assets/
+    #: liabilities no subtotal either. Same section, same disease.
+    _SHAREHOLDERS_FUNDS_SECTION_RE = re.compile(
+        r"(?:^|\(\s*\d+\s*\)\s*)shareholders[’']?\s*funds\b", re.I
+    )
+    #: Every Schedule III Division I subsection heading a balance sheet can
+    #: contain, in one pattern -- the complete, closed set (fixed by the
+    #: statutory format, not a guess), used by _section_bounds to know when
+    #: one subsection has ended and the next has begun. Matched anywhere in
+    #: the label for the same reason _find_heading_row is: a heading can arrive
+    #: merged onto the tail of the row before it.
+    _ANY_SUBSECTION_HEADING_RE = re.compile(
+        r"\(\s*\d+\s*\)\s*(?:non-current\s+assets|current\s+assets|"
+        r"non-current\s+liabilities|current\s+liabilities|"
+        r"shareholders[’']?\s*funds)\b",
+        re.I,
+    )
+    #: What ends a section: a total line, or the next enumerated/roman heading.
+    _SECTION_END_RE = re.compile(
+        r"^\s*(?:total\b|totai\b|"                 # totai: routine OCR of "total"
+        r"i{1,3}[.)]\s|iv[.)]\s|v[.)]\s|"          # "II. Assets"
+        r"\(\s*\d+\s*\)\s*(?:non-current|shareholders|equity)\b)", re.I
+    )
+
     @staticmethod
-    def _find_heading_row(rows: list[Row], patterns: list[str], start: int = 0) -> tuple[int, Row] | None:
-        """Like _find_row, but matches a WHOLE-LABEL heading (startswith/equality)."""
+    def _derive_section_total(
+        rows: list[Row], section_re: "re.Pattern", column: int = 0,
+    ) -> tuple[float | None, "Source | None"]:
+        """A section's total, summed from its own line items.
+
+        For when the statement never prints one. A Schedule III Division I
+        balance sheet routinely carries no "Total current assets" and no "Total
+        current liabilities" row at all -- only one grand ``Total`` per side --
+        so both the direct label lookup and ``_find_subtotal_before`` come back
+        empty and every liquidity ratio is reported as uncomputable, while the
+        components sit right there on the face of the statement.
+
+        This is arithmetic over disclosed figures, not an inference: the
+        returned Source names every component summed, so the audit trail shows
+        the derivation rather than implying the total was printed.
+
+        Returns ``(None, None)`` rather than a number when any line in the
+        section was withheld as unreadable. A sum across a hole is wrong by
+        exactly the missing figure and looks entirely plausible, which is worse
+        than declining to compute it.
+        """
+        start = None
+        for i, row in enumerate(rows):
+            if section_re.search(row.label or ""):
+                start = i
+                break
+        if start is None:
+            return None, None
+
+        total = 0.0
+        components: list[str] = []
+        for row in rows[start + 1:]:
+            label = (row.label or "").strip()
+            if label and RatioExtractionEngine._SECTION_END_RE.match(label):
+                break
+            if section_re.search(label) and components:
+                break
+            if row.withheld:
+                return None, None
+            value = row.values[column] if column < len(row.values) else None
+            if value is None:
+                continue
+            total += value
+            components.append(row.raw_label.strip() or "(unlabelled)")
+
+        if not components:
+            return None, None
+
+        return total, Source(
+            statement=RatioExtractionEngine.STATEMENT_BALANCE_SHEET,
+            label="(derived: sum of section line items)",
+            note="summed from " + "; ".join(components),
+        )
+
+    #: The start of the assets side of a Division I balance sheet.
+    _ASSETS_SIDE_RE = re.compile(
+        r"^\s*(?:ii[.)]\s*)?assets\b|^\s*\(\s*\d+\s*\)\s*non-current\s+assets\b", re.I
+    )
+    #: The start of the equity-and-liabilities side, mirroring _ASSETS_SIDE_RE.
+    #: The FIRST bare Total after this marker is, structurally, always the one
+    #: closing equity and liabilities -- Schedule III presents that side
+    #: before assets on every filing, Division I included.
+    _EQUITY_LIABILITIES_SIDE_RE = re.compile(
+        r"^\s*(?:i[.)]\s*)?equity\s+and\s+liabilities\b", re.I
+    )
+    #: A grand-total row carrying no qualifier at all -- "Total", "TOTAL".
+    #: Division I statements label both sides this way, so which one it is can
+    #: only be decided by where it sits, never by the label alone.
+    _BARE_TOTAL_RE = re.compile(r"^\s*(?:total|totai)\s*$", re.I)
+
+    @staticmethod
+    def _find_bare_total_after(
+        rows: list[Row], marker_re: "re.Pattern", side_label: str, column: int = 0,
+    ) -> tuple[float | None, "Source | None"]:
+        """The first unqualified ``Total`` row after a structural marker.
+
+        A Schedule III Division I balance sheet prints ``Total`` twice -- once
+        closing equity and liabilities, once closing assets -- with nothing in
+        either label to say which is which. Position is the only thing that
+        distinguishes them, so this resolves by walking forward from the side's
+        own heading rather than by matching a caption that does not exist.
+        ``side_label`` names that side ("assets" / "equity and liabilities")
+        for the citation only -- it plays no part in the matching itself.
+
+        Handles the label and its figures landing on separate rows, which OCR
+        does routinely on a ruled table: a ``Total`` with empty cells followed
+        by an unlabelled row carrying the numbers is one row on the page.
+        """
+        start = None
+        for i, row in enumerate(rows):
+            if marker_re.search(row.label or ""):
+                start = i
+                break
+        if start is None:
+            return None, None
+
+        for i in range(start + 1, len(rows)):
+            row = rows[i]
+            if not RatioExtractionEngine._BARE_TOTAL_RE.match((row.label or "").strip()):
+                continue
+            if row.withheld:
+                return None, None
+            value = row.values[column] if column < len(row.values) else None
+            note = f"the 'Total' row closing the {side_label} side"
+            if value is None and i + 1 < len(rows):
+                nxt = rows[i + 1]
+                if not (nxt.label or "").strip() and not nxt.withheld:
+                    value = nxt.values[column] if column < len(nxt.values) else None
+                    note = f"the 'Total' row closing the {side_label} side (figures on the following line)"
+            if value is not None:
+                return value, Source(
+                    statement=RatioExtractionEngine.STATEMENT_BALANCE_SHEET,
+                    label="Total", note=note,
+                )
+        return None, None
+
+    @staticmethod
+    def _find_heading_row(rows: list[Row], heading_re: "re.Pattern", start: int = 0) -> tuple[int, Row] | None:
+        """Like _find_row, but for a section heading.
+
+        Takes a compiled, anchored regex rather than plain substrings — see
+        _CURRENT_ASSETS_SECTION_RE and its siblings. Two things a bare
+        substring cannot get right at once: it has to match anywhere in the
+        label, because a heading regularly arrives merged onto the tail of the
+        row before it ("(c) Long-term loans and advances (d) Other
+        non-current assets (2) Current assets" is real output from a scanned
+        OD filing) — but matched carelessly that way, a bare "current assets"
+        pattern also matches inside "NON-current assets". The anchor
+        (start-of-label or immediately after an enumerator) is what tells
+        those apart; a plain substring list cannot express it.
+        """
         for i in range(start, len(rows)):
-            label = rows[i].label
-            for p in patterns:
-                if label == p or label.startswith(p):
-                    return i, rows[i]
+            if heading_re.search(rows[i].label):
+                return i, rows[i]
         return None
 
     @staticmethod
-    def _section_bounds(rows: list[Row], heading_patterns: list[str]) -> tuple[int, int] | None:
+    def _section_bounds(rows: list[Row], heading_re: "re.Pattern") -> tuple[int, int] | None:
         """(start, end) index range of rows belonging to a section."""
-        found = RatioExtractionEngine._find_heading_row(rows, heading_patterns)
+        found = RatioExtractionEngine._find_heading_row(rows, heading_re)
         if found is None:
             return None
         start, _ = found
         for i in range(start + 1, len(rows)):
-            label = rows[i].label
-            if label.startswith("(1)") or label.startswith("(2)") or "total " in label:
+            label = rows[i].label.strip()
+            # Terminated by a bare Total row, or by any OTHER subsection
+            # heading beginning (never the one we started in, which would
+            # end the section on its own first row if it were merged onto a
+            # later one). The old check here — startswith("(1)")/("(2)") or
+            # "total " with a trailing space — missed a bare "TOTAL" row (no
+            # trailing space to match) and missed any terminator not sitting
+            # at the very start of the label, so an unterminated section ran
+            # on into the next one and summed rows that were never part of
+            # it. Measured on the OD filing: the non-current-assets section
+            # absorbed the entire current-assets section this way, including
+            # "(a) Current investments (b) Cash and cash equivalents" —
+            # attributing the cash figure to non-current investments as well
+            # as to cash itself.
+            if RatioExtractionEngine._BARE_TOTAL_RE.match(label):
+                return start + 1, i
+            # Any match here unambiguously means a NEW subsection is starting:
+            # the section's OWN heading was already consumed as `start`, so a
+            # row after it that matches the heading pattern set again is the
+            # next subsection, never a repeat of this one. Checking for "is
+            # this a different heading than mine" was the bug — the row that
+            # exposed it, "(d) Other non-current assets (2) Current assets",
+            # legitimately contains the CURRENT section's own keywords
+            # ("non-current assets", from an unrelated merged fragment) right
+            # next to the real terminator, and a same-vs-different check on
+            # substring text alone cannot tell those apart.
+            if RatioExtractionEngine._ANY_SUBSECTION_HEADING_RE.search(label):
                 return start + 1, i
         return start + 1, len(rows)
 
@@ -3036,12 +3345,23 @@ class RatioExtractionEngine:
     @staticmethod
     def _extract_borrowings(rows: list[Row]) -> tuple[float | None, float | None, "Source | None", "Source | None"]:
         """(long_term_borrowings, short_term_borrowings, long_source, short_source), section-scoped."""
-        nc_bounds = RatioExtractionEngine._section_bounds(rows, RatioExtractionEngine._NON_CURRENT_LIAB_HEADING)
-        c_bounds = RatioExtractionEngine._section_bounds(rows, RatioExtractionEngine._CURRENT_LIAB_HEADING)
+        nc_bounds = RatioExtractionEngine._section_bounds(rows, RatioExtractionEngine._NON_CURRENT_LIABS_SECTION_RE)
+        c_bounds = RatioExtractionEngine._section_bounds(rows, RatioExtractionEngine._CURRENT_LIABS_SECTION_RE)
+
+        # "(a) Short-term borrowings (b) Trade payables" is real merged OCR
+        # output from the same OD filing that exposed the investments/cash
+        # collision above — "borrowings" matches the row, but its one value is
+        # actually Trade payables (Short-term borrowings was blank on the
+        # scan). Same guard, same reasoning: a merged row can legitimately
+        # contain the pattern word and still not be the line item being
+        # summed.
+        borrowings_exclude = ["trade payables"]
 
         long_term, long_source = None, None
         if nc_bounds:
-            found = RatioExtractionEngine._find_row(rows, ["borrowings"], *nc_bounds)
+            found = RatioExtractionEngine._find_row(
+                rows, ["borrowings"], *nc_bounds, exclude=borrowings_exclude
+            )
             if found:
                 long_term = RatioExtractionEngine._first_value(found[1])
                 long_source = Source(
@@ -3051,7 +3371,9 @@ class RatioExtractionEngine:
 
         short_term, short_source = None, None
         if c_bounds:
-            found = RatioExtractionEngine._find_row(rows, ["borrowings"], *c_bounds)
+            found = RatioExtractionEngine._find_row(
+                rows, ["borrowings"], *c_bounds, exclude=borrowings_exclude
+            )
             if found:
                 short_term = RatioExtractionEngine._first_value(found[1])
                 short_source = Source(
@@ -3144,9 +3466,20 @@ class RatioExtractionEngine:
 
     @staticmethod
     def _sum_section_rows(
-        rows: list[Row], patterns: list[str], bounds: tuple[int, int] | None, section_note: str
+        rows: list[Row], patterns: list[str], bounds: tuple[int, int] | None, section_note: str,
+        exclude: list[str] | None = None,
     ) -> tuple[float | None, "Source | None"]:
-        """Sum every row within `bounds` whose label matches any of `patterns`."""
+        """Sum every row within `bounds` whose label matches any of `patterns`.
+
+        `exclude` is the same guard `_row_matches` uses elsewhere: a merged
+        row can genuinely contain a pattern word and still not BE that line
+        item. "(a) Current investments (b) Cash and cash equivalents" is real
+        OCR output from a scanned OD filing — it contains "investments", so an
+        unguarded pattern match sums its one value as an investment, when that
+        value is actually the cash figure (the real "Current investments"
+        cell was blank on the scan; "Cash and cash equivalents" is what the
+        merge actually attached a number to).
+        """
         if bounds is None:
             return None, None
         start, end = bounds
@@ -3154,8 +3487,11 @@ class RatioExtractionEngine:
         found_any = False
         labels_used = []
         for i in range(start, end):
+            label = rows[i].label
+            if exclude and any(x in label for x in exclude):
+                continue
             for p in patterns:
-                if p in rows[i].label:
+                if p in label:
                     val = RatioExtractionEngine._first_value(rows[i])
                     if val is not None:
                         total += val
@@ -3173,13 +3509,16 @@ class RatioExtractionEngine:
     @staticmethod
     def _extract_investments(rows: list[Row]) -> tuple[float | None, float | None, "Source | None", "Source | None"]:
         """(non_current_investments, current_investments, nc_source, c_source), section-scoped and summed."""
-        nc_bounds = RatioExtractionEngine._section_bounds(rows, RatioExtractionEngine._NON_CURRENT_ASSETS_HEADING)
-        c_bounds = RatioExtractionEngine._section_bounds(rows, RatioExtractionEngine._CURRENT_ASSETS_HEADING)
+        nc_bounds = RatioExtractionEngine._section_bounds(rows, RatioExtractionEngine._NON_CURRENT_ASSETS_SECTION_RE)
+        c_bounds = RatioExtractionEngine._section_bounds(rows, RatioExtractionEngine._CURRENT_ASSETS_SECTION_RE)
+        cash_exclude = ["cash and cash equivalents", "cash & bank"]
         non_current, nc_source = RatioExtractionEngine._sum_section_rows(
-            rows, ["investments"], nc_bounds, "within the Non-current assets section"
+            rows, ["investments"], nc_bounds, "within the Non-current assets section",
+            exclude=cash_exclude,
         )
         current, c_source = RatioExtractionEngine._sum_section_rows(
-            rows, ["investments"], c_bounds, "within the Current assets section"
+            rows, ["investments"], c_bounds, "within the Current assets section",
+            exclude=cash_exclude,
         )
         return non_current, current, nc_source, c_source
 
@@ -3305,6 +3644,16 @@ class RatioExtractionEngine:
             note="summed the sub-rows: " + "; ".join(r.raw_label.strip() for _i, r in valued),
         )
 
+    #: A row whose ENTIRE (cleaned, lowercased) label is just "basic" / "diluted",
+    #: an optional leading enumerator aside -- "(1) Basic", "1) Basic", "Basic".
+    #: Deliberately anchored at both ends (`$`), not a substring match: this is
+    #: the fallback path used when no "Earnings per share" heading could be
+    #: found to anchor to, so it must be unambiguous entirely on its own.
+    _BARE_EPS_ROW_RE = {
+        "basic": re.compile(r"^\(?\s*\d*\s*\)?\s*basic\s*$", re.I),
+        "diluted": re.compile(r"^\(?\s*\d*\s*\)?\s*diluted\s*$", re.I),
+    }
+
     @staticmethod
     def _extract_eps(rows: list[Row]) -> tuple[float | None, float | None, "Source | None", "Source | None"]:
         """
@@ -3335,6 +3684,32 @@ class RatioExtractionEngine:
 
         heading = RatioExtractionEngine._find_row(rows, ["earnings per", "earning per"], exclude=exclude)
         if heading is None:
+            # The heading itself is sometimes dropped entirely by table-
+            # structure recognition -- verified on a real filing (Startup
+            # Odisha) where "(1) Basic" and "(2) Diluted" both survived as
+            # their own rows but "Earnings per equity share:" above them did
+            # not, so the anchored search below never even ran and a real,
+            # printed figure was silently discarded. A row whose ENTIRE label
+            # is just "Basic" or "Diluted" (an optional leading enumerator
+            # aside) is unambiguous without an anchor -- nothing else in a
+            # P&L is ever labelled exactly that -- so it is searched for
+            # directly here, but only as the fallback: an anchored heading is
+            # still the stronger signal whenever one is actually present.
+            for row in rows:
+                if row.withheld:
+                    continue
+                value = RatioExtractionEngine._first_value(row)
+                if value is None or any(x in row.label for x in exclude):
+                    continue
+                src = Source(
+                    statement=RatioExtractionEngine.STATEMENT_PROFIT_LOSS,
+                    label=row.raw_label.strip(),
+                    note="matched directly; no 'Earnings per share' heading was found to anchor to",
+                )
+                if basic is None and RatioExtractionEngine._BARE_EPS_ROW_RE["basic"].match(row.label):
+                    basic, basic_src = value, src
+                elif diluted is None and RatioExtractionEngine._BARE_EPS_ROW_RE["diluted"].match(row.label):
+                    diluted, diluted_src = value, src
             return basic, diluted, basic_src, diluted_src
 
         start = heading[0] + 1
@@ -3355,6 +3730,103 @@ class RatioExtractionEngine:
                 diluted, diluted_src = value, src
 
         return basic, diluted, basic_src, diluted_src
+
+    @staticmethod
+    def _extract_tax_components(rows: list[Row]) -> dict:
+        """
+        Re-walks the same tax-expense block `_extract_tax_expense` reads, but
+        keeps the current-tax and deferred-tax sub-totals separate instead of
+        collapsing them into one combined figure. Used only by the tax
+        reconciliation tie-out check (current + deferred == total tax expense).
+
+        Bucketing: a sub-row whose label contains "deferred" is deferred tax;
+        one containing "current" or "earlier year" (prior-year adjustments sit
+        under the current-tax line per Ind AS 12) and NOT "deferred" is
+        current tax. The block's own total row (labelled "total..." or a
+        trailing unlabelled subtotal — see `_extract_tax_expense`'s docstring
+        for both shapes) is excluded from both buckets since it is the sum,
+        not a component, and summing it in would double-count.
+        """
+        exclude = RatioExtractionEngine._DISCONTINUED_EXCLUDE
+        heading = RatioExtractionEngine._find_row(rows, ["tax expense", "tax expenses"], exclude=exclude)
+        if heading is None:
+            return {"current_tax": None, "deferred_tax": None, "source": None}
+
+        start = heading[0] + 1
+        end = min(start + RatioExtractionEngine._SUBROW_WINDOW, len(rows))
+        for i in range(start, end):
+            if RatioExtractionEngine._row_matches(rows[i], RatioExtractionEngine._POST_TAX_BOUNDARY):
+                end = i
+                break
+
+        current_total = None
+        deferred_total = None
+        heading_label = heading[1].raw_label.strip()
+        for i in range(start, end):
+            row = rows[i]
+            value = RatioExtractionEngine._first_value(row)
+            if value is None or any(x in row.label for x in exclude):
+                continue
+            if "total" in row.label or row.label == "":
+                continue  # the block's own subtotal, not a component
+            if "deferred" in row.label:
+                deferred_total = (deferred_total or 0.0) + value
+            elif "current" in row.label or "earlier year" in row.label:
+                current_total = (current_total or 0.0) + value
+
+        source = None
+        if current_total is not None or deferred_total is not None:
+            source = Source(
+                statement=RatioExtractionEngine.STATEMENT_PROFIT_LOSS,
+                label=heading_label,
+                note="current/deferred sub-rows of the tax-expense block",
+            )
+        return {"current_tax": current_total, "deferred_tax": deferred_total, "source": source}
+
+    @staticmethod
+    def _extract_weighted_avg_shares(rows: list[Row]) -> tuple[float | None, "Source | None"]:
+        """
+        (value, source) weighted-average number of equity shares used to
+        compute EPS. Lives in the same note block `_extract_eps` reads, either
+        as a directly self-describing row or a sub-row beneath the "Earnings
+        per share" heading. Used only for the EPS-recompute tie-out check
+        (basic EPS = profit for the period / this figure).
+        """
+        exclude = RatioExtractionEngine._DISCONTINUED_EXCLUDE
+        direct = RatioExtractionEngine._find_row_with_value(
+            rows,
+            [
+                "weighted average number of equity shares",
+                "weighted average no. of equity shares",
+                "weighted average no of equity shares",
+                "weighted average number of shares",
+            ],
+            exclude=exclude,
+        )
+        if direct is not None and RatioExtractionEngine._first_value(direct[1]) is not None:
+            return RatioExtractionEngine._first_value(direct[1]), Source(
+                statement=RatioExtractionEngine.STATEMENT_PROFIT_LOSS,
+                label=direct[1].raw_label.strip(),
+            )
+
+        heading = RatioExtractionEngine._find_row(rows, ["earnings per", "earning per"], exclude=exclude)
+        if heading is None:
+            return None, None
+
+        start = heading[0] + 1
+        end = min(start + RatioExtractionEngine._SUBROW_WINDOW, len(rows))
+        for i in range(start, end):
+            row = rows[i]
+            value = RatioExtractionEngine._first_value(row)
+            if value is None or any(x in row.label for x in exclude):
+                continue
+            if "weighted average" in row.label and "share" in row.label:
+                return value, Source(
+                    statement=RatioExtractionEngine.STATEMENT_PROFIT_LOSS,
+                    label=row.raw_label.strip(),
+                    note=f"sub-row beneath '{heading[1].raw_label.strip()}'",
+                )
+        return None, None
 
     # ------------------------------------------------------------------
     # Top-level: extract every figure Phase-1/Phase-2 ratios need
@@ -3400,11 +3872,72 @@ class RatioExtractionEngine:
         figures.update(bs_values)
         sources.update(bs_sources)
 
+        # A Division I balance sheet closes each side with a bare "Total" and
+        # never writes "Total assets" at all, so the direct lookup above finds
+        # nothing and every asset-based ratio goes uncomputable. Resolved by
+        # position instead -- see _find_bare_total_after.
+        if figures.get("total_assets") is None:
+            ta_value, ta_source = RatioExtractionEngine._find_bare_total_after(
+                bs_rows, RatioExtractionEngine._ASSETS_SIDE_RE, "assets"
+            )
+            if ta_value is not None:
+                figures["total_assets"] = ta_value
+                sources["total_assets"] = ta_source
+
+        # Same fallback, other side of the same equation. A Division I filing
+        # prints "Total" closing equity and liabilities too, with the same
+        # missing qualifier -- verified on a real filing (Startup Odisha
+        # FY2022-23) where total_assets already resolved this way while
+        # total_equity_and_liabilities, one balance-sheet side over, did not,
+        # purely because this fallback had never been built for it.
+        if figures.get("total_equity_and_liabilities") is None:
+            tel_value, tel_source = RatioExtractionEngine._find_bare_total_after(
+                bs_rows, RatioExtractionEngine._EQUITY_LIABILITIES_SIDE_RE, "equity and liabilities"
+            )
+            if tel_value is not None:
+                figures["total_equity_and_liabilities"] = tel_value
+                sources["total_equity_and_liabilities"] = tel_source
+
+        # Same reasoning, same fallback, for the "(1) Shareholders' funds"
+        # section: share capital + reserves and surplus with no printed
+        # subtotal. Feeds Equity Ratio, D/E, Capital Gearing and ROE, all of
+        # which were uncomputable on a filing that discloses every figure they
+        # need.
+        if figures.get("total_equity") is None:
+            te_value, te_source = RatioExtractionEngine._derive_section_total(
+                bs_rows, RatioExtractionEngine._SHAREHOLDERS_FUNDS_SECTION_RE
+            )
+            if te_value is not None:
+                figures["total_equity"] = te_value
+                sources["total_equity"] = te_source
+
+        # total_liabilities has no direct label on a filing that never
+        # separately foots "Total Liabilities" (this document doesn't) -- but
+        # it is a bare subtraction once the balance-sheet equation's other two
+        # terms are known, both resolved above. Deliberately not derived if
+        # either component is still missing: figures["total_liabilities"]
+        # must stay None, not zero, when the equation cannot actually be
+        # checked.
+        if figures.get("total_liabilities") is None:
+            tel = figures.get("total_equity_and_liabilities")
+            te = figures.get("total_equity")
+            if tel is not None and te is not None:
+                _set_derived(
+                    "total_liabilities", tel - te,
+                    "total_equity_and_liabilities", "total_equity",
+                )
+
         if bs_values.get("current_assets_total_direct") is not None:
             figures["current_assets_total"] = bs_values["current_assets_total_direct"]
             sources["current_assets_total"] = bs_sources["current_assets_total_direct"]
         else:
             figures["current_assets_total"], ca_source = RatioExtractionEngine._find_subtotal_before(bs_rows, ["total assets"])
+            if figures["current_assets_total"] is None:
+                # Nothing printed to read. Sum the section instead -- see
+                # _derive_section_total for why that is not a guess.
+                figures["current_assets_total"], ca_source = RatioExtractionEngine._derive_section_total(
+                    bs_rows, RatioExtractionEngine._CURRENT_ASSETS_SECTION_RE
+                )
             if ca_source:
                 sources["current_assets_total"] = ca_source
 
@@ -3415,6 +3948,10 @@ class RatioExtractionEngine:
             cl_value, cl_source = RatioExtractionEngine._find_subtotal_before(bs_rows, ["total liabilities"])
             if cl_value is None:
                 cl_value, cl_source = RatioExtractionEngine._find_subtotal_before(bs_rows, ["total equity and liabilities"])
+            if cl_value is None:
+                cl_value, cl_source = RatioExtractionEngine._derive_section_total(
+                    bs_rows, RatioExtractionEngine._CURRENT_LIABS_SECTION_RE
+                )
             figures["current_liabilities_total"] = cl_value
             if cl_source:
                 sources["current_liabilities_total"] = cl_source
@@ -3500,6 +4037,16 @@ class RatioExtractionEngine:
         if tax_source:
             sources["tax_expense"] = tax_source
 
+        # Current/deferred split of the same block, for the tax-reconciliation
+        # tie-out check only — _extract_tax_expense's combined total above is
+        # what every other ratio/check keys off of and is left untouched.
+        tax_components = RatioExtractionEngine._extract_tax_components(pl_rows)
+        figures["tax_current"] = tax_components["current_tax"]
+        figures["tax_deferred"] = tax_components["deferred_tax"]
+        if tax_components["source"]:
+            sources["tax_current"] = tax_components["source"]
+            sources["tax_deferred"] = tax_components["source"]
+
         (
             figures["eps_basic"], figures["eps_diluted"], eps_b_source, eps_d_source,
         ) = RatioExtractionEngine._extract_eps(pl_rows)
@@ -3507,6 +4054,10 @@ class RatioExtractionEngine:
             sources["eps_basic"] = eps_b_source
         if eps_d_source:
             sources["eps_diluted"] = eps_d_source
+
+        figures["weighted_avg_shares"], wavg_source = RatioExtractionEngine._extract_weighted_avg_shares(pl_rows)
+        if wavg_source:
+            sources["weighted_avg_shares"] = wavg_source
 
         cf_text = ComplianceTools._find_statement_tables(doc_id, "cash_flow", conn_reports)
         cf_rows = RatioExtractionEngine.parse_table_md(cf_text) if "No standalone" not in cf_text else []
@@ -3961,6 +4512,7 @@ class AuditScheduleReference:
             "name": "Property, Plant and Equipment",
             "note_title_patterns": [
                 "property, plant and equipment", "tangible", "right of use", "rou assets",
+                "gross carrying amount", "gross block", "accumulated depreciation",
             ],
             "ind_as_standards": [16, 36, 116],
             "topic_keywords": [
@@ -3969,6 +4521,16 @@ class AuditScheduleReference:
                 "useful life", "componentization", "component",
             ],
             "verified": True,
+            "data_quality_note": (
+                "On a scan where docling recovers no caption for the PPE note "
+                "(verified: IDBI Trusteeship Services FY2024-25), the table is "
+                "found only via generic rollforward wording ('Gross carrying "
+                "amount', 'Accumulated depreciation') that Intangible Assets uses "
+                "too — the same query may also return the Intangibles rollforward. "
+                "Use the row labels (Land, Building, Computer, Vehicle vs. "
+                "Computer Software / goodwill / licences) to tell them apart "
+                "before commenting, and say so if the retrieved content mixes both."
+            ),
         },
         "inventory": {
             "name": "Inventories",
@@ -3985,6 +4547,7 @@ class AuditScheduleReference:
             "note_title_patterns": [
                 "investments in", "aggregate investments", "investment in subsidiaries",
                 "investment in associates", "investment in joint venture",
+                "quoted investments", "unquoted investments",
             ],
             "ind_as_standards": [32, 107, 109],
             "topic_keywords": [
@@ -3997,7 +4560,12 @@ class AuditScheduleReference:
                 "BALANCE SNAPSHOT, not a movement/rollforward (unlike PPE or "
                 "Provisions) — present it as such; do not describe it as showing "
                 "additions/disposals during the year unless the actual table "
-                "content includes those columns."
+                "content includes those columns. A company that holds a portfolio "
+                "rather than group investments (verified: IDBI Trusteeship "
+                "Services FY2024-25) titles this note 'Quoted Investments' / "
+                "'Unquoted Investments' rather than naming any investee — expect "
+                "several such tables (mutual funds, government securities, "
+                "unquoted shares) rather than one."
             ),
         },
         "provisions": {
@@ -4005,6 +4573,7 @@ class AuditScheduleReference:
             "note_title_patterns": [
                 "movement of provision", "provision for decommissioning",
                 "provision for site restoration", "decommissioning liability",
+                "provisions",
             ],
             "ind_as_standards": [37],
             "topic_keywords": [
@@ -4012,6 +4581,15 @@ class AuditScheduleReference:
                 "present obligation", "reliable estimate", "reimbursement",
             ],
             "verified": True,
+            "data_quality_note": (
+                "A filing without a dedicated Provisions rollforward (verified: "
+                "IDBI Trusteeship Services FY2024-25) may still surface a bare "
+                "'Provisions' row inside a combined balance-sheet note that also "
+                "covers Lease Liabilities and Trade Payables in the same table — "
+                "present only the provisions figures from it, and say the note "
+                "is combined rather than implying a standalone provisions "
+                "schedule was found."
+            ),
         },
         "trade_receivables": {
             "name": "Trade Receivables",
@@ -4045,6 +4623,8 @@ class AuditScheduleReference:
             "name": "Intangible Assets",
             "note_title_patterns": [
                 "intangible assets", "intangible", "tangible",  # see data_quality_note
+                "gross carrying amount", "computer software", "accumulated amortisation",
+                "accumulated amortization",
             ],
             "ind_as_standards": [38],
             "topic_keywords": [
@@ -4061,7 +4641,11 @@ class AuditScheduleReference:
                 "Read the returned content carefully to confirm which figures are "
                 "actually the Intangible Assets rollforward before commenting on "
                 "them, and say so if the retrieved table doesn't clearly separate "
-                "tangible from intangible movement."
+                "tangible from intangible movement. Where the caption is generic "
+                "('Gross carrying amount', verified: IDBI Trusteeship Services "
+                "FY2024-25 — the note's only row label is 'Computer Software'), "
+                "the same query also returns the PPE rollforward; use row labels "
+                "to separate them."
             ),
         },
     }
@@ -5046,6 +5630,120 @@ class MaterialityTools:
         return caveats
 
 
+# ===== SECTION 16B: Audit-finding taxonomy (FINDING / RISK FLAG / AUDIT POINTER / COVERAGE NOTE) =====
+#
+# Shared by every tool below that produces an audit-grade observation rather
+# than a plain retrieval. This is plain helper code, not a registered tool —
+# it has no Tool(...) entry of its own. A tool calls format_findings() and
+# returns its string like any other tool output; the model is instructed
+# (prompt.md) to reproduce that block verbatim, the same mechanism already
+# used for materiality_legend/extraction_caveats.
+#
+# Categories (never invent a fifth):
+#   FINDING       — established BY THE PACKAGE ITSELF (an arithmetic
+#                    difference, a documented default, a disclosed breach).
+#                    Never an opinion about intent, adequacy, or fraud.
+#   RISK FLAG     — an analytical fact pattern that WARRANTS attention but is
+#                    not itself a proven deficiency (e.g. subsidy dependence,
+#                    unusual related-party volume).
+#   AUDIT POINTER — a specific record/procedure needed to resolve a question
+#                    the package cannot answer alone. Also the mandatory tag
+#                    for a government-company exemption question (Sec
+#                    197/185/186/layers-rules) — never FINDING, since the
+#                    exemption may apply and the package alone cannot confirm
+#                    ownership + conditions.
+#   COVERAGE NOTE — an area that was reviewed but could not be checked
+#                    (missing note, unretrieved section). Never phrased as a
+#                    finding — a coverage miss is not evidence of a defect.
+
+
+class Finding:
+    """One tagged audit observation. See taxonomy note above for the four
+    categories and when each applies."""
+
+    __slots__ = (
+        "category", "title", "detail", "source_keys", "candidate_143_6",
+        "risk_factors", "risk_rating",
+    )
+
+    FINDING = "FINDING"
+    RISK_FLAG = "RISK FLAG"
+    AUDIT_POINTER = "AUDIT POINTER"
+    COVERAGE_NOTE = "COVERAGE NOTE"
+    _CATEGORIES = (FINDING, RISK_FLAG, AUDIT_POINTER, COVERAGE_NOTE)
+
+    def __init__(self, category: str, title: str, detail: str,
+                 source_keys: list | None = None, candidate_143_6: bool = False,
+                 risk_factors: dict | None = None):
+        if category not in self._CATEGORIES:
+            raise ValueError(f"Unknown finding category: {category!r}")
+        self.category = category
+        self.title = title
+        self.detail = detail
+        self.source_keys = source_keys or []
+        self.candidate_143_6 = candidate_143_6
+        self.risk_factors = risk_factors
+        self.risk_rating = score_risk(**risk_factors)[1] if risk_factors else None
+
+
+def score_risk(value: int, nature: int, context: int, evidence_gap: int,
+               auditor_report_interaction: int) -> tuple[dict, str]:
+    """The 5-factor risk-rating rubric, each factor scored 0-3:
+
+        value                       0 = below trivial threshold ... 3 = exceeds materiality
+        nature                      0 = routine ... 3 = fraud-sensitive/public funds/propriety
+        context                     0 = no broader effect ... 3 = reporting/public-interest impact
+        evidence_gap                0 = package resolves ... 3 = records essential and unavailable
+        auditor_report_interaction  0 = no interaction ... 3 = potentially affects 143(6)/qualification
+
+    Rule (from the spec): High normally applies if ANY single factor scores 3.
+    Below that, this module uses Medium if the factor sum is >= 6, else Low —
+    a documented tunable default, not a fixed rule from the spec, since the
+    spec does not pin down the Medium/Low boundary.
+    """
+    factors = {
+        "value": value, "nature": nature, "context": context,
+        "evidence_gap": evidence_gap,
+        "auditor_report_interaction": auditor_report_interaction,
+    }
+    if any(v >= 3 for v in factors.values()):
+        rating = "High"
+    elif sum(factors.values()) >= 6:
+        rating = "Medium"
+    else:
+        rating = "Low"
+    return factors, rating
+
+
+def format_findings(findings: list) -> str:
+    """Render a list of Finding objects as one markdown block, grouped by
+    category in a fixed order. Tools return this string verbatim; the model
+    is instructed to reproduce it verbatim into final_answer."""
+    if not findings:
+        return ""
+    order = (Finding.FINDING, Finding.RISK_FLAG, Finding.AUDIT_POINTER, Finding.COVERAGE_NOTE)
+    lines: list[str] = []
+    for category in order:
+        group = [f for f in findings if f.category == category]
+        if not group:
+            continue
+        for f in group:
+            lines.append(f"### {f.category}: {f.title}")
+            lines.append(f.detail)
+            if f.risk_factors:
+                breakdown = ", ".join(f"{k}={v}" for k, v in f.risk_factors.items())
+                lines.append(f"Risk rating: {f.risk_rating}  ({breakdown})")
+            if f.candidate_143_6:
+                lines.append(
+                    "Candidate for Section 143(6) reporting — verify with the audit team; "
+                    "this is a routing flag only, not a conclusion."
+                )
+            if f.source_keys:
+                lines.append("Sources: " + ", ".join(f.source_keys))
+            lines.append("")
+    return "\n".join(lines).rstrip("\n")
+
+
 # ===== SECTION 17: TieOutTools =====
 
 class TieOutCheck:
@@ -5148,6 +5846,8 @@ class TieOutTools:
         if scope in ("all", "profit_loss"):
             checks.append(TieOutTools._check_pl_income_chain(figures))
             checks.append(TieOutTools._check_pl_tax_chain(figures))
+            checks.append(TieOutTools._check_tax_reconciliation(figures))
+            checks.append(TieOutTools._check_eps_recompute(figures))
         if scope in ("all", "cash_flow"):
             checks.append(TieOutTools._check_cash_reconciliation(figures))
 
@@ -5306,6 +6006,95 @@ class TieOutTools:
                 "from the tax figure used here."
             ),
             source_keys=keys,
+        )
+
+    @staticmethod
+    def _check_tax_reconciliation(figures: dict) -> TieOutCheck:
+        """Current tax + deferred tax should equal total tax expense.
+
+        Unlike the note-to-face checks below, both sides of this identity come
+        from the SAME face P&L tax-expense block (see
+        RatioExtractionEngine._extract_tax_components), so a genuine mismatch
+        here is a real arithmetic finding, not a cross-document coverage gap —
+        this check CAN and does FAIL."""
+        current = figures.get("tax_current")
+        deferred = figures.get("tax_deferred")
+        total = figures.get("tax_expense")
+        name = "Tax reconciliation (current tax + deferred tax = total tax expense)"
+        keys = ["tax_current", "tax_deferred", "tax_expense"]
+
+        if current is None or deferred is None or total is None:
+            return TieOutCheck(
+                name, TieOutCheck.NOT_AVAILABLE,
+                note="the current-tax/deferred-tax split, or the total tax expense, was not extracted.",
+                source_keys=keys,
+            )
+
+        computed = current + deferred
+        status = (
+            TieOutCheck.PASS
+            if abs(computed - total) <= TieOutTools._tolerance(total)
+            else TieOutCheck.FAIL
+        )
+        return TieOutCheck(
+            name, status, "Current tax + deferred tax", computed,
+            "Total tax expense", total,
+            note=(
+                None if status == TieOutCheck.PASS else
+                "The current-tax/deferred-tax split and the printed total tax-expense figure do not "
+                "add up — this is a package-level FINDING, not a coverage gap: report the quantified "
+                "difference rather than the underlying tax position being 'wrong'."
+            ),
+            source_keys=keys,
+        )
+
+    @staticmethod
+    def _check_eps_recompute(figures: dict) -> TieOutCheck:
+        """Basic EPS should equal profit for the period / weighted-average
+        equity shares, and diluted EPS must not exceed basic EPS (Ind AS 33 /
+        AS 20). Both sides of the equality come from the face P&L / EPS note,
+        so — like the tax-reconciliation check above — this CAN genuinely
+        FAIL rather than only report NOT AVAILABLE."""
+        pat = figures.get("profit_for_period")
+        shares = figures.get("weighted_avg_shares")
+        eps_basic = figures.get("eps_basic")
+        eps_diluted = figures.get("eps_diluted")
+        name = "EPS recompute (profit for the period / weighted-average shares = basic EPS)"
+        keys = ["profit_for_period", "weighted_avg_shares", "eps_basic", "eps_diluted"]
+
+        if pat is None or not shares or eps_basic is None:
+            return TieOutCheck(
+                name, TieOutCheck.NOT_AVAILABLE,
+                note=(
+                    "profit for the period, the weighted-average number of equity shares, or the "
+                    "disclosed basic EPS was not extracted."
+                ),
+                source_keys=keys,
+            )
+
+        computed = pat / shares
+        status = (
+            TieOutCheck.PASS
+            if abs(computed - eps_basic) <= TieOutTools._tolerance(eps_basic)
+            else TieOutCheck.FAIL
+        )
+        note = None
+        if status == TieOutCheck.FAIL:
+            note = (
+                "Recomputed basic EPS does not match the disclosed figure. Check the per-share face "
+                "value and whether profit is attributable to equity holders only (preference dividend "
+                "deducted) before treating this as a reporting defect."
+            )
+        if eps_diluted is not None and eps_basic is not None and eps_diluted > eps_basic + TieOutTools._tolerance(eps_basic):
+            status = TieOutCheck.FAIL
+            note = (
+                (note + " Also: " if note else "") +
+                f"diluted EPS ({eps_diluted}) exceeds basic EPS ({eps_basic}), which Ind AS 33 / "
+                "AS 20 does not permit — this alone is a FINDING regardless of the recompute above."
+            )
+        return TieOutCheck(
+            name, status, "Profit for the period / weighted-average shares", computed,
+            "Disclosed basic EPS", eps_basic, note=note, source_keys=keys,
         )
 
     @staticmethod
@@ -5823,6 +6612,35 @@ class TieOutTools:
                     lines.append(f"    {check.note}")
                 for key in check.source_keys:
                     lines.append("    " + FinancialFactBase.format_source(sources, key))
+            lines.append("")
+
+        # A FAIL on the tax-reconciliation or EPS-recompute check is a genuine
+        # package-level arithmetic difference (both sides come from the face
+        # statement/note, unlike the note-to-face family's asymmetric design
+        # above) — emit it as a tagged FINDING so the model doesn't have to
+        # notice a FAIL row buried in the table and improvise the phrasing.
+        tagged_names = {
+            "Tax reconciliation (current tax + deferred tax = total tax expense)",
+            "EPS recompute (profit for the period / weighted-average shares = basic EPS)",
+        }
+        tagged_fails = [c for c in checks if c.name in tagged_names and c.status == TieOutCheck.FAIL]
+        if tagged_fails:
+            findings = []
+            for check in tagged_fails:
+                detail = (
+                    f"{check.lhs_label}: {FinancialFactBase.format_amount(check.lhs)}; "
+                    f"{check.rhs_label}: {FinancialFactBase.format_amount(check.rhs)}; "
+                    f"difference: {FinancialFactBase.format_amount(check.difference)}."
+                )
+                if check.note:
+                    detail += f" {check.note}"
+                findings.append(Finding(
+                    category=Finding.FINDING,
+                    title=check.name,
+                    detail=detail,
+                    source_keys=[FinancialFactBase.format_source(sources, k) for k in check.source_keys],
+                ))
+            lines.append(format_findings(findings))
             lines.append("")
 
         lines.append(TieOutTools._DEFERRED_NOTE)
@@ -6441,6 +7259,163 @@ class AuditorReportTools:
         )
         return "\n".join(lines)
 
+    # Clause/schedule pairs this cross-check covers. Deliberately narrow —
+    # most CARO clauses have no single supporting note to cross-check
+    # against, so this stays a small hardcoded map rather than a generalised
+    # 21-clause matrix. Extend here (not by generalising the method) for
+    # additional pairs, e.g. "v" -> deposits, "vii" -> statutory dues.
+    _CROSSCHECKS = {
+        "ix": {
+            "schedule": "borrowings",
+            "no_default_phrases": [
+                "no default", "not been any default", "not defaulted",
+                "regular in repayment", "regular in the repayment",
+            ],
+            "default_phrases": [
+                "wilful defaulter", "has defaulted", "default in repayment", "delay in repayment",
+            ],
+            "note_signal_phrases": ["default", "overdue", "npa", "non-performing", "restructured"],
+        },
+    }
+
+    @staticmethod
+    def cross_check_caro_vs_notes(company: str, financial_year: str, clause: str, conn_reports) -> str:
+        """
+        Cross-checks a CARO clause against its supporting schedule note,
+        rather than only quoting the CARO text in isolation the way
+        `check_caro_clauses` does. This is the spec's own worked example:
+        CARO may state "no default" while the borrowings note discloses one
+        — an inconsistency the plain clause lookup cannot surface on its own.
+
+        Ships with clause (ix) vs the borrowings note only (see _CROSSCHECKS
+        above) — most CARO clauses have no single note that can settle the
+        question, and a shallow generalisation would produce false "no
+        inconsistency found" verdicts for pairs that were never actually
+        checked.
+        """
+        if conn_reports is None:
+            return "[tool error] Reports database is not configured."
+
+        key = (clause or "").strip().lower().strip("() .")
+        if key not in AuditorReportTools._CROSSCHECKS:
+            supported = ", ".join(AuditorReportTools._CROSSCHECKS)
+            return (
+                f"No CARO-vs-note cross-check is defined for clause '{clause}'. Currently "
+                f"supported: {supported}. Use check_caro_clauses for any other clause — it "
+                "quotes the CARO text but does not cross-check it against a note."
+            )
+        spec = AuditorReportTools._CROSSCHECKS[key]
+
+        match = DocumentResolver._resolve_document(company, financial_year, conn_reports)
+        if match is None:
+            return f"No annual report found for company '{company}' (financial year '{financial_year}')."
+        if isinstance(match, list):
+            return DocumentResolver.format_ambiguous(
+                company, financial_year, match, ask="the exact company and financial year"
+            )
+
+        doc_id = match["doc_id"]
+        clause_def = CAROClauseReference.CLAUSES[key]
+        evidence = AuditorReportTools._find_clause_evidence(doc_id, clause_def["patterns"], conn_reports)
+        note_rows = AuditRiskTools._match_note_tables(
+            doc_id, AuditScheduleReference.SCHEDULES[spec["schedule"]]["note_title_patterns"], conn_reports
+        )
+
+        lines = [
+            f"Document: {match['doc_name']} (doc_id={doc_id}, company={match['company']}, "
+            f"FY{match['fy_start']}-{str(match['fy_end'])[-2:]})",
+            f"CARO CLAUSE ({key}) vs {spec['schedule'].upper()} NOTE — CROSS-CHECK (standalone only)",
+            "",
+        ]
+        findings: list[Finding] = []
+
+        if evidence is None:
+            lines.append(f"CARO clause ({key}) text was not located in the ingested report.")
+            findings.append(Finding(
+                category=Finding.COVERAGE_NOTE,
+                title=f"CARO clause ({key}) not located",
+                detail=(
+                    "The clause's text could not be found in this document's ingested CARO "
+                    "annexure. This is a coverage gap, not evidence of no default — CARO "
+                    "annexure coverage in this corpus is partial and uneven."
+                ),
+            ))
+        else:
+            ref, extract, in_auditor_section = evidence
+            lines.append(f"CARO clause ({key}) text [{ref}]: \"{extract}\"")
+            extract_lower = extract.lower()
+            asserts_no_default = any(p in extract_lower for p in spec["no_default_phrases"])
+            asserts_default = any(p in extract_lower for p in spec["default_phrases"])
+
+            note_hit = None
+            for row in note_rows:
+                body = (row.get("table_md") or "").lower()
+                if any(p in body for p in spec["note_signal_phrases"]):
+                    note_hit = row
+                    break
+
+            if note_hit:
+                title_desc = note_hit.get("table_title") or note_hit.get("table_description") or ""
+                lines.append(
+                    f"{spec['schedule'].capitalize()} note [table_chunks:{note_hit['table_id']}] contains "
+                    f"default/overdue language: \"{title_desc}\""
+                )
+            elif not note_rows:
+                lines.append(f"No {spec['schedule']} note table was matched in this document.")
+            else:
+                lines.append(f"No default/overdue language located in the matched {spec['schedule']} note tables.")
+
+            if asserts_no_default and note_hit:
+                findings.append(Finding(
+                    category=Finding.FINDING,
+                    title=f"CARO clause ({key}) inconsistent with the {spec['schedule']} note",
+                    detail=(
+                        f"The auditor's CARO clause ({key}) response states no default, but the "
+                        f"{spec['schedule']} note discloses default/overdue-related language. This is "
+                        "an inconsistency between two disclosures in the same report — it is not "
+                        "itself a conclusion about which disclosure is correct, and it is not an "
+                        "accusation against the auditor or the company."
+                    ),
+                    source_keys=[f"CARO {ref}", f"table_chunks:{note_hit['table_id']}"],
+                ))
+            elif not note_rows:
+                findings.append(Finding(
+                    category=Finding.COVERAGE_NOTE,
+                    title=f"{spec['schedule'].capitalize()} note not located for cross-check",
+                    detail=(
+                        f"No {spec['schedule']} note table was matched, so the CARO clause ({key}) "
+                        "response could not be cross-checked against it."
+                    ),
+                ))
+            elif asserts_default and not note_hit:
+                findings.append(Finding(
+                    category=Finding.AUDIT_POINTER,
+                    title=f"CARO clause ({key}) reports a default the {spec['schedule']} note does not corroborate",
+                    detail=(
+                        f"The auditor's CARO clause ({key}) response indicates a default, but no "
+                        f"matching language was located in the {spec['schedule']} note tables that "
+                        "were matched. Verify against the full note text before drawing a conclusion."
+                    ),
+                    source_keys=[f"CARO {ref}"],
+                ))
+            else:
+                findings.append(Finding(
+                    category=Finding.COVERAGE_NOTE,
+                    title=f"No inconsistency located between CARO clause ({key}) and the {spec['schedule']} note",
+                    detail="Based on the retrieved text, the two disclosures did not conflict on this question.",
+                ))
+
+        lines.append("")
+        rendered = format_findings(findings)
+        if rendered:
+            lines.append(rendered)
+            lines.append("")
+        lines.append(
+            f"SCOPE — this cross-check covers clause ({key}) against the {spec['schedule']} note "
+            "only. It is not a general CARO-vs-notes consistency check across all 21 clauses."
+        )
+        return "\n".join(lines)
+
     @staticmethod
     def check_rule_11g(company: str, financial_year: str, conn_reports) -> str:
         """Rule 11(g) audit-trail reporting — applicable FY2022-23 onward only."""
@@ -6504,6 +7479,204 @@ class AuditorReportTools:
             "enabled, was NOT enabled for parts of the year, or was not enabled at the database "
             "level. Quote what this report actually says rather than summarising it as compliant."
         )
+
+
+# ===== SECTION 19B: PSURedFlagTools =====
+
+class PSURedFlagTools:
+    """
+    Government-company / PSU-specific red-flag scan (spec section 11).
+
+    Two jobs, both gated on this document's own text actually confirming
+    government ownership — spec section 2.2: "Do not assume Government-company
+    status from name alone; treat it as confirmed only when supplied or
+    disclosed."
+
+      1. EXEMPTION GATE. Sections 197/185/186 and the Companies (Restriction
+         on number of Layers) Rules are relaxed or exempted for Government
+         companies (MCA notification G.S.R. 463(E) dated 5 June 2015, as
+         amended). Any apparent non-compliance under those four areas is
+         ALWAYS reported as AUDIT POINTER ("verify exemption"), never
+         FINDING — this is hardcoded here rather than left to the model's
+         judgement, because the exemption may apply and a text search alone
+         cannot confirm the conditions attached to it.
+      2. The 8 recurring deviation patterns from spec section 11.1 — each a
+         RISK FLAG (a fact pattern, not a proven deficiency) when matching
+         text is located.
+
+    Ownership detection is a local, lightweight ILIKE search over this
+    document's own text/table chunks. Deliberately NOT importing
+    `ingestion.app.identify` (a separate microservice's package, run at
+    upload time, not query time) — the corpus's `public.documents` table
+    used by this file has no identification jsonb column to read at all
+    (that column only exists on the live-upload feature's own table), so
+    detection has to run against the ingested chunks directly, the same way
+    every other tool in this file already searches this corpus (see
+    AuditorReportTools._find_clause_evidence for the same pattern).
+    """
+
+    _OWNERSHIP_PATTERNS = [
+        "government company within the meaning of section 2(45)",
+        "wholly owned subsidiary of the government",
+        "wholly-owned subsidiary of the government",
+        "government of india undertaking",
+        "maharatna", "navratna", "miniratna",
+        "central public sector enterprise", "state government undertaking",
+    ]
+
+    _EXEMPT_SECTION_PATTERNS = [
+        "section 197", "schedule v", "section 185", "section 186",
+        "number of layers",
+    ]
+
+    # Keyword group per spec-11.1 pattern. A hit is a RISK FLAG, never a
+    # FINDING — these are text matches, not verified transactions.
+    _DEVIATION_PATTERNS: dict[str, list[str]] = {
+        "Understatement of liabilities/provisions": [
+            "disputed statutory dues", "provision not made", "contingent liabilit",
+        ],
+        "Overstatement of revenue via grant/subsidy classification": [
+            "grant recognised as revenue", "subsidy income", "grant income",
+        ],
+        "Idle/unproductive assets": [
+            "capital work-in-progress", "idle asset", "assets not in use",
+        ],
+        "Misclassification to manage ratios": [
+            "reclassified", "regrouped",
+        ],
+        "Subsidy/budgetary support dependence": [
+            "budgetary support", "government grant", "revenue grant",
+        ],
+        "Waivers, write-offs and ex gratia payments": [
+            "written off", "waiver", "ex gratia",
+        ],
+        "Government guarantees / contingent exposure": [
+            "government guarantee", "guarantee given by the government", "letter of comfort",
+        ],
+        "Inter-government / inter-PSU balances": [
+            "due from government", "due to government", "inter-unit", "amount due from state government",
+        ],
+    }
+
+    @staticmethod
+    def _text_hits(doc_id: str, patterns: list[str], conn_reports, limit: int = 1) -> list[dict]:
+        """First `limit` text/table chunks whose body contains any of `patterns`."""
+        hits: list[dict] = []
+        for table in ("text_chunks", "table_chunks"):
+            column = "content" if table == "text_chunks" else "table_md"
+            id_column = "chunk_id" if table == "text_chunks" else "table_id"
+            clause_sql = " OR ".join([f"{column} ILIKE %s"] * len(patterns))
+            params: list = [doc_id] + [f"%{p}%" for p in patterns]
+            try:
+                with conn_reports.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        f"SELECT {id_column} AS ref, {column} AS body FROM public.{table} "
+                        f"WHERE doc_id = %s AND ({clause_sql}) ORDER BY {id_column} LIMIT %s",
+                        params + [limit],
+                    )
+                    hits.extend({"table": table, **dict(r)} for r in cur.fetchall())
+            except Exception:
+                try:
+                    conn_reports.rollback()
+                except Exception:
+                    pass
+            if len(hits) >= limit:
+                break
+        return hits[:limit]
+
+    @staticmethod
+    def scan_psu_red_flags(company: str, financial_year: str, conn_reports) -> str:
+        if conn_reports is None:
+            return "[tool error] Reports database is not configured."
+
+        match = DocumentResolver._resolve_document(company, financial_year, conn_reports)
+        if match is None:
+            return f"No annual report found for company '{company}' (financial year '{financial_year}')."
+        if isinstance(match, list):
+            return DocumentResolver.format_ambiguous(
+                company, financial_year, match, ask="the exact company and financial year"
+            )
+        doc_id = match["doc_id"]
+
+        lines = [
+            f"Document: {match['doc_name']} (doc_id={doc_id}, company={match['company']}, "
+            f"FY{match['fy_start']}-{str(match['fy_end'])[-2:]})",
+            "GOVERNMENT-COMPANY / PSU RED-FLAG SCAN (standalone only)",
+            "",
+        ]
+
+        ownership_hits = PSURedFlagTools._text_hits(
+            doc_id, PSURedFlagTools._OWNERSHIP_PATTERNS, conn_reports, limit=1
+        )
+        if not ownership_hits:
+            lines.append(
+                "Government-company/PSU status could not be confirmed from this document's ingested "
+                "text — no ownership/classification statement was located. No PSU-specific rules have "
+                "been applied below; treat this as an ordinary Companies Act entity unless the audit "
+                "team confirms Government-company status by other means."
+            )
+            return "\n".join(lines)
+
+        lines.append(
+            f"Government-company/PSU status: indicated by ingested text "
+            f"[{ownership_hits[0]['table']}:{ownership_hits[0]['ref']}]. This is a text match, not a "
+            "legal determination under section 2(45) — confirm with the audit team before relying on "
+            "it for reporting purposes."
+        )
+        lines.append("")
+
+        findings: list[Finding] = []
+
+        exempt_hits = PSURedFlagTools._text_hits(
+            doc_id, PSURedFlagTools._EXEMPT_SECTION_PATTERNS, conn_reports, limit=1
+        )
+        if exempt_hits:
+            findings.append(Finding(
+                category=Finding.AUDIT_POINTER,
+                title="Section 197/185/186/layers-rules matter located — verify exemption",
+                detail=(
+                    "This document references section 197, Schedule V, sections 185/186, or the "
+                    "layers-rules. For a confirmed Government company these are relaxed or exempted "
+                    "under MCA notification G.S.R. 463(E) dated 5 June 2015 (as amended) — verify the "
+                    "exemption and its conditions with the audit team before treating anything here "
+                    "as non-compliance. Never report this as a FINDING on the strength of this scan alone."
+                ),
+                source_keys=[f"{exempt_hits[0]['table']}:{exempt_hits[0]['ref']}"],
+            ))
+
+        for pattern_name, keywords in PSURedFlagTools._DEVIATION_PATTERNS.items():
+            hits = PSURedFlagTools._text_hits(doc_id, keywords, conn_reports, limit=1)
+            if not hits:
+                continue
+            findings.append(Finding(
+                category=Finding.RISK_FLAG,
+                title=pattern_name,
+                detail=(
+                    f"Text matching this pattern was located in the report "
+                    f"[{hits[0]['table']}:{hits[0]['ref']}]. This is a fact pattern that warrants "
+                    "audit attention, not a proven deficiency — verify the underlying transaction, "
+                    "sanction and materiality before drawing any conclusion."
+                ),
+                source_keys=[f"{hits[0]['table']}:{hits[0]['ref']}"],
+                # A generic, conservative default: nature=2 (public-fund/PSU-sensitive by
+                # BY_NATURE), evidence_gap=2 (a keyword hit is not verification), the rest low.
+                # Individual patterns are not separately scored — that would need figures
+                # this text-only scan does not have.
+                risk_factors={
+                    "value": 1, "nature": 2, "context": 1,
+                    "evidence_gap": 2, "auditor_report_interaction": 0,
+                },
+            ))
+
+        if findings:
+            lines.append(format_findings(findings))
+        else:
+            lines.append(
+                "No text matching the recurring PSU deviation patterns (spec section 11.1) was "
+                "located in this document. This is a COVERAGE NOTE, not a clean bill — absence of a "
+                "keyword match is not evidence that the pattern does not exist."
+            )
+        return "\n".join(lines)
 
 
 # ===== SECTION 20: GoingConcernTools =====
@@ -7750,6 +8923,37 @@ class ToolRegistry:
             )
             tools.append(
                 Tool(
+                    name="scan_psu_red_flags",
+                    description=(
+                        "Government-company/PSU red-flag scan: confirms government ownership from the "
+                        "document's own text, gates Section 197/185/186/layers-rules matters as AUDIT "
+                        "POINTER (verify exemption) rather than FINDING, and scans for the 8 recurring "
+                        "PSU deviation patterns (understated liabilities, overstated revenue via grants, "
+                        "idle assets, ratio misclassification, subsidy dependence, waivers/write-offs, "
+                        "government guarantees, inter-PSU balances) as RISK FLAGs. Call once."
+                    ),
+                    parameters=[
+                        ToolParameter(
+                            name="company", type="string",
+                            description=(
+                                "Company name, exactly as the user wrote it. Do NOT expand a short name "
+                                "into a full legal name and do NOT abbreviate a long one."
+                            ),
+                            required=True,
+                        ),
+                        ToolParameter(
+                            name="financial_year", type="string",
+                            description="Financial year. e.g. 'FY2023-24', '2023-24'", required=True,
+                        ),
+                    ],
+                    tool_type=ToolType.CUSTOM,
+                    function=lambda company="", financial_year="": (
+                        PSURedFlagTools.scan_psu_red_flags(company, financial_year, conn_reports)
+                    ),
+                )
+            )
+            tools.append(
+                Tool(
                     name="assess_going_concern",
                     description=(
                         "Going-concern INDICATOR SCREEN (working capital, current ratio, interest cover, "
@@ -7842,6 +9046,44 @@ class ToolRegistry:
                     function=lambda company="", financial_year="", clauses="all": (
                         AuditorReportTools.check_caro_clauses(
                             company, financial_year, clauses, conn_reports
+                        )
+                    ),
+                )
+            )
+            tools.append(
+                Tool(
+                    name="cross_check_caro_vs_notes",
+                    description=(
+                        "Cross-checks ONE CARO clause against its supporting schedule note (currently "
+                        "clause 'ix', default in repayment, against the borrowings note) instead of only "
+                        "quoting the CARO text. Use this for a default/borrowings consistency question "
+                        "instead of, or in addition to, check_caro_clauses. Returns a tagged FINDING when "
+                        "the two disclosures genuinely conflict, or a COVERAGE NOTE when either side "
+                        "could not be located — never guesses at a conflict."
+                    ),
+                    parameters=[
+                        ToolParameter(
+                            name="company", type="string",
+                            description=(
+                                "Company name, exactly as the user wrote it. Do NOT expand a short name "
+                                "into a full legal name and do NOT abbreviate a long one."
+                            ),
+                            required=True,
+                        ),
+                        ToolParameter(
+                            name="financial_year", type="string",
+                            description="Financial year. e.g. 'FY2023-24', '2023-24'", required=True,
+                        ),
+                        ToolParameter(
+                            name="clause", type="string",
+                            description="Roman-numeral clause to cross-check. Currently only 'ix' is supported.",
+                            required=False,
+                        ),
+                    ],
+                    tool_type=ToolType.CUSTOM,
+                    function=lambda company="", financial_year="", clause="ix": (
+                        AuditorReportTools.cross_check_caro_vs_notes(
+                            company, financial_year, clause, conn_reports
                         )
                     ),
                 )

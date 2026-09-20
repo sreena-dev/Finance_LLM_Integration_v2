@@ -19,7 +19,9 @@ from __future__ import annotations
 import logging
 
 from . import materiality as materiality_mod
+from . import periods as periods_mod
 from . import quality as quality_mod
+from . import store as store_mod
 from .store import current_scope
 
 logger = logging.getLogger(__name__)
@@ -95,34 +97,85 @@ def set_materiality_threshold(amount: str = "", basis: str = "") -> str:
 
 
 def compare_uploaded_years(metric: str = "") -> str:
-    """Line up the uploaded documents by financial year.
+    """Line up the uploaded periods -- across documents AND within each one.
 
     Comparison is restricted to uploaded documents. Reaching into the corpus for
     a missing year would silently mix two sources in one trend, and a reader
     cannot tell from a percentage which of its two endpoints came from the file
     they just supplied.
+
+    Crucially this is about PERIODS, not documents. A single filing prints its
+    comparative beside the current year in every table, so one upload routinely
+    carries two years of data. Answering "you need a second document" to a
+    year-on-year question about such a file -- which is what this tool used to
+    do -- is a false refusal about data the pipeline extracted, stored and
+    already showed the user.
     """
     scope, message = _scope_or_message()
     if scope is None:
         return message
 
-    dated = [d for d in scope.documents if d.financial_year]
-    undated = [d for d in scope.documents if not d.financial_year]
+    # PACKAGES, not raw files. Specification section 4.1 treats the statements,
+    # the auditor's report and the CARO annexure as one filing, and in this
+    # corpus they arrive as separate PDFs -- so counting files made a single
+    # year's package look like three same-year uploads and tripped the
+    # "more than one upload resolves to the same financial year" warning on a
+    # perfectly ordinary set. Filtering still happens per file inside
+    # `group_into_packages`; what is reported is one entry per filing.
+    filings = scope.packages
+    dated = [d for d in filings if d.financial_year]
+    undated = [d for d in filings if not d.financial_year]
+
+    # Before anything else: what periods does the DATA carry, per filing?
+    # Derived from the extracted column headers, so it holds for any filing
+    # shape rather than the ones anyone thought to enumerate.
+    in_document = [
+        (d, periods_mod.years_available(d)) for d in filings
+    ]
+    with_comparatives = [(d, ys) for d, ys in in_document if len(ys) > 1]
 
     if len(dated) < 2:
-        lines = [
-            "At least two uploaded documents with a readable financial year are "
-            "needed for a comparison."
-        ]
-        if dated:
+        lines: list[str] = []
+        if with_comparatives:
             lines.append(
-                f"Only one has a year: {dated[0].filename} ({dated[0].financial_year})."
+                "Only one uploaded FILING has a readable financial year (several "
+                "files of one filing count once), but a year-on-year comparison "
+                "IS possible: it carries more than one period in its own tables."
             )
-        if undated:
+            for document, years in with_comparatives:
+                lines.append("")
+                lines.append(f"{document.filename} (doc_id={document.doc_id}):")
+                lines.append(periods_mod.report(document, indent="  "))
+            lines.append("")
             lines.append(
-                "These uploads have no readable year, so they cannot be placed on "
-                "a timeline: " + ", ".join(d.filename for d in undated)
-                + ". Ask the user which year each covers."
+                "Read both figures off the SAME ROW of the same table -- the "
+                "current-year column and the comparative column -- and quote each "
+                "with the column heading exactly as printed. Do NOT say the "
+                "earlier year was not provided: it is in this file."
+                + (f" The metric asked about is '{metric}'." if metric else "")
+            )
+        else:
+            lines.append(
+                "At least two uploaded documents with a readable financial year "
+                "are needed for a comparison ACROSS documents, and no uploaded "
+                "document carries more than one period in its own tables either."
+            )
+            if dated:
+                lines.append(
+                    f"Only one has a year: {dated[0].filename} "
+                    f"({dated[0].financial_year})."
+                )
+            for document in scope.documents:
+                lines.append("")
+                lines.append(f"{document.filename} (doc_id={document.doc_id}):")
+                lines.append(periods_mod.report(document, indent="  "))
+        if undated:
+            lines.append("")
+            lines.append(
+                "These uploads have no readable document year: "
+                + ", ".join(d.filename for d in undated)
+                + ". Their own period columns, listed above, still govern what "
+                "they can be asked about; ask the user only if those are empty too."
             )
         return "\n".join(lines)
 
@@ -134,30 +187,58 @@ def compare_uploaded_years(metric: str = "") -> str:
     ]
     for document in dated:
         summary = document.summary()
+        years = periods_mod.years_available(document)
         lines.append(
             f"- {document.financial_year}: {document.filename} "
             f"(doc_id={document.doc_id}, entity {summary['company'] or 'unread'}, "
             f"scan quality {summary['grade']}, "
-            f"{summary['unreadable_cells']} figure(s) withheld)"
+            f"{summary['unreadable_cells']} figure(s) withheld, "
+            f"{summary.get('recovered_cells', 0)} shown via unconfirmed recovery)"
+            + (f"\n    periods in its own tables: {', '.join(str(y) for y in years)}"
+               if len(years) > 1 else "")
         )
 
-    entities = {(d.company or "").strip().lower() for d in dated if d.company}
-    if len(entities) > 1:
+    if with_comparatives:
+        lines.append("")
+        lines.append(
+            "Note that these documents ALSO carry comparatives of their own, so a "
+            "period may be available from more than one file. Prefer the filing "
+            "the period is the CURRENT year of, and if the two disagree say so "
+            "rather than silently picking one — a comparative is as originally "
+            "filed and may predate a restatement."
+        )
+
+    # Compared with _same_entity, not exact lowercase equality. The name is
+    # OCR'd off a scan and a filing writes itself down inconsistently: "Acme
+    # Ltd" on the balance sheet and "Acme Limited" on the auditor's report are
+    # one entity, and flagging them as DIFFERENT taught the reader to distrust
+    # a trend that was perfectly sound. _same_entity already strips the legal
+    # suffixes for exactly this, and is what group_into_packages uses.
+    named = [d.company for d in dated if d.company]
+    distinct: list[str] = []
+    for name in named:
+        if not any(store_mod._same_entity(name, seen) for seen in distinct):
+            distinct.append(name)
+    if len(distinct) > 1:
         lines.append("")
         lines.append(
             "! These documents name DIFFERENT entities: "
-            + ", ".join(sorted(d.company for d in dated if d.company))
+            + ", ".join(sorted(distinct))
             + ". Do not present a trend across them without confirming with the "
             "user that they are the same reporting entity."
         )
 
-    years = [d.financial_year for d in dated]
+    # Compared through _fy_key so two spellings of one year are not read as two
+    # years, and counted over FILINGS -- one year's statements plus its
+    # auditor's report are a single package by this point, so reaching here now
+    # genuinely means two separate filings claim the same period.
+    years = [store_mod._fy_key(d.financial_year) for d in dated]
     if len(set(years)) != len(years):
         lines.append("")
         lines.append(
-            "! More than one upload resolves to the same financial year. Confirm "
-            "which is the filing to use before comparing — one may be a restated "
-            "or superseded set."
+            "! More than one uploaded FILING resolves to the same financial "
+            "year. Confirm which to use before comparing — one may be a "
+            "restated or superseded set."
         )
 
     scales = {
@@ -174,10 +255,15 @@ def compare_uploaded_years(metric: str = "") -> str:
 
     lines.append("")
     lines.append(
-        "Now call the ordinary company tools once per document — they read "
-        "uploaded documents exactly as they read filed reports — and quote each "
-        "figure with the year and document it came from. Use ONLY the documents "
-        "listed above; do not fill a missing year from the corpus."
+        "For a MOVEMENT, GROWTH, TREND or CAGR across these years, call "
+        "`get_multi_year_trend` with this entity. It reads the uploaded filings "
+        "above and computes the differences ITSELF, which is what rule 15 "
+        "requires — you may not subtract two figures you obtained from two "
+        "separate tool calls. For a single year's figures, call the ordinary "
+        "company tools with that year; they read uploaded documents exactly as "
+        "they read filed reports. Either way quote each figure with the year "
+        "and document it came from, and use ONLY the documents listed above — "
+        "do not fill a missing year from the corpus."
     )
     if undated:
         lines.append(
@@ -205,9 +291,13 @@ SPECS = [
     (
         "get_extraction_quality_report",
         "Report how reliably an uploaded document was read: scan quality per page, "
-        "which figures could NOT be read and were withheld, and which printed totals "
-        "did not add up. Call this before reporting any finding from an uploaded "
-        "document, and whenever the user asks whether the extraction is trustworthy.",
+        "which figures could NOT be read and were withheld, which of those were "
+        "recovered by a second vision read (and whether the arithmetic confirmed the "
+        "recovery, promoting it to a plain number, or left it a `[recovered ...]` "
+        "marker that must never be used as a computed or established figure), and "
+        "which printed totals did not add up. Call this before reporting any finding "
+        "from an uploaded document, and whenever the user asks whether the extraction "
+        "is trustworthy.",
         [("doc_id", "string", "The uploaded document's doc_id. Omit for all of them.", False)],
     ),
     (
@@ -222,10 +312,15 @@ SPECS = [
     ),
     (
         "compare_uploaded_years",
-        "Line up the uploaded documents by financial year before a multi-year "
-        "comparison, and flag mismatched entities, duplicate years or a framework "
-        "change. Call this before answering any question comparing periods across "
-        "uploaded files.",
+        "Report every reporting period the uploaded data actually covers — both "
+        "across documents AND the comparative columns inside a single document — "
+        "and flag mismatched entities, duplicate years or a framework change. "
+        "Call this before answering ANY question that compares periods, including "
+        "'versus last year' about one uploaded file: one filing normally carries "
+        "two years side by side, so a single upload is usually enough. It tells "
+        "you which periods exist and which tool to call next; for a movement or "
+        "CAGR across several uploaded filings that next tool is "
+        "`get_multi_year_trend`, which computes the differences itself.",
         [("metric", "string", "What is being compared, e.g. 'revenue', 'total assets'. Optional.", False)],
     ),
 ]

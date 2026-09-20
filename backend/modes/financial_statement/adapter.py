@@ -156,6 +156,12 @@ def _install_upload_bridge() -> None:
             "AuditorReportTools": tools_fs.AuditorReportTools,
             "GoingConcernTools": tools_fs.GoingConcernTools,
             "AuditRiskTools": tools_fs.AuditRiskTools,
+            # The multi-year trend's document resolver. Without it, the one
+            # tool that computes cross-year deltas cannot assemble a series
+            # from uploads at all -- and prompt rule 15 forbids the model
+            # computing the deltas itself, so a comparative question about
+            # uploaded filings has no answer path.
+            "TrendAnalysisTools": tools_fs.TrendAnalysisTools,
         },
     )
 

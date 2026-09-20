@@ -152,3 +152,124 @@
 /* `chevron` is a downward-pointing arrow — rotated here into prev/next. */
 .docpane__nav-prev { transform: rotate(90deg); }
 .docpane__nav-next { transform: rotate(-90deg); }
+
+/* ── Editable cells ──────────────────────────────────────────────────────
+   A flagged cell is a real, focusable button, tinted by state -- colour is
+   never the only signal, since the state name is also in its ARIA label and
+   its editor. Layout otherwise matches `.md td` exactly, so a table mixing
+   flagged and clean cells reads as one table, not two different ones. */
+.docpane__cellbtn {
+  display: block;
+  width: 100%;
+  text-align: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 6px;
+  margin: -3px -6px;
+  border: 1px dashed transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  background: none;
+}
+.docpane__cellbtn:hover,
+.docpane__cellbtn:focus-visible { border-color: currentColor; }
+.docpane__cellbtn:focus-visible { outline: 2px solid var(--navy-600); outline-offset: 1px; }
+
+.docpane__cellbtn--unreadable { background: var(--err-100); color: var(--err-600); }
+.docpane__cellbtn--recovered { background: var(--warn-100); color: var(--warn-600); }
+.docpane__cellbtn--user_entered { background: var(--gold-100); color: var(--gold-700); }
+
+.docpane__editor {
+  margin-top: 10px;
+  background: var(--white);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 12px 14px;
+}
+.docpane__editor:focus { outline: none; }
+
+.docpane__editor-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.docpane__editor-head strong { font-size: 13px; color: var(--ink-900); }
+.docpane__editor-col { flex: 1; font-size: 11.5px; color: var(--ink-500); }
+.docpane__editor-close {
+  border: 0; background: none; color: var(--ink-500); font-size: 18px;
+  line-height: 1; cursor: pointer; padding: 0 2px;
+}
+
+.docpane__editor-hint {
+  font-size: 12px;
+  color: var(--ink-600);
+  margin: 0 0 8px;
+}
+.docpane__editor-warn, .docpane__editor-ok {
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  padding: 6px 9px;
+  margin: 0 0 8px;
+}
+.docpane__editor-warn { background: var(--warn-100); color: var(--warn-600); }
+.docpane__editor-ok { background: var(--ok-100); color: var(--ok-600); }
+
+.docpane__editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--ink-600);
+  margin-bottom: 10px;
+}
+.docpane__editor-field input {
+  font: inherit;
+  font-size: 14px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink-900);
+}
+.docpane__editor-field input:focus { outline: 2px solid var(--navy-600); outline-offset: -1px; }
+
+.docpane__editor-error {
+  font-size: 12px;
+  color: var(--err-600);
+  background: var(--err-100);
+  border-radius: var(--radius-sm);
+  padding: 6px 9px;
+  margin: 0 0 10px;
+}
+
+.docpane__editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.docpane__editor-actions button {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--navy-700);
+  color: var(--white);
+  cursor: pointer;
+}
+.docpane__editor-actions button:disabled { opacity: 0.5; cursor: default; }
+.docpane__editor-actions button.docpane__editor-danger { background: var(--err-600); }
+.docpane__editor-actions button.docpane__editor-ghost {
+  background: none;
+  color: var(--ink-600);
+}
+
+.docpane__editor-scan {
+  margin-top: 10px;
+  max-height: 320px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.docpane__editor-scan .docpane__loading { margin: 8px 0; }

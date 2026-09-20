@@ -49,7 +49,7 @@ def capture(pdf_path: str, page_index: int) -> str:
 
     quality = qualities[page_index]
     quality.page_no = 1
-    converted = convert_mod.convert([images[page_index]], [quality], needs_ocr=True)
+    converted = convert_mod.convert([images[page_index]], [quality])
     return converted.page_markdown.get(1, converted.markdown)
 
 

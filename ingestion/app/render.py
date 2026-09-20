@@ -14,9 +14,16 @@ sample corpus, every standalone financial statement is a pure scan:
     OD 2021-23 SFS     24-26pp Xerox VersaLink JPEG, 200 DPI
     OD 2023-24 SFS     35pp   JPEG 200 DPI, two landscape-rotated pages
 
-so ``has_text_layer`` is false throughout and OCR is not optional. The pipeline
-still checks rather than assumes, because a user can upload a born-digital
-filing tomorrow and that one should skip OCR entirely.
+so ``has_text_layer`` is false throughout in the sample corpus.
+
+The pipeline still checks rather than assumes, but not to skip OCR: it never
+does, on any document -- see the comment on ``do_ocr`` in
+``convert.py::_pipeline_options`` for why a rasterise-then-reassemble pipeline
+has no path that ever benefits from skipping it, and how a born-digital PDF
+that reached this fork once (silently) lost every figure it had. What this
+still buys is an honest note ("this document's own text layer went unused")
+and a signal a later phase could act on by reading the source PDF's text
+directly instead of rasterising it away, which this stage does not attempt.
 """
 
 from __future__ import annotations

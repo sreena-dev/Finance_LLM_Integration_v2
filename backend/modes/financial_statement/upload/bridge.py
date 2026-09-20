@@ -35,7 +35,7 @@ from __future__ import annotations
 import inspect
 import logging
 
-from . import diagnostics, narrative
+from . import diagnostics, edits, narrative
 from .store import UploadedDocument, current_scope
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,7 @@ _EXPECTED = {
     "UnitResolver.resolve": ("doc_id", "conn_reports"),
     "DocumentResolver._resolve_document": ("company", "financial_year", "conn"),
     "DocumentResolver.latest_fy_end": ("company", "conn"),
+    "TrendAnalysisTools._resolve_reports": ("company", "financial_year", "conn_reports"),
     "ToolRegistry.build_tools": ("self", "conn", "initial_chunks", "conn_reports", "allowed"),
     # Narrative side. Same discipline as above: a re-pull that renames any of
     # these parameters must fail the install loudly rather than leave notes and
@@ -118,6 +119,21 @@ def _document_header(upload) -> str:
     )
 
 
+def _table_text_with_edit_note(document: UploadedDocument, table: dict) -> str:
+    """A table's `table_md`, plus a DATA QUALITY NOTE line naming any figure
+    a user typed in after reading the scan (see `edits.py`).
+
+    Both call sites that hand a table's markdown to the model route through
+    here, so disclosure cannot be added at one site and forgotten at the
+    other. The note is a plain sentence, not a `|` line, so it is inert to
+    `parse_table_md` and safe to sit directly under the table -- and rule 17
+    already requires the model to reproduce a DATA QUALITY NOTE it is shown.
+    """
+    table_md = table.get("table_md") or ""
+    note = edits.user_edits_note(document.quality, document.doc_id, table.get("table_id") or "")
+    return f"{table_md}\n{note}" if note else table_md
+
+
 def _source_ref(source_ref_cls, table: dict) -> str:
     try:
         return source_ref_cls.table(
@@ -150,7 +166,7 @@ def _wrap_find_statement_tables(original, source_ref_cls, statement_labels):
 
         parts = []
         for table in tables:
-            parts.append(_source_ref(source_ref_cls, table) + "\n" + (table.get("table_md") or ""))
+            parts.append(_source_ref(source_ref_cls, table) + "\n" + _table_text_with_edit_note(document, table))
         return "\n\n".join(parts)
 
     return _find_statement_tables
@@ -256,6 +272,53 @@ def _wrap_latest_fy_end(original):
         return original(company, conn)
 
     return latest_fy_end
+
+
+def _wrap_resolve_reports(original):
+    """Let a multi-year trend span every uploaded filing, not two of them.
+
+    ``get_multi_year_trend`` is the ONLY tool that computes a cross-year
+    difference or CAGR, and prompt rule 15 forbids the model doing that
+    arithmetic itself. So when this function cannot assemble a series, a
+    comparative question about uploaded documents is not merely awkward -- it
+    is unanswerable, and the model's only honest move is to decline.
+
+    Two things stopped it assembling one, both fixed here rather than in the
+    vendored file:
+
+    * With no year given, the original builds ``[f"{y}-{y+1}" for y in
+      range(latest - 2, latest)]`` -- always exactly TWO labels, so a user who
+      uploaded three filings got a two-year trend and no indication the third
+      had been dropped.
+    * Each label was then resolved separately, and any label matching more
+      than one document abandoned the whole request with an "ask the user"
+      message (``format_ambiguous``) rather than a series.
+
+    An upload set is not the corpus: it is a handful of files the user chose
+    deliberately, and every one of them for the named entity belongs in the
+    trend. So this returns ALL of them, ascending by ``fy_end``, and leaves the
+    tool's own line-item extraction and delta arithmetic untouched.
+
+    The year argument is deliberately not used to narrow: a trend needs more
+    than one period by definition, and narrowing to the single named year is
+    what produced a one-point "trend". Entity scoping still applies -- a
+    company with no uploads falls through to Postgres unchanged.
+    """
+    def _resolve_reports(company, financial_year, conn_reports):
+        scope = current_scope()
+        if not (scope and scope.documents):
+            return original(company, financial_year, conn_reports)
+
+        matches = [m for m in scope.match(company) if m.fy_end is not None]
+        if not matches:
+            # Uploads exist but none are this entity's. A question about a
+            # company the user never uploaded belongs to the corpus.
+            return original(company, financial_year, conn_reports)
+
+        matches.sort(key=lambda m: m.fy_end)
+        return [_as_document_row(m) for m in matches], None
+
+    return _resolve_reports
 
 
 def _wrap_build_tools(original):
@@ -520,7 +583,7 @@ def _wrap_lookup_report_reference(original, report_tools, unit_resolver, source_
                 parts.append(
                     source_ref.table(table.get("table_id"), table.get("page_ocr_start"), label)
                 )
-                parts.append(table.get("table_md") or "")
+                parts.append(_table_text_with_edit_note(upload, table))
 
         if texts:
             parts.append("")
@@ -710,6 +773,8 @@ def _install_narrative(t, document_resolver, unit_resolver, source_ref) -> None:
     going_concern = t["GoingConcernTools"]
     audit_risk = t["AuditRiskTools"]
 
+    trend = t.get("TrendAnalysisTools")
+
     for owner, attribute, label in (
         (document_resolver, "_fetch_following_chunks", "DocumentResolver._fetch_following_chunks"),
         (document_resolver, "_find_compliance_passage", "DocumentResolver._find_compliance_passage"),
@@ -757,3 +822,13 @@ def _install_narrative(t, document_resolver, unit_resolver, source_ref) -> None:
         _wrap_match_note_tables(audit_risk._match_note_tables))
     policy.get_accounting_policy_note = staticmethod(
         _wrap_get_accounting_policy_note(policy.get_accounting_policy_note))
+
+    # Optional so an adapter that has not been updated to pass it still
+    # installs -- but verified the moment it IS passed, on the same contract
+    # as everything above.
+    if trend is not None:
+        _verify(trend, "_resolve_reports",
+                _EXPECTED["TrendAnalysisTools._resolve_reports"],
+                "TrendAnalysisTools._resolve_reports")
+        trend._resolve_reports = staticmethod(
+            _wrap_resolve_reports(trend._resolve_reports))

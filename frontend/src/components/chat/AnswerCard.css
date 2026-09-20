@@ -174,30 +174,6 @@
   color: var(--navy-700);
 }
 
-/* The materiality legend. Set apart from the answer body because it is a
-   standing qualification on every flag above it, not another paragraph of the
-   argument. */
-.answer__legend {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border-left: 3px solid var(--navy-600);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--ink-50);
-  font-size: 12px;
-}
-
-/* A provisional threshold is one the system computed, not one the audit team
-   set. The colour difference is deliberate: SA 320 makes choosing the
-   benchmark the auditor's judgement, and a computed band must never be mistaken
-   for an agreed one. */
-.answer__legend.is-provisional {
-  border-left-color: var(--warn-600);
-  background: var(--warn-100);
-}
-
-.answer__legend p { margin: 4px 0; }
-.answer__legend ul { margin: 4px 0; padding-left: 18px; }
-
 .chunk__scan {
   display: inline-flex;
   align-items: center;

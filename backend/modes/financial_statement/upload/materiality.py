@@ -41,6 +41,7 @@ BY_NATURE = (
     "write-offs, waivers and ex gratia payments",
     "fraud-sensitive matters",
     "public-fund and propriety questions",
+    "government/parent support and subsidy dependence",
 )
 
 

@@ -222,6 +222,30 @@ def test_statement_lookup_is_served_from_memory(originals, uploaded):
     assert originals == []
 
 
+def test_a_user_entered_figure_carries_a_data_quality_note_into_the_tool_output(originals, uploaded):
+    """Disclosure layer 2 of `edits.py`'s design (layer 1 is the inline
+    `[user-entered]` tag already in `table_md` itself): a tool reading the
+    table also gets a plain-sentence note naming the figure and its prior
+    state, so a model that only skims the raw table text still sees it."""
+    uploaded.quality = {
+        "grade": "good",
+        "user_edits": [{
+            "table": "t1", "row_index": 0, "col_index": 2,
+            "row_label": "Property, plant and equipment", "column": "As at 31 March 2023",
+            "value": "39,640", "original_state": "unreadable", "active": True,
+        }],
+    }
+    store.STORE.put(uploaded)
+    store.set_scope(store.scope_for("u1", "c1"))
+
+    text = tools_fs.ComplianceTools._find_statement_tables("up_test", "balance_sheet", None)
+
+    assert "DATA QUALITY NOTE" in text
+    assert "entered by the user" in text
+    assert 'row "Property, plant and equipment"' in text
+    assert originals == []
+
+
 def test_a_missing_statement_uses_the_wording_downstream_code_keys_on(originals, uploaded):
     """``FinancialFactBase.load`` decides a statement was not found by testing
     for the substring 'No standalone'. A different sentence here would make it
@@ -277,6 +301,64 @@ def test_ratio_extraction_engine_reads_an_uploaded_document(originals, uploaded)
     assert figures["total_equity_and_liabilities"] == 2784180.0
     assert figures["revenue_from_operations"] == 4560040.0
     assert figures["profit_before_tax"] == 610004.0
+
+
+#: A Schedule III Division I balance sheet: bare "Total" closing each side,
+#: no "Total assets" / "Total equity and liabilities" printed anywhere --
+#: verified real shape, transcribed from data/OD-SPSU-SO-032/2022-23's own
+#: extraction. `BALANCE_SHEET` above never exercises the bare-Total fallback
+#: at all, because it prints "Total equity and liabilities" explicitly.
+DIVISION_I_BALANCE_SHEET = """| Particulars | Note No. | 31st March, 2023 | 31st March, 2022 |
+| --- | --- | --- | --- |
+| I. Equity and Liabilities | | | |
+| (1) Shareholders' funds | | | |
+| (a) Share capital | 1 | 15,00,000.00 | 15,00,000.00 |
+| (b) Reserves and surplus | 2 | 38,81,031.72 | -25,460.00 |
+| Total | | 43,34,97,783.82 | 14,99,540.00 |
+| II. Assets | | | |
+| (1) Non-current assets | | | |
+| (a) Property, Plant and Equipment | 7 | 3,10,253.00 | |
+| (2) Current assets | | | |
+| (b) Cash and cash equivalents | 8 | 25,46,94,119.72 | 14,99,540.00 |
+| TOTAL | | 43,34,97,783.82 | 14,99,540.00 |
+"""
+
+
+def test_total_equity_and_liabilities_and_total_liabilities_resolve_end_to_end(originals):
+    """The fallback exercised through the real bridge + extract_all_figures,
+    not just the bare `_find_bare_total_after` unit -- proof the fix reaches
+    an uploaded document the way a real query actually would.
+
+    total_liabilities has no printed row at all on this fixture (same as the
+    real filing); it must come out as the derived difference between
+    total_equity_and_liabilities and total_equity, not as None."""
+    document = store.UploadedDocument(
+        doc_id="up_div1", user_id="u1", conversation_id="c1",
+        filename="OD_2022-23_SFS.pdf",
+        document={"fy_start": 2022, "fy_end": 2023, "company": "Startup Odisha"},
+        identification={"entity_name": "Startup Odisha", "financial_year": "2022-23"},
+        quality={"grade": "fair"},
+        tables=[{
+            "table_id": "up_div1_t1", "table_title": "Balance Sheet as at 31st March, 2023",
+            "table_md": DIVISION_I_BALANCE_SHEET, "page_ocr_start": 1,
+            "financial_stmt_type": "balance_sheet", "unit": None,
+            "currency": "INR", "is_financial": True,
+        }],
+    )
+    store.STORE.put(document)
+    token = store.set_scope(store.scope_for("u1", "c1"))
+    try:
+        figures = tools_fs.RatioExtractionEngine.extract_all_figures("up_div1", ExplodingConnection())
+        assert figures["total_assets"] == pytest.approx(433497783.82, abs=0.01)
+        assert figures["total_equity_and_liabilities"] == pytest.approx(433497783.82, abs=0.01)
+        # Share capital (15,00,000) + reserves and surplus (38,81,031.72).
+        assert figures["total_equity"] == pytest.approx(5381031.72, abs=0.01)
+        assert figures["total_liabilities"] == pytest.approx(
+            433497783.82 - 5381031.72, abs=0.01
+        )
+    finally:
+        store.reset_scope(token)
+        store.STORE.drop_conversation("u1", "c1")
 
 
 def test_tie_out_checks_run_and_the_balance_sheet_balances(originals, uploaded):

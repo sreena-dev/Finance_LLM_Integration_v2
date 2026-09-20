@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Icon from '../common/Icon';
 import Markdown from '../common/Markdown';
-import { fsDocumentPages, fsPageImage, fsPageText } from '../../api/client';
+import { fsDocumentPages, fsEditCell, fsPageImage, fsPageText } from '../../api/client';
 import './DocumentPane.css';
 
 /**
@@ -158,18 +158,24 @@ function PageImage({ mode, conversationId, docId, pageNo }) {
 function PageText({ mode, conversationId, docId, pageNo }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
+  // Bumped after a saved edit to force the effect below to refetch. A local
+  // patch of `data` would have to re-derive cell state (unreadable/recovered/
+  // user-entered, plus footing) itself -- `edits.cells_for_table` already
+  // does that correctly server-side, so re-reading it is the one place that
+  // logic needs to live, rather than a second, driftable copy in the client.
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setData(null);
-    setError(null);
+    if (refreshKey === 0) { setData(null); setError(null); }
 
     fsPageText(mode, conversationId, docId, pageNo)
       .then((d) => { if (!cancelled) setData(d); })
       .catch((e) => { if (!cancelled) setError(e.message); });
 
     return () => { cancelled = true; };
-  }, [mode, conversationId, docId, pageNo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, conversationId, docId, pageNo, refreshKey]);
 
   if (error) return <p className="docpane__error">{error}</p>;
   if (!data) return <p className="docpane__loading">Loading…</p>;
@@ -187,8 +193,241 @@ function PageText({ mode, conversationId, docId, pageNo }) {
         </p>
       ))}
       {tables.map((table) => (
-        <Markdown key={table.table_id}>{table.table_md}</Markdown>
+        Array.isArray(table.cells) && table.cells.length > 0 ? (
+          <EditableTable
+            key={table.table_id}
+            mode={mode}
+            conversationId={conversationId}
+            docId={docId}
+            pageNo={pageNo}
+            table={table}
+            onSaved={() => setRefreshKey((k) => k + 1)}
+          />
+        ) : (
+          <Markdown key={table.table_id}>{table.table_md}</Markdown>
+        )
       ))}
+    </div>
+  );
+}
+
+/** `edits.split_row`, mirrored: trims the outer `|`, splits, trims each cell. */
+function splitRow(line) {
+  let s = (line || '').trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map((c) => c.trim());
+}
+
+/**
+ * One financial table with cells the extraction flagged as `[unreadable
+ * ...]` or `[recovered ...]` (or already `[user-entered]`) rendered as
+ * buttons instead of plain text, so the reader who can see the scan can
+ * supply the figure the extraction could not.
+ *
+ * Only ever rendered for a table `page_text` returned a non-empty `cells`
+ * array for -- everything else (the overwhelming majority of tables) stays
+ * on the plain `<Markdown>` path, unchanged.
+ */
+export function EditableTable({ mode, conversationId, docId, pageNo, table, onSaved }) {
+  const lines = (table.table_md || '').split('\n');
+  const header = splitRow(lines[0] || '');
+  const rows = lines.slice(2).map(splitRow);
+  const cellMap = new Map((table.cells || []).map((c) => [`${c.row_index}:${c.col_index}`, c]));
+
+  const [editingKey, setEditingKey] = useState(null); // "row:col" or null
+  const [showScan, setShowScan] = useState(false);
+  const triggerRefs = useRef({});
+
+  const closeEditor = useCallback((key) => {
+    setEditingKey(null);
+    setShowScan(false);
+    triggerRefs.current[key]?.focus();
+  }, []);
+
+  const editing = editingKey != null ? cellMap.get(editingKey) : null;
+  const [rowIdx, colIdx] = editingKey ? editingKey.split(':').map(Number) : [null, null];
+  const currentCellText = rowIdx != null ? (rows[rowIdx]?.[colIdx] ?? '') : '';
+
+  return (
+    <div className="md">
+      <div className="md__table-wrap">
+        <table>
+          <thead>
+            <tr>{header.map((h, i) => <th key={i}>{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((row, r) => (
+              <tr key={r}>
+                {row.map((text, c) => {
+                  const key = `${r}:${c}`;
+                  const cell = cellMap.get(key);
+                  if (!cell) return <td key={c}>{text}</td>;
+                  const label = `${
+                    cell.state === 'unreadable' ? 'Unreadable'
+                      : cell.state === 'recovered' ? 'Recovered, unconfirmed'
+                        : 'User-entered'
+                  } figure, row ${cell.row_label || r + 1}, column ${cell.column || c + 1}. Press to ${
+                    cell.state === 'user_entered' ? 'edit or revert' : 'enter'
+                  }.`;
+                  return (
+                    <td key={c}>
+                      <button
+                        type="button"
+                        ref={(el) => { triggerRefs.current[key] = el; }}
+                        className={`docpane__cellbtn docpane__cellbtn--${cell.state}`}
+                        aria-haspopup="dialog"
+                        aria-expanded={editingKey === key}
+                        aria-label={label}
+                        onClick={() => { setEditingKey(key); setShowScan(false); }}
+                      >
+                        {text}
+                      </button>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {editing && (
+        <CellEditor
+          mode={mode}
+          conversationId={conversationId}
+          docId={docId}
+          pageNo={pageNo}
+          tableId={table.table_id}
+          rowIndex={rowIdx}
+          colIndex={colIdx}
+          cell={editing}
+          currentCellText={currentCellText}
+          showScan={showScan}
+          onToggleScan={() => setShowScan((v) => !v)}
+          onClose={() => closeEditor(editingKey)}
+          onSaved={() => { onSaved(); closeEditor(editingKey); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The inline editor for one flagged cell: the recovered value and
+ * confidence when there is one, a labelled amount input, Save / Confirm /
+ * Revert as the cell's state allows, and an optional inset of the scan for
+ * this page so the reader doesn't have to leave the Text tab to check it.
+ */
+function CellEditor({
+  mode, conversationId, docId, pageNo, tableId, rowIndex, colIndex, cell,
+  currentCellText, showScan, onToggleScan, onClose, onSaved,
+}) {
+  const [value, setValue] = useState(
+    cell.state === 'user_entered' ? (cell.edit?.value ?? '') : (cell.recovered_text ?? '')
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const dialogRef = useRef(null);
+
+  useEffect(() => { dialogRef.current?.focus(); }, []);
+
+  const run = useCallback(async (action, actionValue) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await fsEditCell(mode, conversationId, docId, tableId, {
+        rowIndex, colIndex, expectedCell: currentCellText, action,
+        ...(actionValue !== undefined ? { value: actionValue } : {}),
+      });
+      onSaved();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }, [mode, conversationId, docId, tableId, rowIndex, colIndex, currentCellText, onSaved]);
+
+  return (
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+    <div
+      className="docpane__editor"
+      role="dialog"
+      aria-modal="false"
+      aria-label={`Edit figure: row ${cell.row_label || ''}, column ${cell.column || ''}`}
+      tabIndex={-1}
+      ref={dialogRef}
+      onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
+    >
+      <div className="docpane__editor-head">
+        <strong>{cell.row_label || 'Row'}</strong>
+        <span className="docpane__editor-col">{cell.column}</span>
+        <button type="button" className="docpane__editor-close" onClick={onClose} aria-label="Close editor">×</button>
+      </div>
+
+      {cell.state === 'recovered' && (
+        <p className="docpane__editor-hint">
+          A second read of the scan shows <strong>{cell.recovered_text}</strong>
+          {cell.confidence ? ` (confidence: ${cell.confidence})` : ''}, not confirmed by this
+          column's own arithmetic.
+        </p>
+      )}
+      {cell.state === 'unreadable' && (
+        <p className="docpane__editor-hint">The extraction could not read this figure from the scan.</p>
+      )}
+      {cell.state === 'user_entered' && (
+        <p className="docpane__editor-hint">
+          Entered by {cell.edit?.by || 'a user'}. Originally {cell.edit?.original_marker
+            ? 'unreadable or recovered' : 'unreadable'} before that.
+        </p>
+      )}
+      {cell.edit?.footing?.verdict === 'does_not_tie' && (
+        <p className="docpane__editor-warn">
+          Not confirmed by this column's arithmetic (simple check): printed total{' '}
+          {cell.edit.footing.printed}, components sum to {cell.edit.footing.computed}.
+        </p>
+      )}
+      {cell.edit?.footing?.verdict === 'ties' && (
+        <p className="docpane__editor-ok">This column's total ties with this figure included.</p>
+      )}
+
+      <label className="docpane__editor-field">
+        <span>Figure from the scan</span>
+        <input
+          type="text"
+          inputMode="decimal"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          disabled={saving}
+          placeholder="e.g. 12,859 or (5,000)"
+        />
+      </label>
+
+      {error && <p className="docpane__editor-error" role="alert">{error}</p>}
+
+      <div className="docpane__editor-actions">
+        <button type="button" disabled={saving || !value.trim()} onClick={() => run('set', value)}>
+          {cell.state === 'user_entered' ? 'Save change' : 'Save'}
+        </button>
+        {cell.state === 'recovered' && (
+          <button type="button" disabled={saving} onClick={() => run('confirm')}>
+            Confirm recovered value
+          </button>
+        )}
+        {cell.state === 'user_entered' && (
+          <button type="button" className="docpane__editor-danger" disabled={saving} onClick={() => run('revert')}>
+            Revert
+          </button>
+        )}
+        <button type="button" className="docpane__editor-ghost" onClick={onToggleScan}>
+          {showScan ? 'Hide scan for this page' : 'Show scan for this page'}
+        </button>
+      </div>
+
+      {showScan && (
+        <div className="docpane__editor-scan">
+          <PageImage mode={mode} conversationId={conversationId} docId={docId} pageNo={pageNo} />
+        </div>
+      )}
     </div>
   );
 }

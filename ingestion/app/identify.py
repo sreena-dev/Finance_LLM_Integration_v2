@@ -274,6 +274,80 @@ def detect_framework(full_text: str) -> tuple[str | None, str | None, str, list[
 
 
 # ---------------------------------------------------------------------------
+# Government-company / PSU ownership
+# ---------------------------------------------------------------------------
+
+# Deliberately excludes bare CIN parsing: a CIN's ownership-category digit is
+# not reliable enough on its own to assert Government-company status (a
+# private company can carry a "U" CIN too), so it is not used as a signal
+# here. Ownership phrases are required to sit near a shareholding/promoter
+# context so this does not collide with the module's own grant/subsidy
+# language (a company can disclose receiving a grant without being
+# Government-owned).
+_GOVT_STRONG = re.compile(
+    r"government\s+company\s+within\s+the\s+meaning\s+of\s+section\s*2\s*\(\s*45\s*\)|"
+    r"wholly[\s-]owned\s+subsidiary\s+of\s+(the\s+)?(government|govt\.?)|"
+    r"a\s+government\s+of\s+india\s+undertaking",
+    re.I,
+)
+_GOVT_OWNERSHIP_CONTEXT = re.compile(
+    r"(equity|shareholding|share\s+capital|shares?)\s+.{0,60}(held|owned)\s+by\s+.{0,40}"
+    r"(government|govt\.?|president\s+of\s+india)|"
+    r"(government|govt\.?|president\s+of\s+india)\s+.{0,40}holds?\s+.{0,40}(equity|shares?|shareholding)",
+    re.I,
+)
+_GOVT_CLASSIFICATION = re.compile(r"\b(maharatna|navratna|miniratna)\b", re.I)
+_GOVT_PROMOTER = re.compile(
+    r"promoter.{0,40}(ministry\s+of|government\s+of|state\s+government)|"
+    r"(ministry\s+of|state\s+government\s+of)\s+[a-z][a-z .&]{2,60}\s+.{0,20}promoter",
+    re.I,
+)
+_STATE_UNDERTAKING = re.compile(r"state\s+government\s+undertaking|central\s+public\s+sector\s+(enterprise|undertaking)|\bCPSE\b", re.I)
+
+
+def detect_government_ownership(full_text: str) -> tuple[bool | None, str, list[str]]:
+    """``(is_government_company, confidence, evidence)``.
+
+    A tri-state signal, same posture as `detect_framework`: `True`/`False`
+    with a confidence, or `None` when nothing in the text speaks to
+    ownership either way — never guessed from the entity name alone (spec
+    section 2.2: "Do not assume Government-company status from name alone;
+    treat it as confirmed only when supplied or disclosed").
+
+    Used downstream (tools_fs.py's PSU red-flag scan) to gate the Sec
+    197/185/186/layers-rules exemption logic, so a false positive there is
+    worse than a missed detection here — every pattern below requires an
+    explicit ownership/promoter/classification statement, not just the
+    presence of the word "government" (which appears constantly in a PSU's
+    disclosures regardless of who owns it, e.g. "government grants",
+    "government securities").
+    """
+    evidence: list[str] = []
+
+    if _GOVT_STRONG.search(full_text):
+        evidence.append("explicit 'Government company' / 'wholly owned subsidiary of the Government' statement")
+        return True, "high", evidence
+
+    if _GOVT_OWNERSHIP_CONTEXT.search(full_text):
+        evidence.append("shareholding/equity disclosed as held by the Government / President of India")
+        return True, "high", evidence
+
+    medium_hits = []
+    if _GOVT_CLASSIFICATION.search(full_text):
+        medium_hits.append("Maharatna/Navratna/Miniratna classification referenced")
+    if _STATE_UNDERTAKING.search(full_text):
+        medium_hits.append("'State Government undertaking' / 'Central Public Sector Enterprise' referenced")
+    if _GOVT_PROMOTER.search(full_text):
+        medium_hits.append("a government/ministry is named as the promoter")
+
+    if medium_hits:
+        evidence.extend(medium_hits)
+        return True, "medium", evidence
+
+    return None, "low", evidence
+
+
+# ---------------------------------------------------------------------------
 # Entity, flavour, statement type
 # ---------------------------------------------------------------------------
 
@@ -350,24 +424,140 @@ def detect_entity(pages_text: list[str]) -> tuple[str | None, list[str]]:
     return None, ["no repeated entity header was found in the document"]
 
 
-def detect_flavour(full_text: str) -> str | None:
-    lowered = full_text.lower()
-    standalone = lowered.count("standalone")
-    consolidated = lowered.count("consolidated")
-    if standalone == consolidated == 0:
-        return None
-    return "consolidated" if consolidated > standalone else "standalone"
+#: "Standalone Balance Sheet", "Consolidated Statement of Profit and Loss",
+#: "Standalone Financial Statements" -- a flavour word directly modifying a
+#: statement/financial-statements noun is the entity's own declaration, and
+#: outweighs the same word appearing anywhere else on the page. Mirrors the
+#: titled-vs-loose split `detect_financial_year` already uses, for the same
+#: reason: a bare count treats a word in a heading the same as one buried in
+#: unrelated prose, and those are not the same strength of evidence.
+_FLAVOUR_TITLE_RE = re.compile(
+    r"\b(standalone|consolidated)\b\s+(?:financial\s+statements?|balance\s+sheet|"
+    r"statement\s+of|profit\s+and\s+loss|cash\s+flow|changes\s+in\s+equity)",
+    re.I,
+)
+
+#: A "consolidated" mention inside a sentence matching this is a NEGATION --
+#: "the Company does not have any subsidiary and hence consolidated financial
+#: statements have not been prepared" -- and is boilerplate on a filing that
+#: has nothing to consolidate. Counted at face value that sentence is a
+#: "consolidated" hit, and it is very often the ONLY flavour word the filing
+#: ever prints: an entity with no subsidiaries has nothing to distinguish
+#: "standalone" from, so it never uses that word either. A bare word count
+#: therefore classifies most standalone-only filings -- the common case -- as
+#: "consolidated", purely off the disclaimer that they are not.
+_CONSOL_NEGATION_RE = re.compile(
+    r"do(?:es)?\s+not\s+have\s+(?:any\s+)?subsidiar|"
+    r"no\s+subsidiar|"
+    r"not\s+(?:required|applicable|mandatory)\s+to\s+prepare\s+consolidat|"
+    r"consolidat\w*\s+financial\s+statements?\s*(?:have|has|is|are)\s+not\s+(?:been\s+)?"
+    r"(?:prepared|applicable|required)",
+    re.I,
+)
+#: Sentence-scoped rather than a fixed character window either side of the
+#: match: "does not have any subsidiary" and "consolidated" can be arbitrarily
+#: far apart within one sentence (intervening clauses, entity lists), and a
+#: fixed-width window either cuts the negation phrase in half or misses it
+#: entirely depending on sentence length.
+#:
+#: Splits on sentence-ending punctuation only, NOT on a bare newline. A
+#: wrapped prose sentence -- exactly what docling's page markdown produces --
+#: carries an embedded "\n" at the line wrap with no period there at all; an
+#: earlier version of this split on "\n" too and broke "the Company does not
+#: have any subsidiary ... and\nhence consolidated financial statements ..."
+#: into two fragments at that wrap, so the negation phrase and "consolidated"
+#: landed in different "sentences" and the check silently failed to fire.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def detect_flavour(full_text: str) -> tuple[str | None, str, list[str]]:
+    """``(flavour, confidence, evidence)``.
+
+    A negated "consolidated" mention is scored as STANDALONE evidence, not
+    dropped: the disclaimer itself is the entity asserting it has nothing to
+    consolidate, which is exactly what "standalone" means.
+    """
+    titled: Counter[str] = Counter()
+    loose: Counter[str] = Counter()
+    evidence: list[str] = []
+
+    # Negation is computed ONCE per sentence and applied to both signals.
+    # "consolidated financial statements have not been prepared" matches
+    # `_FLAVOUR_TITLE_RE` too -- "consolidated" immediately precedes "financial
+    # statements" regardless of the negation wrapped around it -- so the title
+    # signal needs the same sentence-scoped negation check the loose count
+    # gets, or a boilerplate disclaimer outranks real body mentions via the
+    # "titled beats loose" tier instead of merely tainting the loose count.
+    for sentence in _SENTENCE_SPLIT_RE.split(full_text):
+        lowered_sentence = sentence.lower()
+        negated = bool(_CONSOL_NEGATION_RE.search(lowered_sentence))
+
+        for m in _FLAVOUR_TITLE_RE.finditer(sentence):
+            word = m.group(1).lower()
+            if word == "consolidated" and negated:
+                word = "standalone"  # the sentence asserts there is nothing to consolidate
+            titled[word] += 1
+            if len(evidence) < 6:
+                start = max(0, m.start() - 10)
+                snippet = sentence[start:m.end() + 30].strip().replace("\n", " ")
+                evidence.append(f'statement title: "{snippet}"')
+
+        consolidated_hits = len(re.findall(r"\bconsolidated\b", lowered_sentence))
+        if consolidated_hits:
+            loose["standalone" if negated else "consolidated"] += consolidated_hits
+        standalone_hits = len(re.findall(r"\bstandalone\b", lowered_sentence))
+        if standalone_hits:
+            loose["standalone"] += standalone_hits
+
+    if titled:
+        best, hits = max(titled.items(), key=lambda kv: kv[1])
+        confidence = "high" if hits >= 2 else "medium"
+        return best, confidence, evidence[:6]
+
+    if sum(loose.values()) > 0:
+        best, hits = max(loose.items(), key=lambda kv: kv[1])
+        other = "standalone" if best == "consolidated" else "consolidated"
+        confidence = "low" if loose[other] >= hits else "medium"
+        evidence.append(
+            f'no statement title carried a flavour word; counted "{best}" '
+            f'{hits}x vs "{other}" {loose[other]}x in body text '
+            "(negated consolidation disclaimers counted as standalone)"
+        )
+        return best, confidence, evidence
+
+    return None, "low", ["no standalone/consolidated wording found in the document"]
 
 
 #: Ordered so the more specific title wins: "Statement of Changes in Equity"
 #: contains neither "balance sheet" nor "profit and loss", but a combined
 #: "Balance Sheet and Statement of Profit and Loss" heading must not be claimed
 #: by whichever pattern happens to be tried first.
+#:
+#: "Income and Expenditure Account" is not a looser phrasing of "Profit and
+#: Loss" -- it is the statement a Section 8 (not-for-profit) company files
+#: INSTEAD of one, because it has no profit to report, only a surplus or
+#: deficit. Verified: Startup Odisha (a real Section 8 company in this
+#: corpus) titles this table exactly that, and prints "Revenue from
+#: operations" on it as a completely standard row label. Without this pattern
+#: the table is never tagged `financial_stmt_type="profit_loss"` at all --
+#: `_find_statement_tables` reports no P&L found, and every tool downstream of
+#: it (materiality, tie-outs, revenue-based ratios) comes back empty, not
+#: because the figure can't be read, but because the table it lives on was
+#: never recognised as the statement those tools look for. There is no fifth
+#: canonical statement type to give it instead: the existing tool vocabulary
+#: (`balance_sheet` / `profit_loss` / `cash_flow` / `statement_of_equity`) is
+#: fixed by what `_find_statement_tables` filters on, and Income and
+#: Expenditure is the P&L-equivalent slot in that vocabulary for an entity
+#: with no profit motive.
 _STATEMENT_PATTERNS = [
     ("statement_of_equity", re.compile(r"changes\s+in\s+equity", re.I)),
     ("cash_flow", re.compile(r"cash\s+flow", re.I)),
     ("balance_sheet", re.compile(r"balance\s+sheet", re.I)),
-    ("profit_loss", re.compile(r"profit\s+(and|&)\s+loss|statement\s+of\s+profit", re.I)),
+    ("profit_loss", re.compile(
+        r"profit\s+(and|&)\s+loss|statement\s+of\s+profit|"
+        r"income\s+(and|&)\s+expenditure",
+        re.I,
+    )),
 ]
 
 
@@ -462,6 +652,8 @@ def identify(pages_text: list[str]) -> Identification:
     fy, fy_conf, fy_evidence = detect_financial_year(pages_text)
     entity, entity_evidence = detect_entity(pages_text)
     framework, division, fw_conf, signals, conflicts = detect_framework(full_text)
+    flavour, flavour_conf, flavour_evidence = detect_flavour(full_text)
+    is_govt, govt_conf, govt_evidence = detect_government_ownership(full_text)
 
     return Identification(
         financial_year=fy,
@@ -473,6 +665,11 @@ def identify(pages_text: list[str]) -> Identification:
         framework_division=division,
         framework_confidence=fw_conf,
         framework_signals=signals,
-        statement_flavour=detect_flavour(full_text),
+        statement_flavour=flavour,
+        flavour_confidence=flavour_conf,
+        flavour_evidence=flavour_evidence,
         unresolved_conflicts=conflicts,
+        is_government_company=is_govt,
+        government_ownership_confidence=govt_conf,
+        government_ownership_evidence=govt_evidence,
     )

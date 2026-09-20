@@ -27,6 +27,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from app.models import CellFinding                      # noqa: E402
 from app.numbers import parse_cell                      # noqa: E402
 from app.tables import parse_markdown_tables            # noqa: E402
 from app.verify import verify_table, redact             # noqa: E402
@@ -107,6 +108,42 @@ def test_column_roles_resolved_by_content():
     assert table.title == "Balance Sheet as at 31st March, 2022"
 
 
+# SK-SPSU-SSLSA-010 2022-23 SFS, page 2 balance sheet, transcribed verbatim
+# from the actual docling output. Uses the "Form-1/Form-2" layout's own term,
+# "Appendix", for what Schedule III calls "Notes" -- and its row-1 label is
+# separately merged across four line items (a harder, different defect this
+# fixture is not testing), which garbles the row-1 Appendix cell into a
+# multi-token value that breaks the note-column fallback's per-cell shape
+# check on its own.
+SK_BALANCE_SHEET = """| Corpus/Capital Fund And Liabilities | Appendix | Current Year | Previous Year |
+| --- | --- | --- | --- |
+| Corpus/Capital Fund Reserve and Surplus Earmarked/Endownment Funds Secured Loans and Borrowings | 1 2 3 | 1,51,85,562.98 | 31,11,100.93 |
+|  |  | 2,469.00 | 2,469.00 |
+|  | 4 |  |  |
+| Unsecured Loans and Borrowings | 5 |  |  |
+| Total |  | 1,51,88,031.98 | 31,13,569.93 |
+"""
+
+
+def test_appendix_is_recognised_as_a_note_column_not_a_value_column():
+    """"Appendix" is this layout's own word for what Schedule III calls
+    "Notes" -- a bare reference number, never an amount. Left in the value
+    columns, note references (1, 4, 5, ...) become figures and get run through
+    verification alongside the real money, which is exactly what happened for
+    real: the row-1 Appendix cell came back flagged unreadable, because its
+    label being merged across four line items also garbled ITS OWN cell into
+    multi-token content the positional fallback cannot parse as a bare
+    number. Matching "Appendix" by its HEADER TEXT sidesteps that entirely --
+    it does not depend on any one cell being clean.
+    """
+    table = parse_markdown_tables(SK_BALANCE_SHEET, 2)[0]
+    assert table.note_col == 1
+    assert table.value_cols == [2, 3]
+    # The real number this bug hid: Corpus/Capital Fund's own figure, sitting
+    # in the correct value column throughout.
+    assert table.cell(0, 2).value == 15185562.98
+
+
 def test_unlabelled_subtotals_are_discovered():
     table = parse_markdown_tables(OD_BALANCE_SHEET, 10)[0]
     checks, _ = verify_table(table, 10)
@@ -185,6 +222,38 @@ def test_unconfirmable_sign_is_withheld_never_positive():
     assert "(1,757 " not in md_out.replace(finding.marker, "")
     total_column_cells = [r[2] for r in table.rows]
     assert "1,757" not in total_column_cells[2]
+
+
+def test_redaction_does_not_blank_a_second_row_with_the_same_label():
+    """A PPE roll-forward prints "Additions" and "Disposals" twice -- once per
+    year. Redaction keyed on the row *label* blanked both, destroying a figure
+    nothing was ever wrong with. It is keyed on position now.
+    """
+    table = parse_markdown_tables(PPE_ROLL_FORWARD, 5)[0]
+
+    disposals = [r for r in range(len(table.rows)) if table.label(r) == "Disposals"]
+    assert len(disposals) == 2, "fixture must have two identically-labelled rows"
+
+    # Both clipped signs in this fixture are confirmed by the arithmetic, so
+    # verify_table withholds nothing here (see the test above). The finding is
+    # constructed directly, because what is under test is redact()'s keying,
+    # not the decision to withhold.
+    total_col = table.value_cols[-1]
+    first = [CellFinding(
+        page_no=5, table_id=table.table_id,
+        row_label="Disposals", column=table.column_name(total_col),
+        raw=table.cell(disposals[0], total_col).raw,
+        reasons=["sign_uncertain"],
+        row_index=disposals[0], col_index=total_col,
+    )]
+
+    redact(table, first)
+
+    assert first[0].marker in table.rows[disposals[0]][total_col]
+    # The second Disposals row is a different row and must be untouched.
+    assert "unreadable" not in table.rows[disposals[1]][total_col], \
+        "redaction leaked onto the other row with the same label"
+    assert "10,378" in table.rows[disposals[1]][total_col]
 
 
 # --------------------------------------------------------------------------
@@ -295,3 +364,59 @@ def test_low_ocr_confidence_alone_does_not_withhold_a_clean_cell():
     table = parse_markdown_tables(md, 1)[0]
     _, findings = verify_table(table, 1, ocr_score=0.2)
     assert findings == []
+
+
+def test_a_vlm_only_row_is_shown_but_not_vouched_for():
+    """A row that exists ONLY because vlm_read.insert_unclaimed_rows spliced
+    it in has no docling counterpart at all -- there is no second opinion in
+    either direction for it. Recovery shows the VLM's own figure (it is
+    already sitting on the cell) inside a [recovered ...] marker rather than
+    withholding it outright, but the marker is deliberately NOT a plain
+    number on any parser: nothing may compute with it until arithmetic
+    corroborates it (see test_arithmetic_still_corroborates_a_vlm_only_row)."""
+    md = """| Particulars | Amount |
+| --- | --- |
+| (a) Share Capital | 15,00,000 |
+| Investment Properties | 5,00,000 |
+| (b) Surplus | (25,460) |
+"""
+    table = parse_markdown_tables(md, 1)[0]
+    _, findings = verify_table(table, 1, vlm_only_rows={1})
+    assert [(f.row_label, f.column) for f in findings] == [("Investment Properties", "Amount")]
+    finding = findings[0]
+    assert "vlm_only_row" in finding.reasons
+    assert finding.recovered_text == "5,00,000"
+    assert finding.recovered_value == 500000.0
+    # No grounding/agreement signal was supplied for this table-level pass,
+    # so an ungrounded read can never exceed "low" -- see derive_confidence.
+    assert finding.confidence == "low"
+    assert "ungrounded_read" in finding.confidence_basis
+    assert finding.marker.startswith("[recovered")
+    # The marker must remain non-numeric on both this module's own parser and
+    # the backend's -- no parentheses (which would set sign_uncertain) and no
+    # bare number (which would parse to a value).
+    from app.numbers import parse_cell
+    parsed = parse_cell(finding.marker)
+    assert parsed.value is None
+    assert parsed.sign_uncertain is False
+    assert "(" not in finding.marker and ")" not in finding.marker
+
+
+def test_arithmetic_still_corroborates_a_vlm_only_row():
+    """The same rule as any other cell: a row the vision model alone found is
+    withheld unless the column's own arithmetic confirms it -- corroboration
+    settles it exactly as it would a docling-sourced figure. (Here the cell's
+    text already parses cleanly, so this exercises the pre-existing
+    footed_cells rescue in Phase B, before recovery's own overlay/promotion
+    pathway is even reached -- see test_recovery.py for a cell that has NO
+    parseable value at all until a recovery candidate supplies one.)"""
+    md = """| Particulars | Amount |
+| --- | --- |
+| (a) Share Capital | 15,00,000 |
+| Investment Properties | 5,00,000 |
+| (b) Surplus | (25,460) |
+| Total | 19,74,540 |
+"""
+    table = parse_markdown_tables(md, 1)[0]
+    _, findings = verify_table(table, 1, vlm_only_rows={1})
+    assert findings == [], [f.marker for f in findings]

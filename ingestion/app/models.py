@@ -78,7 +78,16 @@ class PageQuality:
     native_dpi: float | None = None
     colour: str = "unknown"  # "bilevel" | "grey" | "colour"
     has_text_layer: bool = False
+    #: The PDF's OWN declared page rotation (its `/Rotate` entry), read but
+    #: never content-inferred -- see `render.py`. A scan can have its content
+    #: printed sideways with NO `/Rotate` flag at all (the pixels are simply
+    #: rotated), which this field cannot see and `orientation_quadrant` below
+    #: exists to catch instead.
     rotation: int = 0
+    #: Quadrant correction (0/90/180/270) `precheck._estimate_orientation`
+    #: detected and `preprocess.py` applies to the bitmap BEFORE fine-angle
+    #: deskew. Content-inferred, not read from any PDF metadata.
+    orientation_quadrant: int = 0
     skew_deg: float | None = None
     blur: float | None = None       # variance of Laplacian; higher is sharper
     contrast: float | None = None   # 5th-95th percentile spread, 0..1
@@ -138,13 +147,126 @@ class PageQuality:
         return d
 
 
+#: A finding's `raw`/marker text starting with either of these is a cell this
+#: module has already adjudicated -- verify.py's re-entrancy guard skips it on
+#: a second pass, and nothing downstream may re-parse it as fresh input. Kept
+#: as a tuple (not a single prefix) because two DIFFERENT adjudications now
+#: exist: a plain "[unreadable" withholds the figure entirely, and a
+#: "[recovered" shows a second-reader figure the arithmetic did not confirm.
+MARKER_PREFIXES = ("[unreadable", "[recovered")
+
+
+def is_marker(text: str) -> bool:
+    """True if `text` is a marker this module already wrote."""
+    return text.strip().startswith(MARKER_PREFIXES)
+
+
+# Confidence is a BAND, never a decimal. A number like 0.82 invites weighing
+# against a calibration nobody has measured; a named band plus its
+# `confidence_basis` says what actually corroborated the figure. See
+# `derive_confidence` below.
+CONFIDENCE_HIGH = "high"
+CONFIDENCE_MEDIUM = "medium"
+CONFIDENCE_LOW = "low"
+
+# The two-reader agreement ratio (Alignment.agreement) below which a medium
+# rating is refused even given a grounded read -- a read that is grounded but
+# disagrees with docling often enough is not a read the audit party should
+# trust more than "unreadable, with a caveat".
+_AGREEMENT_FOR_MEDIUM = 0.80
+
+
+def derive_confidence(
+    *,
+    footing_determined: bool,
+    grounded: bool,
+    agreement: float | None,
+    rescue_anchored: bool | None,
+    clean_parse: bool,
+) -> tuple[str, list[str]]:
+    """(band, basis) for a recovered figure. NEVER fed a model-reported score --
+
+    there isn't one anywhere in this pipeline, and asking the model to grade its
+    own read would measure fluency, not correctness. Every input here is
+    instead something the pipeline already independently computed:
+
+    - `footing_determined`: the recovered value was the sole unknown in a
+      column footing that closes within tolerance once it is included --
+      the arithmetic, not a reader, proved the figure. See verify.py's
+      overlay footing pass.
+    - `grounded`: Alignment.grounded (vlm_read.py) -- the whole-table VLM read
+      reproduced enough of docling's OWN printed figures elsewhere in the
+      table to show it actually looked at this page's pixels rather than
+      inventing plausible-looking numbers. Matching labels proves nothing;
+      matching numbers does.
+    - `agreement`: the same read's agreed/compared ratio (None if no
+      table-level second read exists at all, e.g. a fresh per-row rescue).
+    - `rescue_anchored`: a per-row rescue call's own proof of sight -- it
+      reproduced every OTHER value in that row that docling already trusted,
+      which it was never shown. See vlm_read.check_rescue_anchors.
+    - `clean_parse`: the recovered text parsed to a value with none of
+      grouping_odd / sign_uncertain / lookalikes against it.
+
+    Rule: HIGH requires footing_determined -- nothing else reaches it, and
+    these are the only recovered figures ever emitted as plain numbers.
+    Short of that, MEDIUM requires a grounded read OR an anchored rescue, AND
+    an agreement no worse than _AGREEMENT_FOR_MEDIUM (or no second-read
+    agreement to fail), AND a clean parse. Everything else is LOW -- in
+    particular, an ungrounded read can never exceed LOW, whatever else is
+    true about it.
+    """
+    if footing_determined:
+        basis = ["arithmetic_determined"]
+        if grounded:
+            basis.append("grounded_second_read")
+        if rescue_anchored:
+            basis.append("rescue_anchored")
+        return CONFIDENCE_HIGH, basis
+
+    proof_of_sight = grounded or bool(rescue_anchored)
+    agreement_ok = agreement is None or agreement >= _AGREEMENT_FOR_MEDIUM
+    if proof_of_sight and agreement_ok and clean_parse:
+        basis = []
+        if grounded:
+            basis.append("grounded_second_read")
+        if rescue_anchored:
+            basis.append("rescue_anchored")
+        return CONFIDENCE_MEDIUM, basis
+
+    basis = []
+    if not proof_of_sight:
+        basis.append("ungrounded_read")
+    if not agreement_ok:
+        basis.append(f"weak_agreement:{agreement:.2f}")
+    if not clean_parse:
+        basis.append("messy_parse")
+    return CONFIDENCE_LOW, basis
+
+
 @dataclass
 class CellFinding:
-    """A cell whose value could not be established beyond doubt.
+    """A cell the primary extraction could not establish beyond doubt.
 
-    This is the record that keeps a number out of the model's hands. ``value``
-    is deliberately absent -- callers render ``marker`` instead, so there is no
-    path by which an unverified figure reaches a prompt.
+    Two outcomes, both represented here rather than as separate types so
+    `DocumentQuality.unreadable_cells` stays one list and `redact()` keeps
+    keying on a single `.marker` property:
+
+    - WITHHELD (`recovered_text` is None): no figure is emitted anywhere.
+      `marker` renders `[unreadable: ...]` exactly as before.
+    - RECOVERED, DISPLAY-ONLY (`recovered_text` is set, `confidence` is not
+      "high"): a second reader's figure IS emitted, but only inside a marker
+      string that is non-numeric as a whole on every parser in the stack
+      (ingestion's own `numbers.parse_cell` and the backend's
+      `RatioExtractionEngine._re_parse_number` both return no value for it).
+      `marker` renders `[recovered ...]` with the figure, the source, and the
+      derived confidence band.
+
+    A figure recovered at "high" confidence (footing-determined) is promoted
+    to a plain number and never reaches a CellFinding at all -- see
+    `RecoveredCell` below. The invariant this module now guarantees is
+    therefore not "no unverified figure reaches a prompt" (the old docstring's
+    claim) but: **no unpromoted figure ever parses as a number, anywhere in
+    the stack.** Only arithmetic promotes one.
     """
 
     page_no: int
@@ -153,11 +275,40 @@ class CellFinding:
     column: str
     raw: str
     reasons: list[str] = field(default_factory=list)
+    #: Where the cell actually sits. `redact` keys on these rather than on the
+    #: label, because labels are not unique: a PPE roll-forward has two rows
+    #: called "Additions" and two called "Disposals", and matching by name
+    #: redacted the readable one alongside the unreadable one.
+    row_index: int | None = None
+    col_index: int | None = None
+    #: The second reader's text for this cell (docling's own text stays on
+    #: `raw`), set only when a recovery candidate existed. None means plain
+    #: WITHHELD -- the original, unrecovered behaviour.
+    recovered_text: str | None = None
+    recovered_value: float | None = None
+    #: CONFIDENCE_HIGH/MEDIUM/LOW from `derive_confidence`. A CellFinding
+    #: never actually carries "high" -- a high-confidence recovery is
+    #: arithmetic-determined and is promoted to a RecoveredCell with no
+    #: finding at all (see verify.py). Kept optional rather than asserted
+    #: because a plain withheld cell has none.
+    confidence: str | None = None
+    confidence_basis: list[str] = field(default_factory=list)
+    #: Which tier produced the candidate: "vlm_only_row", "readers_disagree",
+    #: "rescue_read", or None for a plain withheld cell with no candidate at
+    #: all. Diagnostic only -- nothing branches on it downstream.
+    recovery_origin: str | None = None
 
     @property
     def marker(self) -> str:
+        if self.recovered_text is None:
+            return (
+                f'[unreadable: page {self.page_no}, table {self.table_id}, '
+                f'row "{self.row_label}", col "{self.column}"]'
+            )
+        reason = _RECOVERY_CAVEATS.get(self.recovery_origin, "the second read was not independently confirmed")
         return (
-            f'[unreadable: page {self.page_no}, table {self.table_id}, '
+            f'[recovered {self.recovered_text}; second read, confidence {self.confidence}, '
+            f'{reason}: page {self.page_no}, table {self.table_id}, '
             f'row "{self.row_label}", col "{self.column}"]'
         )
 
@@ -165,6 +316,52 @@ class CellFinding:
         d = asdict(self)
         d["marker"] = self.marker
         return d
+
+
+#: One caveat clause per recovery tier, keeping the marker text specific
+#: rather than boilerplate -- a reader should be able to tell, from the
+#: marker alone, why the figure is not simply trusted.
+_RECOVERY_CAVEATS = {
+    "vlm_only_row": "it is the only read of this cell",
+    "readers_disagree": "the two readers disagreed and the arithmetic did not settle it",
+    "rescue_read": "column total does not confirm it",
+    "two_recovered_in_one_footing": "two recovered figures share one total, so neither is determined",
+}
+
+
+@dataclass
+class RecoveredCell:
+    """A withheld cell whose figure was PROMOTED to a plain, quotable number.
+
+    This happens only when the recovered value was the sole unknown in a
+    column footing that closes within tolerance once it is included -- see
+    verify.py's overlay footing pass. Confidence is therefore always
+    CONFIDENCE_HIGH with basis "arithmetic_determined"; this dataclass exists
+    so the quality report can still say a figure was recovered rather than
+    printed on the face from the start, without emitting a CellFinding (which
+    would otherwise also make the cell display as `[recovered ...]`).
+    """
+
+    page_no: int
+    table_id: str
+    row_label: str
+    column: str
+    raw: str
+    recovered_text: str
+    #: Deliberately named to match `CellFinding.recovered_value` -- emit.py
+    #: merges promoted (`RecoveredCell`) and display-only (`CellFinding`,
+    #: recovered_text set) entries into one `recovered_cells` list for the
+    #: document-level quality report, distinguished only by a `promoted`
+    #: flag added at merge time, so both shapes need the same field names.
+    recovered_value: float
+    confidence: str
+    confidence_basis: list[str] = field(default_factory=list)
+    origin: str | None = None
+    row_index: int | None = None
+    col_index: int | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass
@@ -179,6 +376,11 @@ class FootingCheck:
     difference: float | None
     passed: bool
     component_labels: list[str] = field(default_factory=list)
+    #: True when `printed` (or the recomputed total) only closes because a
+    #: recovered figure was substituted for a withheld component -- so the
+    #: check's own PASS still says, on its face, that arithmetic promotion is
+    #: why. See verify.py's overlay footing pass.
+    used_recovered: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -230,11 +432,17 @@ class TableRecord:
     snippet_jpeg_b64: str | None = None
     findings: list[CellFinding] = field(default_factory=list)
     footings: list[FootingCheck] = field(default_factory=list)
+    #: Cells whose figure was PROMOTED to a plain number by arithmetic (see
+    #: RecoveredCell). These do NOT also appear in `findings` -- a promoted
+    #: cell carries no CellFinding at all, since it now displays exactly like
+    #: a cleanly-read figure.
+    recovered: list[RecoveredCell] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["findings"] = [x.as_dict() for x in self.findings]
         d["footings"] = [x.as_dict() for x in self.footings]
+        d["recovered"] = [x.as_dict() for x in self.recovered]
         return d
 
 
@@ -337,7 +545,12 @@ class Identification:
     framework_confidence: str = "low"
     framework_signals: list[str] = field(default_factory=list)
     statement_flavour: str | None = None  # "standalone" | "consolidated"
+    flavour_confidence: str = "low"
+    flavour_evidence: list[str] = field(default_factory=list)
     unresolved_conflicts: list[str] = field(default_factory=list)
+    is_government_company: bool | None = None
+    government_ownership_confidence: str = "low"
+    government_ownership_evidence: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -347,8 +560,20 @@ class Identification:
 class DocumentQuality:
     pages: list[PageQuality] = field(default_factory=list)
     duplicate_pages: list[int] = field(default_factory=list)
+    #: Every cell the primary extraction could not vouch for -- KEEPS its
+    #: exact pre-recovery meaning ("a figure you must not use"), so its COUNT
+    #: stays a safe, unchanged signal for every existing consumer. A display-
+    #: only recovered cell still counts here (its figure is still not usable);
+    #: an arithmetic-promoted one does not (it is now a plain number).
     unreadable_cells: list[CellFinding] = field(default_factory=list)
     failed_footings: list[FootingCheck] = field(default_factory=list)
+    #: Merged view for reporting, built by emit.py: every promoted
+    #: `RecoveredCell` (dict tagged `"promoted": True`) plus every display-
+    #: only `CellFinding` that carried a recovery candidate (tagged
+    #: `"promoted": False`) -- so a display-only recovered cell is listed
+    #: here AND still counted in `unreadable_cells` above; a consumer that
+    #: only knows the old field never under-warns.
+    recovered_cells: list[dict[str, Any]] = field(default_factory=list)
     vlm_used: bool = False
     notes: list[str] = field(default_factory=list)
 
@@ -376,6 +601,7 @@ class DocumentQuality:
             "duplicate_pages": self.duplicate_pages,
             "unreadable_cells": [c.as_dict() for c in self.unreadable_cells],
             "failed_footings": [f.as_dict() for f in self.failed_footings],
+            "recovered_cells": self.recovered_cells,
             "vlm_used": self.vlm_used,
             "notes": self.notes,
             "mean_score": self.mean_score,
@@ -399,6 +625,12 @@ class DocumentRecord:
     total_tables: int = 0
     total_chunks: int = 0
     sha256: str = ""
+    #: Which build of this pipeline produced the extraction. Two consumers:
+    #: the conversion cache refuses to serve a result produced by a different
+    #: version (an accuracy fix must not be masked by a stale cache hit), and
+    #: the gateway stores it so a 30-day-old row can be told apart from a
+    #: current one and targeted for re-ingestion. See Config.PIPELINE_VERSION.
+    ingest_version: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

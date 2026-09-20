@@ -245,6 +245,15 @@ services:
     image: redis:7.4-alpine
     container_name: artha-redis
 
+    # Run as the image's own redis user (uid 999, gid 1000) from the start,
+    # rather than as root with cap_drop dropping down at runtime. The stock
+    # entrypoint does that drop itself via setpriv when started as root, which
+    # needs CAP_SETUID/CAP_SETGID -- capabilities `cap_drop: ALL` below
+    # deliberately removes, and Redis has no need for them at all once it
+    # never runs as root to begin with. Without this the container
+    # crash-loops on "setpriv: setresuid failed: Operation not permitted".
+    user: "999:1000"
+
     # No custom Dockerfile — this is the stock image, so (unlike backend/
     # ingest/frontend, whose health comes from a Dockerfile HEALTHCHECK) the
     # check has to live here instead.

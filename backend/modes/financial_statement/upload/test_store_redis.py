@@ -195,3 +195,63 @@ def test_drop_conversation_evicts_every_member_s_index_cache_entry(_fake_redis):
     store.STORE.drop_conversation("u1", "c1")
     assert "up_a" not in store._index_cache
     assert "up_b" not in store._index_cache
+
+
+# ---------------------------------------------------------------------------
+# update_cell -- Redis-only mode (Postgres is off for this whole directory,
+# see conftest.py's `_no_postgres`), so this exercises `_update_cell_redis_only`
+# -- the WATCH/MULTI path a real single-copy store needs.
+# ---------------------------------------------------------------------------
+
+def _table_doc(user_id, conv, doc_id, table_md):
+    return _doc(user_id, conv, doc_id, tables=[{"table_id": "t1", "table_md": table_md}])
+
+
+def test_update_cell_rewrites_table_md_and_quality_keeping_the_ttl(_fake_redis):
+    store.STORE.put(_table_doc("u1", "c1", "up_a", "| A | B |\n| --- | --- |\n| 1 | 2 |"))
+    key = store._doc_key("u1", "c1", "up_a")
+    _fake_redis.expire(key, 5000)
+
+    def mutate(table_md, quality):
+        return table_md.replace("2", "2 [user-entered]"), {**quality, "user_edits": [1]}, "ok"
+
+    result = store.STORE.update_cell("u1", "c1", "up_a", "t1", mutate)
+
+    assert result == "ok"
+    reloaded = store.STORE.get("u1", "c1", "up_a")
+    assert reloaded.tables[0]["table_md"].endswith("2 [user-entered] |")
+    assert reloaded.quality["user_edits"] == [1]
+    # KEEPTTL: the edit did not reset -- and must not have extended -- the
+    # cache's remaining lifetime.
+    assert 0 < _fake_redis.ttl(key) <= 5000
+
+
+def test_update_cell_returns_none_for_a_missing_document(_fake_redis):
+    def mutate(table_md, quality):  # pragma: no cover
+        raise AssertionError("must not run")
+
+    assert store.STORE.update_cell("u1", "c1", "up_missing", "t1", mutate) is None
+
+
+def test_update_cell_returns_none_for_a_missing_table(_fake_redis):
+    store.STORE.put(_table_doc("u1", "c1", "up_a", "| A |\n| --- |\n| 1 |"))
+
+    def mutate(table_md, quality):  # pragma: no cover
+        raise AssertionError("must not run")
+
+    assert store.STORE.update_cell("u1", "c1", "up_a", "no-such-table", mutate) is None
+
+
+def test_update_cell_reraises_mutate_errors_and_writes_nothing(_fake_redis):
+    from modes.financial_statement.upload.edits import EditError
+
+    original_md = "| A |\n| --- |\n| 1 |"
+    store.STORE.put(_table_doc("u1", "c1", "up_a", original_md))
+
+    def mutate(table_md, quality):
+        raise EditError(409, "not_editable", "nope")
+
+    with pytest.raises(EditError):
+        store.STORE.update_cell("u1", "c1", "up_a", "t1", mutate)
+
+    assert store.STORE.get("u1", "c1", "up_a").tables[0]["table_md"] == original_md

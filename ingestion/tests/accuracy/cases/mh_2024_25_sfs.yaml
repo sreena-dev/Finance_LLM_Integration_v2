@@ -1,0 +1,150 @@
+name: MH-CPSU-ITSL-048 2024-25 SFS
+pdf: MH-CPSU-IAM-052/2024-25/MH-CPSU-ITSL-048_2024-25_SFS_20260805122325795.pdf
+
+# A genuine pure scan (no text layer) with real OCR damage throughout -- the
+# document that motivated the Phase 5 VLM-alignment work earlier this session
+# (the crop-coordinate fix, content-anchored row matching, the unusable-read
+# safety net). Three of the four figures below were independently confirmed
+# against the printed page in that investigation and are the anchor this case
+# exists to hold: Property, Plant & Equipment / Capital work in progress /
+# Other Intangible Assets all read correctly, cleanly, with no OCR damage on
+# the CURRENT (31 March 2025) column, exactly as they did the day the
+# crop/alignment fixes landed.
+#
+# Values are the RAW printed digits, e.g. "28,455" -> 28455.0 -- confirmed
+# directly (`parse_cell("28,455").value == 28455.0`) that this pipeline does
+# NOT apply the page's own "(Amount in '000)" unit scale at parse time; that
+# scale is carried separately (UnitResolver) for the reader, not multiplied
+# into the figure. An earlier draft of this file got that wrong by scaling
+# every value x1000 before it was ever run against the pipeline -- caught by
+# checking parse_cell directly rather than trusting the assumption.
+#
+# Deliberately does NOT include "Investment Properties", which IS damaged on
+# this page (docling reads "8Z5'E") -- re-checking it live while building this
+# case surfaced a genuinely new, different gap worth its own investigation: a
+# cell whose raw text fails to parse as a number AT ALL currently reaches the
+# final output completely unmarked, neither a value nor an [unreadable:...]
+# marker, because verify.py's reason-flagging is conditioned on SPECIFIC
+# parseable-but-suspect patterns (sign_uncertain, grouping_odd, ...) and finds
+# none of them in unparseable garbage. Not fixed here; flagged for its own pass.
+
+expectations:
+
+  # --- Balance Sheet, page 1 -------------------------------------------
+
+  - row_label: Property, Plant & Equipment
+    column_label: 31st March 2025
+    page: 1
+    value: 28455.0
+    verified: true
+    note: confirmed against the printed page in the Phase 5 VLM-alignment
+      investigation; figures are in thousands per the page's own unit note,
+      carried separately rather than multiplied into the parsed value
+  - row_label: Capital work in progress
+    column_label: 31st March 2025
+    page: 1
+    value: 12859.0
+    verified: true
+  - row_label: Other Intangible Assets
+    column_label: 31st March 2025
+    page: 1
+    value: 2524.0
+    verified: true
+    note: label OCRs as "Other Intángible Assets" (stray accent) -- the VALUE
+      is clean; row-label matching is fuzzy enough to still find it
+  - row_label: Equity Share Capital
+    column_label: 31st March 2025
+    page: 1
+    value: 60328.0
+    verified: true
+  - row_label: Equity Share Capital
+    column_label: 31st March 2024
+    page: 1
+    value: 60328.0
+    verified: true
+  - row_label: Total (1+2+3)
+    column_label: 31st March 2024
+    page: 1
+    value: 7355430.0
+    verified: true
+    note: the equity+liabilities closing total for the COMPARATIVE year --
+      the current year's own Total(1+2+3) is withheld today because Total(1+2)
+      on the assets side is unresolved for that column, so this is the one
+      grand total on the page currently checkable with full confidence
+
+  # --- Statement of Profit and Loss, page 2 ----------------------------
+
+  - row_label: Revenue from Operations
+    column_label: 31st March 2025
+    page: 2
+    value: 769561.0
+    verified: true
+  - row_label: Revenue from Operations
+    column_label: 31st March 2024
+    page: 2
+    value: 740888.0
+    verified: true
+  - row_label: Total Income (I +II)
+    column_label: 31st March 2025
+    page: 2
+    value: 1050866.0
+    verified: true
+  - row_label: Employee Benefit Expense
+    column_label: 31st March 2025
+    page: 2
+    value: 149321.0
+    verified: true
+  - row_label: Finance Cost
+    column_label: 31st March 2025
+    page: 2
+    value: 35815.0
+    verified: true
+  - row_label: Total Expenses
+    column_label: 31st March 2025
+    page: 2
+    value: 349065.0
+    verified: true
+  - row_label: Profit before tax (VII - VIII)
+    column_label: 31st March 2025
+    page: 2
+    value: 701801.0
+    verified: true
+  - row_label: Profit before tax (VII - VIII)
+    column_label: 31st March 2024
+    page: 2
+    value: 688460.0
+    verified: true
+  - row_label: Profit for the year
+    column_label: 31st March 2025
+    page: 2
+    value: 543616.0
+    verified: true
+  - row_label: Profit for the year
+    column_label: 31st March 2024
+    page: 2
+    value: 548323.0
+    verified: true
+  # The printed label is "(1) Basic (in rupees)" under heading "XIII. Earning
+  # per Equity Share (Equity share of Rs.10/- each)" ("Xill" is OCR's misread
+  # of the roman numeral "XIII"). Previously docling merged the heading onto
+  # this row's own label, and this file named the row_label in full to clear
+  # the harness's fuzzy-match threshold against that merged text.
+  #
+  # `structure_repair.py` (geometry-based row rebuild, live-verified against
+  # this exact document) now correctly SPLITS the two: the heading becomes its
+  # own row with no values, and "(1) Basic (in rupees)" becomes a clean row
+  # carrying both years' figures. This is a genuine improvement, not a
+  # regression -- caught only because the OLD row_label stopped matching the
+  # NEW, better label, which briefly reported as MISSING. Root-caused directly
+  # against a raw diagnostic dump of the repaired markdown before concluding
+  # that, not assumed.
+  - row_label: (1) Basic (in rupees)
+    column_label: 31st March 2025
+    page: 2
+    value: 90.11
+    verified: true
+  - row_label: (1) Basic (in rupees)
+    column_label: 31st March 2024
+    page: 2
+    value: 90.89
+    verified: true

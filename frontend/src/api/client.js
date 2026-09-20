@@ -71,6 +71,10 @@ async function request(path, options = {}) {
     err.status = res.status;
     throw err;
   }
+  // A 204 (DELETE, most notably) has no body at all — res.json() on an empty
+  // body throws "Unexpected end of JSON input", which every caller then
+  // reported as a failed request even though it succeeded.
+  if (res.status === 204) return null;
   return res.json();
 }
 
@@ -536,6 +540,58 @@ export function fsPageText(mode, conversationId, docId, pageNo) {
     `/pages/${encodeURIComponent(pageNo)}/text` +
     `?conversation_id=${encodeURIComponent(conversationId)}`,
   );
+}
+
+/**
+ * Set, confirm or revert one cell the extraction flagged `[unreadable ...]`
+ * or `[recovered ...]`, from a figure the user read off the scan.
+ *
+ * `body` is `{ rowIndex, colIndex, expectedCell, action, value? }` — see
+ * `edits.py` for the exact contract. Not routed through the generic
+ * `request()` helper above: a refusal here carries a structured
+ * `{code, message}` in `detail` (409 stale/scope, 422 bad value) that the
+ * editor needs to react to differently, where `request()`'s `err.message`
+ * would otherwise stringify the whole object as `[object Object]`.
+ */
+export async function fsEditCell(mode, conversationId, docId, tableId, body) {
+  const path =
+    `${mode.base_path}/documents/${encodeURIComponent(docId)}` +
+    `/tables/${encodeURIComponent(tableId)}/cells` +
+    `?conversation_id=${encodeURIComponent(conversationId)}`;
+  let res;
+  try {
+    res = await fetch(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({
+        row_index: body.rowIndex,
+        col_index: body.colIndex,
+        expected_cell: body.expectedCell,
+        action: body.action,
+        ...(body.value !== undefined ? { value: body.value } : {}),
+      }),
+    });
+  } catch {
+    throw new Error('Could not reach the backend to save this figure.');
+  }
+  if (res.status === 401) {
+    notifyUnauthorized();
+    const err = new Error('Your session has expired. Sign in again.');
+    err.status = 401;
+    throw err;
+  }
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = payload.detail;
+    const structured = detail && typeof detail === 'object';
+    const err = new Error(
+      (structured ? detail.message : detail) || `Could not save this figure (HTTP ${res.status}).`
+    );
+    err.status = res.status;
+    if (structured) { err.code = detail.code; Object.assign(err, detail); }
+    throw err;
+  }
+  return payload;
 }
 
 /** Set (or clear, with a null amount) the audit team's materiality. */

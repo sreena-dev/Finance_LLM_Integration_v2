@@ -50,6 +50,21 @@ _SIGN_PREFIX_RE = re.compile(r"^\(\s*([+-])\s*\)\s*")
 _SIGN_SUFFIX_RE = re.compile(r"\s*\(\s*([+-])\s*\)$")
 _NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
+# A number followed by a unit-of-measure word -- "3 Years", "10 Yrs" -- the
+# recurring shape on useful-life / amortisation-period schedules. `_NUM_RE`
+# alone rejects these outright (the trailing letters make the whole cleaned
+# string fail it), and nothing else in this module recognises them either, so
+# a cell like this used to come back with `value=None` and NO flags set at
+# all -- not wrong, just silently unusable, and verify.py then classifies it
+# as `unreadable_text` purely because the letters aren't digits. Tried only as
+# a fallback AFTER `_NUM_RE` fails (see parse_cell), so it never changes how
+# an ordinary number parses. Deliberately a plain tuple, not exhaustive on day
+# one -- extend it (e.g. "kgs?") rather than redesigning around it.
+_UNIT_WORDS = ("years?", "yrs?", "months?", "days?", "hours?", "hrs?")
+_UNIT_SUFFIX_RE = re.compile(
+    r"^(-?\d+(?:\.\d+)?)\s*(?:" + "|".join(_UNIT_WORDS) + r")$", re.I,
+)
+
 # Digit grouping. Indian: 12,34,56,789 -- the last group is 3, every group
 # before it is 2. Western: 123,456,789 -- every group is 3.
 _INDIAN_GROUPING = re.compile(r"^\d{1,2}(,\d{2})+,\d{3}$")
@@ -180,6 +195,20 @@ def parse_cell(raw: str | None) -> Cell:
         s = s[:-1]
 
     if not _NUM_RE.match(s):
+        # A unit-suffixed number ("3Years", after whitespace was already
+        # stripped above) -- the raw text still shows "3 Years" verbatim
+        # (cell.raw is untouched); only the parsed value changes, from
+        # unusable to 3.0. Not flagged suspect in any sense -- a cleanly
+        # recognised unit word is not an OCR defect.
+        unit_match = _UNIT_SUFFIX_RE.match(s)
+        if unit_match:
+            value = float(unit_match.group(1))
+            if marked is not None:
+                cell.value = -abs(value) if marked == "-" else abs(value)
+                cell.sign_uncertain = False
+            else:
+                cell.value = -value if neg else value
+            return cell
         # Includes a bare "(-)": a sign with no figure behind it.
         return cell
 

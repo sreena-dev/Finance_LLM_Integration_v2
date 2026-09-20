@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
-import Icon from './Icon';
+import { AnimatePresence, motion } from 'framer-motion';
 import './ProgressSteps.css';
 
 /**
- * Staged progress indicator.
+ * Inline "thinking" status line, Claude-style: one shimmering phrase at a
+ * time rather than a static checklist.
  *
  * Neither pipeline streams progress events, so this advances on a timer and
- * then holds on the final stage until the response lands. The stage names
+ * then holds on the final phrase until the response lands. The phrases
  * mirror the real pipeline steps, and the elapsed counter is live, so the
  * component never claims completion it can't observe.
  */
@@ -27,38 +27,25 @@ export default function ProgressSteps({ steps, intervalMs = 4200 }) {
   }, [current, steps.length, intervalMs]);
 
   return (
-    <div className="steps">
-      <div className="steps__head">
-        <span className="steps__pulse" />
-        <span className="steps__title">Running pipeline</span>
-        <span className="steps__timer">{elapsed}s</span>
-      </div>
+    <div className="thinking" role="status" aria-live="polite">
+      <span className="thinking__glyph" aria-hidden="true">
+        <span className="thinking__glyph-dot" />
+      </span>
 
-      <ol className="steps__list">
-        {steps.map((label, i) => {
-          const state = i < current ? 'done' : i === current ? 'active' : 'todo';
-          return (
-            <motion.li
-              key={label}
-              className={`steps__item is-${state}`}
-              initial={{ opacity: 0, x: -6 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.06, duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-            >
-              <span className="steps__marker">
-                {state === 'done' ? (
-                  <Icon name="check" size={12} strokeWidth={2.4} />
-                ) : state === 'active' ? (
-                  <span className="steps__spinner" />
-                ) : (
-                  <span className="steps__dot" />
-                )}
-              </span>
-              <span className="steps__label">{label}</span>
-            </motion.li>
-          );
-        })}
-      </ol>
+      <AnimatePresence mode="wait">
+        <motion.span
+          key={current}
+          className="thinking__label"
+          initial={{ opacity: 0, y: 5 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -5 }}
+          transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
+        >
+          {steps[current]}
+        </motion.span>
+      </AnimatePresence>
+
+      <span className="thinking__timer">{elapsed}s</span>
     </div>
   );
 }

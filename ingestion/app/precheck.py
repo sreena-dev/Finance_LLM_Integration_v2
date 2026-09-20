@@ -108,26 +108,24 @@ def _binarise(img: "np.ndarray") -> "np.ndarray":
     return img <= cut
 
 
-def _estimate_skew(mask: "np.ndarray") -> float:
-    """Skew angle in degrees, positive meaning the page leans clockwise.
+def _skew_search(mask: "np.ndarray") -> tuple[float, float]:
+    """(best_angle, best_score) from the +/-6 degree projection-profile
+    search -- the shared scoring core both `_estimate_skew` and
+    `_estimate_orientation` build on. See `_estimate_skew`'s docstring for
+    the method itself; this only additionally exposes the winning SCORE, so
+    a caller comparing across quadrant rotations (`_estimate_orientation`)
+    can see WHICH candidate won and by how much, not just the winning angle.
 
-    Projection-profile method: rotate a downsampled ink mask through candidate
-    angles and keep the one whose row-sum profile has the highest variance.
-    When the text lines are level, every row is either dense with ink or empty,
-    which is exactly what maximum variance means.
-
-    Chosen over a Hough transform because ruled financial tables are full of
-    long horizontal rules, and Hough locks onto those rather than onto the text
-    baselines. On a page whose *rules* are level but whose printed text is not
-    -- a photocopy of a skewed original -- that is the wrong answer, and it is
-    the text baselines that OCR cares about.
+    A score of ``-1.0`` (never a real variance, which is always >= 0) is the
+    same degenerate "too sparse to say anything" case `_estimate_skew` already
+    returns ``0.0`` for.
     """
     # Downsample hard: skew is a global property and the search is O(angles x
     # pixels). A 600px-wide proxy resolves well under a tenth of a degree.
     step = max(1, mask.shape[1] // 600)
     small = mask[::step, ::step].astype(np.float32)
     if small.sum() < 50:
-        return 0.0
+        return 0.0, -1.0
 
     h, w = small.shape
     ys, xs = np.nonzero(small)
@@ -146,7 +144,70 @@ def _estimate_skew(mask: "np.ndarray") -> float:
         score = float(rows.var())
         if score > best_score:
             best_score, best_angle = score, float(angle)
-    return round(best_angle, 2)
+    return round(best_angle, 2), best_score
+
+
+def _estimate_skew(mask: "np.ndarray") -> float:
+    """Skew angle in degrees, positive meaning the page leans clockwise.
+
+    Projection-profile method: rotate a downsampled ink mask through candidate
+    angles and keep the one whose row-sum profile has the highest variance.
+    When the text lines are level, every row is either dense with ink or empty,
+    which is exactly what maximum variance means.
+
+    Chosen over a Hough transform because ruled financial tables are full of
+    long horizontal rules, and Hough locks onto those rather than onto the text
+    baselines. On a page whose *rules* are level but whose printed text is not
+    -- a photocopy of a skewed original -- that is the wrong answer, and it is
+    the text baselines that OCR cares about.
+    """
+    return _skew_search(mask)[0]
+
+
+#: How much higher a non-zero quadrant's best score must be than 0 degrees'
+#: own best score before it is trusted. A wrongly "corrected" upright page is
+#: far worse than a genuinely rotated page left uncorrected, so this is
+#: deliberately conservative -- an ambiguous page always defaults to 0.
+_ORIENTATION_SCORE_RATIO = 3.0
+
+
+def _estimate_orientation(mask: "np.ndarray") -> tuple[int, float]:
+    """(quadrant, fine_angle) -- which of 0/90/180/270 degrees this page's
+    ink mask needs, plus the residual fine skew angle once that quadrant is
+    applied.
+
+    Extends `_skew_search`'s own scoring exactly one level up. A 90/180/270
+    rotation of a mask is EXACT (`np.rot90`, no interpolation needed, unlike
+    the +/-6 degree fine search which does), so this simply tries all four
+    quadrants, runs the SAME fine-angle search inside each, and keeps
+    whichever quadrant's best score is highest overall -- "when text lines
+    are level, every row is either dense with ink or empty" is exactly as
+    true comparing 0 degrees against 90/180/270 as it is comparing -6
+    against +6. A page rotated 90 degrees smears what should be a clean
+    line-by-line row projection into noise; the correctly oriented candidate
+    -- whichever it is -- is the one that produces sharp, line-shaped peaks.
+
+    Biased hard toward 0: the winning quadrant must beat 0's own score by
+    `_ORIENTATION_SCORE_RATIO` before it is trusted, and a mask too sparse to
+    score at all (score <= 0 at 0 degrees) is left at 0 rather than guessed
+    at from noise.
+    """
+    scores: dict[int, float] = {}
+    angles: dict[int, float] = {}
+    for quadrant in (0, 90, 180, 270):
+        rotated = np.rot90(mask, k=quadrant // 90) if quadrant else mask
+        angle, score = _skew_search(rotated)
+        angles[quadrant] = angle
+        scores[quadrant] = score
+
+    best_quadrant = max(scores, key=lambda k: scores[k])
+    if (
+        best_quadrant != 0
+        and scores[0] > 0
+        and scores[best_quadrant] >= scores[0] * _ORIENTATION_SCORE_RATIO
+    ):
+        return best_quadrant, angles[best_quadrant]
+    return 0, angles[0]
 
 
 def _blur(img: "np.ndarray") -> float:
@@ -225,7 +286,20 @@ def check_page(page: RenderedPage) -> PageQuality:
         q.skew_deg = 0.0
         return q
 
-    q.skew_deg = _estimate_skew(mask)
+    if Config.ORIENTATION_DETECTION_ENABLED:
+        q.orientation_quadrant, q.skew_deg = _estimate_orientation(mask)
+    else:
+        q.skew_deg = _estimate_skew(mask)
+
+    if q.orientation_quadrant:
+        q.defects.append(PageDefect(
+            "orientation_corrected",
+            f"Page {q.page_no} was rotated {q.orientation_quadrant} degrees "
+            "before reading -- its content was printed sideways relative to "
+            "the rest of the document (a scanning artefact, not something "
+            "the PDF declared). If any figure from this page still looks "
+            "wrong, check the original scan.",
+        ))
 
     if q.native_dpi is not None and q.native_dpi < Config.MIN_ACCEPTABLE_DPI:
         q.defects.append(PageDefect(
@@ -297,7 +371,17 @@ def check_page(page: RenderedPage) -> PageQuality:
 
 def check_document(pages: list[RenderedPage]) -> list[PageQuality]:
     """Run every per-page check, then the cross-page duplicate check."""
-    qualities = [check_page(p) for p in pages]
+    # Per-page checks are independent -- each reads its own bitmap and fills
+    # its own PageQuality -- so they run across pages at once. `map` keeps the
+    # results in page order, which the duplicate check below depends on.
+    workers = max(1, min(Config.PAGE_WORKERS, len(pages)))
+    if workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            qualities = list(pool.map(check_page, pages))
+    else:
+        qualities = [check_page(p) for p in pages]
 
     hashes: list[tuple[int, int]] = []
     for page, q in zip(pages, qualities):

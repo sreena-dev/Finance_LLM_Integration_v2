@@ -45,9 +45,28 @@ export default function UploadPanel({
   // file-by-file: the second file must reach the SAME conversation as the
   // first, and a prop update has not necessarily arrived by then.
   const convoRef = useRef(conversationId || null);
-  if (conversationId && convoRef.current !== conversationId) {
-    convoRef.current = conversationId;
-  }
+
+  // Switching conversations (including to a brand-new, id-less one) must drop
+  // whatever this panel was showing before. This used to be a render-time
+  // guard that only updated convoRef.current when the new id was truthy, so
+  // navigating to a new chat left convoRef.current — and the docs on screen —
+  // pointed at the PREVIOUS conversation: the next upload silently attached
+  // itself there too, and that conversation's documents kept showing in a
+  // chat that never had them.
+  //
+  // Guarded against convoRef.current already matching conversationId so this
+  // does not fire on the mint-echo: drain() below sets convoRef.current the
+  // moment the gateway mints an id, and onConversationChange then feeds that
+  // same id back down as a prop a tick later — that echo must not wipe the
+  // docs refresh() just populated.
+  useEffect(() => {
+    const next = conversationId || null;
+    if (convoRef.current === next) return;
+    convoRef.current = next;
+    setDocs([]);
+    setError(null);
+    onDocumentsChange?.([]);
+  }, [conversationId, onDocumentsChange]);
 
   // Whether this panel is still mounted. Reset to true at the START of the
   // effect body, not merely cleared in cleanup, because StrictMode runs

@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.identify import (                              # noqa: E402
     _fy_from_reporting_date,
     classify_statement,
+    detect_flavour,
     detect_framework,
     detect_units,
     identify,
@@ -135,6 +136,14 @@ def test_statement_types_match_the_existing_tool_vocabulary():
     assert classify_statement("Statement of Profit and Loss") == "profit_loss"
     assert classify_statement("Cash Flow Statement") == "cash_flow"
     assert classify_statement("Statement of changes in equity as at 31st March 2023") == "statement_of_equity"
+    # A Section 8 (not-for-profit) company files this INSTEAD of a Statement of
+    # Profit and Loss, because it has no profit to report -- verified on a real
+    # corpus filing (Startup Odisha) whose materiality/tie-out tools came back
+    # empty for "Revenue from operations" despite the row being extracted
+    # cleanly, because this table was never tagged financial_stmt_type
+    # "profit_loss" at all and so was invisible to every tool that looks for it.
+    assert classify_statement("Income & Expenditure Account for the year ended 31st March 2023") == "profit_loss"
+    assert classify_statement("Income and Expenditure Account") == "profit_loss"
     # A note schedule is not a face statement.
     assert classify_statement("Note 1 (a) - Property, plant and equipment") is None
 
@@ -195,6 +204,95 @@ def test_the_auditors_letterhead_is_not_the_entity():
     assert identify(AUDITOR_PAGES + OD_PAGES).entity_name == "Startup Odisha"
 
 
+# --------------------------------------------------------------------------
+# Statement flavour (standalone vs consolidated)
+# --------------------------------------------------------------------------
+
+def test_a_negated_consolidation_disclaimer_is_read_as_standalone():
+    """The most common real filing has no subsidiaries at all. It says so once,
+    using the word "consolidated" -- "the Company does not have any subsidiary
+    ... and hence consolidated financial statements have not been prepared" --
+    and never uses the word "standalone" anywhere, because there is nothing to
+    distinguish from. A bare word count reads that single sentence as evidence
+    FOR "consolidated" and returns exactly the wrong flavour."""
+    text = (
+        "Balance Sheet as at 31st March, 2025\n"
+        "The Company does not have any subsidiary, associate or joint venture "
+        "and hence consolidated financial statements have not been prepared."
+    )
+    flavour, confidence, evidence = detect_flavour(text)
+    assert flavour == "standalone"
+    assert confidence != "low" or "negated" in evidence[0]
+
+
+def test_a_negation_wrapped_across_lines_is_still_recognised():
+    """Docling's page markdown wraps prose at the line, not at the sentence --
+    a negation phrase and the word "consolidated" it governs routinely land on
+    different lines of the SAME sentence. An earlier version of this fix split
+    on bare "\\n" as a sentence boundary and silently stopped recognising the
+    negation the moment it was word-wrapped, which is the normal case, not the
+    exception."""
+    text = (
+        "Balance Sheet as at 31st March, 2025\n"
+        "The Company does not have any subsidiary, associate or joint venture and\n"
+        "hence provisions relating to consolidated financial statements are not\n"
+        "applicable to the Company."
+    )
+    flavour, _, _ = detect_flavour(text)
+    assert flavour == "standalone"
+
+
+def test_a_genuinely_consolidated_filing_is_not_flipped_by_the_negation_fix():
+    text = (
+        "Consolidated Balance Sheet as at 31st March, 2025\n"
+        "The Group comprises the Company and its three subsidiaries.\n"
+        "Consolidated Statement of Profit and Loss for the year ended 31st March, 2025"
+    )
+    flavour, confidence, _ = detect_flavour(text)
+    assert flavour == "consolidated"
+    assert confidence == "high"
+
+
+def test_a_statement_title_flavour_word_outranks_body_prose():
+    """'Consolidated Balance Sheet' in a heading is the entity's own
+    declaration and must win over incidental body-text mentions of the other
+    word, exactly as detect_financial_year prefers a title date over a
+    comparative-column date."""
+    text = (
+        "Consolidated Balance Sheet as at 31st March, 2025\n"
+        "This standalone note is presented for information only. "
+        "This standalone note is presented for information only."
+    )
+    flavour, confidence, evidence = detect_flavour(text)
+    assert flavour == "consolidated"
+    assert confidence == "medium"
+    assert any("statement title" in e for e in evidence)
+
+
+def test_two_titled_mentions_reach_high_confidence():
+    text = (
+        "Standalone Balance Sheet as at 31st March, 2025\n"
+        "Standalone Statement of Profit and Loss for the year ended 31st March, 2025"
+    )
+    flavour, confidence, _ = detect_flavour(text)
+    assert flavour == "standalone"
+    assert confidence == "high"
+
+
+def test_no_flavour_wording_at_all_is_reported_as_unknown_not_guessed():
+    flavour, confidence, evidence = detect_flavour("Balance Sheet as at 31st March, 2025")
+    assert flavour is None
+    assert confidence == "low"
+    assert evidence
+
+
+def test_flavour_reaches_identify():
+    text = "The Company does not have any subsidiary and hence consolidated financial statements have not been prepared."
+    ident = identify([text])
+    assert ident.statement_flavour == "standalone"
+    assert ident.flavour_evidence
+
+
 def test_a_note_heading_is_not_the_statement_it_mentions():
     """'Notes to balance sheet for the year ended 31st March, 2023' heads a
     share-capital note page in this corpus. Classifying it as the balance sheet
@@ -206,3 +304,11 @@ def test_a_note_heading_is_not_the_statement_it_mentions():
     assert classify_statement_from_page(
         "## IDBI Trusteeship Services Ltd\nBalance Sheet as at 31st March, 2023"
     ) == "balance_sheet"
+    # Same guard, new pattern: a notes page referencing the Income and
+    # Expenditure Account must not be classified as the statement itself.
+    assert classify_statement_from_page(
+        "## Startup Odisha\nNotes to Income and Expenditure Account for the year ended 31st March, 2023"
+    ) is None
+    assert classify_statement_from_page(
+        "## Startup Odisha\nIncome & Expenditure Account for the year ended 31st March 2023"
+    ) == "profit_loss"

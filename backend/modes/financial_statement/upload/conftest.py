@@ -34,6 +34,26 @@ for path in (os.path.join(_MODE, "pipeline"), _BACKEND):
 # any test runs, but the module still reads it at construction time.
 os.environ.setdefault("ARTHA_REDIS_URL", "redis://localhost:6379/0")
 
+# Load the backend's .env if there is one, so `test_pgstore.py` can find a
+# platform database when the suite is run from the repository root rather than
+# from `backend/`. Without this it skipped every persistence test and reported
+# a green run that had verified nothing about persistence at all.
+#
+# This does NOT make the other tests here touch a database: `_no_postgres`
+# below forces persistence off for every one of them.
+try:  # pragma: no cover - environment plumbing
+    from dotenv import load_dotenv
+
+    for _candidate in (
+        os.path.join(_BACKEND, ".env"),
+        os.path.join(os.path.dirname(_BACKEND), ".env"),
+    ):
+        if os.path.isfile(_candidate):
+            load_dotenv(_candidate, override=False)
+            break
+except ImportError:
+    pass
+
 import fakeredis  # noqa: E402
 
 from modes.financial_statement.upload import store  # noqa: E402
@@ -45,3 +65,21 @@ def _fake_redis():
     store.STORE._client = fake
     yield fake
     store.STORE._client = None
+
+
+@pytest.fixture(autouse=True)
+def _no_postgres(monkeypatch):
+    """Keep the zero-setup property when uploads became Postgres-backed.
+
+    `store.put` now writes the extraction to Postgres first, because Postgres
+    is the system of record and a document that was never durably written must
+    not be reported as successfully uploaded. That is right in production and
+    wrong for these tests: every file in this directory exercises the Redis
+    cache, its eviction and its scoping, and none of them are about
+    persistence. Left on, they would need a live database to run at all --
+    exactly the setup burden `fakeredis` above exists to avoid.
+
+    Persistence has its own tests in `test_pgstore.py`, which skip when no
+    database is configured rather than silently passing.
+    """
+    monkeypatch.setattr(store, "PERSIST_TO_POSTGRES", False)

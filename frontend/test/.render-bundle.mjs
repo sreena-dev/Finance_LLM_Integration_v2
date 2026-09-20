@@ -222,6 +222,7 @@ async function request(path, options = {}) {
     err.status = res.status;
     throw err;
   }
+  if (res.status === 204) return null;
   return res.json();
 }
 function post(path, payload) {
@@ -379,6 +380,46 @@ function fsPageText(mode, conversationId, docId, pageNo) {
     `${mode.base_path}/documents/${encodeURIComponent(docId)}/pages/${encodeURIComponent(pageNo)}/text?conversation_id=${encodeURIComponent(conversationId)}`
   );
 }
+async function fsEditCell(mode, conversationId, docId, tableId, body) {
+  const path = `${mode.base_path}/documents/${encodeURIComponent(docId)}/tables/${encodeURIComponent(tableId)}/cells?conversation_id=${encodeURIComponent(conversationId)}`;
+  let res;
+  try {
+    res = await fetch(path, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({
+        row_index: body.rowIndex,
+        col_index: body.colIndex,
+        expected_cell: body.expectedCell,
+        action: body.action,
+        ...body.value !== void 0 ? { value: body.value } : {}
+      })
+    });
+  } catch {
+    throw new Error("Could not reach the backend to save this figure.");
+  }
+  if (res.status === 401) {
+    notifyUnauthorized();
+    const err = new Error("Your session has expired. Sign in again.");
+    err.status = 401;
+    throw err;
+  }
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = payload.detail;
+    const structured = detail && typeof detail === "object";
+    const err = new Error(
+      (structured ? detail.message : detail) || `Could not save this figure (HTTP ${res.status}).`
+    );
+    err.status = res.status;
+    if (structured) {
+      err.code = detail.code;
+      Object.assign(err, detail);
+    }
+    throw err;
+  }
+  return payload;
+}
 
 // src/components/chat/CitationViewer.jsx
 import { jsx as jsx4, jsxs as jsxs2 } from "react/jsx-runtime";
@@ -467,6 +508,10 @@ function Collapsible({ title, count, icon, children, defaultOpen = false }) {
     ) })
   ] });
 }
+function hideCaveats(md) {
+  if (!md) return md;
+  return md.replace(/^>\s*\*\*No tool was called for this answer\*\*.*$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+}
 function SourceChunk({ chunk, onShowScan }) {
   const [expanded, setExpanded] = useState3(false);
   const content = chunk.content || "";
@@ -505,14 +550,14 @@ function AnswerCard({ result, mode, conversationId }) {
     num_tables_searched: tables,
     num_chunks_retrieved: retrieved,
     elapsed_seconds: elapsed,
-    // Upload-only fields. Defaulted rather than optional-chained at every use,
+    // Upload-only field. Defaulted rather than optional-chained at every use,
     // because a conversation saved before this feature existed rehydrates from
     // a stored payload that has neither key.
-    materiality_legend: legend = null,
     uploaded_documents: uploaded = []
   } = result || {};
   const [citation, setCitation] = useState3(null);
-  const copyText = [summary, answer, evidence, legend?.markdown].filter(Boolean).join("\n\n");
+  const displayAnswer = hideCaveats(answer);
+  const copyText = [summary, displayAnswer, evidence].filter(Boolean).join("\n\n");
   return /* @__PURE__ */ jsxs3("article", { className: "answer card", children: [
     /* @__PURE__ */ jsxs3("header", { className: "answer__head", children: [
       /* @__PURE__ */ jsx5("span", { className: "answer__mark", children: /* @__PURE__ */ jsx5(Icon, { name: "sparkle", size: 15 }) }),
@@ -534,7 +579,7 @@ function AnswerCard({ result, mode, conversationId }) {
       /* @__PURE__ */ jsx5(CopyButton, { text: copyText })
     ] }),
     summary && /* @__PURE__ */ jsx5("div", { className: "answer__summary", children: /* @__PURE__ */ jsx5(Markdown, { children: summary }) }),
-    answer && /* @__PURE__ */ jsx5("div", { className: "answer__body", children: /* @__PURE__ */ jsx5(Markdown, { children: answer }) }),
+    displayAnswer && /* @__PURE__ */ jsx5("div", { className: "answer__body", children: /* @__PURE__ */ jsx5(Markdown, { children: displayAnswer }) }),
     !summary && !answer && /* @__PURE__ */ jsx5("p", { className: "answer__blank", children: "The pipeline returned an empty answer." }),
     uploaded.length > 0 && /* @__PURE__ */ jsxs3("div", { className: "answer__uploads", children: [
       /* @__PURE__ */ jsx5(Icon, { name: "doc", size: 13 }),
@@ -552,7 +597,6 @@ function AnswerCard({ result, mode, conversationId }) {
         " figure(s) withheld"
       ] })
     ] }),
-    legend?.markdown && /* @__PURE__ */ jsx5("div", { className: `answer__legend ${legend.provisional ? "is-provisional" : ""}`, children: /* @__PURE__ */ jsx5(Markdown, { children: legend.markdown }) }),
     (evidence || chunks.length > 0) && /* @__PURE__ */ jsxs3("div", { className: "answer__extras", children: [
       evidence && /* @__PURE__ */ jsx5(Collapsible, { title: "Evidence", icon: "doc", children: /* @__PURE__ */ jsx5(Markdown, { children: evidence }) }),
       chunks.length > 0 && /* @__PURE__ */ jsx5(Collapsible, { title: "Retrieved sources", icon: "search", count: chunks.length, children: /* @__PURE__ */ jsx5("div", { className: "answer__chunks", children: chunks.map((c) => /* @__PURE__ */ jsx5(
@@ -1054,9 +1098,14 @@ function UploadPanel({
   const [active, setActive] = useState7(null);
   const [error, setError] = useState7(null);
   const convoRef = useRef2(conversationId || null);
-  if (conversationId && convoRef.current !== conversationId) {
-    convoRef.current = conversationId;
-  }
+  useEffect3(() => {
+    const next = conversationId || null;
+    if (convoRef.current === next) return;
+    convoRef.current = next;
+    setDocs([]);
+    setError(null);
+    onDocumentsChange?.([]);
+  }, [conversationId, onDocumentsChange]);
   const mountedRef = useRef2(true);
   useEffect3(() => {
     mountedRef.current = true;
@@ -1274,11 +1323,11 @@ function Composer({
 
 // src/components/chat/ChatView.jsx
 import { useCallback as useCallback3, useEffect as useEffect6, useRef as useRef4, useState as useState10 } from "react";
-import { AnimatePresence as AnimatePresence3, motion as motion7 } from "framer-motion";
+import { AnimatePresence as AnimatePresence4, motion as motion7 } from "framer-motion";
 
 // src/components/common/ProgressSteps.jsx
 import { useEffect as useEffect5, useState as useState9 } from "react";
-import { motion as motion6 } from "framer-motion";
+import { AnimatePresence as AnimatePresence3, motion as motion6 } from "framer-motion";
 import { jsx as jsx14, jsxs as jsxs12 } from "react/jsx-runtime";
 function ProgressSteps({ steps, intervalMs = 4200 }) {
   const [current, setCurrent] = useState9(0);
@@ -1292,32 +1341,24 @@ function ProgressSteps({ steps, intervalMs = 4200 }) {
     const t = setTimeout(() => setCurrent((i) => i + 1), intervalMs);
     return () => clearTimeout(t);
   }, [current, steps.length, intervalMs]);
-  return /* @__PURE__ */ jsxs12("div", { className: "steps", children: [
-    /* @__PURE__ */ jsxs12("div", { className: "steps__head", children: [
-      /* @__PURE__ */ jsx14("span", { className: "steps__pulse" }),
-      /* @__PURE__ */ jsx14("span", { className: "steps__title", children: "Running pipeline" }),
-      /* @__PURE__ */ jsxs12("span", { className: "steps__timer", children: [
-        elapsed,
-        "s"
-      ] })
-    ] }),
-    /* @__PURE__ */ jsx14("ol", { className: "steps__list", children: steps.map((label, i) => {
-      const state = i < current ? "done" : i === current ? "active" : "todo";
-      return /* @__PURE__ */ jsxs12(
-        motion6.li,
-        {
-          className: `steps__item is-${state}`,
-          initial: { opacity: 0, x: -6 },
-          animate: { opacity: 1, x: 0 },
-          transition: { delay: i * 0.06, duration: 0.3, ease: [0.22, 1, 0.36, 1] },
-          children: [
-            /* @__PURE__ */ jsx14("span", { className: "steps__marker", children: state === "done" ? /* @__PURE__ */ jsx14(Icon, { name: "check", size: 12, strokeWidth: 2.4 }) : state === "active" ? /* @__PURE__ */ jsx14("span", { className: "steps__spinner" }) : /* @__PURE__ */ jsx14("span", { className: "steps__dot" }) }),
-            /* @__PURE__ */ jsx14("span", { className: "steps__label", children: label })
-          ]
-        },
-        label
-      );
-    }) })
+  return /* @__PURE__ */ jsxs12("div", { className: "thinking", role: "status", "aria-live": "polite", children: [
+    /* @__PURE__ */ jsx14("span", { className: "thinking__glyph", "aria-hidden": "true", children: /* @__PURE__ */ jsx14("span", { className: "thinking__glyph-dot" }) }),
+    /* @__PURE__ */ jsx14(AnimatePresence3, { mode: "wait", children: /* @__PURE__ */ jsx14(
+      motion6.span,
+      {
+        className: "thinking__label",
+        initial: { opacity: 0, y: 5 },
+        animate: { opacity: 1, y: 0 },
+        exit: { opacity: 0, y: -5 },
+        transition: { duration: 0.26, ease: [0.22, 1, 0.36, 1] },
+        children: steps[current]
+      },
+      current
+    ) }),
+    /* @__PURE__ */ jsxs12("span", { className: "thinking__timer", children: [
+      elapsed,
+      "s"
+    ] })
   ] });
 }
 
@@ -1429,7 +1470,7 @@ function ChatView({
           /* @__PURE__ */ jsx15("small", { children: "PDF only" })
         ] }),
         /* @__PURE__ */ jsx15("div", { className: "chat__scroll", ref: scrollRef, children: /* @__PURE__ */ jsxs13("div", { className: "chat__inner", children: [
-          /* @__PURE__ */ jsxs13(AnimatePresence3, { mode: "popLayout", initial: false, children: [
+          /* @__PURE__ */ jsxs13(AnimatePresence4, { mode: "popLayout", initial: false, children: [
             isEmpty && !pending && /* @__PURE__ */ jsxs13(
               motion7.div,
               {
@@ -1557,7 +1598,7 @@ function ChatView({
 }
 
 // src/components/ingestion/DocumentPane.jsx
-import { useCallback as useCallback4, useEffect as useEffect7, useState as useState11 } from "react";
+import { useCallback as useCallback4, useEffect as useEffect7, useRef as useRef5, useState as useState11 } from "react";
 import { jsx as jsx16, jsxs as jsxs14 } from "react/jsx-runtime";
 function DocumentPane({ mode, conversationId, doc, onClose }) {
   const [pageNos, setPageNos] = useState11([]);
@@ -1678,10 +1719,13 @@ function PageImage({ mode, conversationId, docId, pageNo }) {
 function PageText({ mode, conversationId, docId, pageNo }) {
   const [data, setData] = useState11(null);
   const [error, setError] = useState11(null);
+  const [refreshKey, setRefreshKey] = useState11(0);
   useEffect7(() => {
     let cancelled = false;
-    setData(null);
-    setError(null);
+    if (refreshKey === 0) {
+      setData(null);
+      setError(null);
+    }
     fsPageText(mode, conversationId, docId, pageNo).then((d) => {
       if (!cancelled) setData(d);
     }).catch((e) => {
@@ -1690,7 +1734,7 @@ function PageText({ mode, conversationId, docId, pageNo }) {
     return () => {
       cancelled = true;
     };
-  }, [mode, conversationId, docId, pageNo]);
+  }, [mode, conversationId, docId, pageNo, refreshKey]);
   if (error) return /* @__PURE__ */ jsx16("p", { className: "docpane__error", children: error });
   if (!data) return /* @__PURE__ */ jsx16("p", { className: "docpane__loading", children: "Loading\u2026" });
   const { narrative = [], tables = [] } = data;
@@ -1699,8 +1743,204 @@ function PageText({ mode, conversationId, docId, pageNo }) {
   }
   return /* @__PURE__ */ jsxs14("div", { className: "docpane__text", children: [
     narrative.map((chunk) => /* @__PURE__ */ jsx16("p", { className: `docpane__chunk docpane__chunk--${chunk.chunk_type || "text"}`, children: chunk.content }, chunk.chunk_id)),
-    tables.map((table) => /* @__PURE__ */ jsx16(Markdown, { children: table.table_md }, table.table_id))
+    tables.map((table) => Array.isArray(table.cells) && table.cells.length > 0 ? /* @__PURE__ */ jsx16(
+      EditableTable,
+      {
+        mode,
+        conversationId,
+        docId,
+        pageNo,
+        table,
+        onSaved: () => setRefreshKey((k) => k + 1)
+      },
+      table.table_id
+    ) : /* @__PURE__ */ jsx16(Markdown, { children: table.table_md }, table.table_id))
   ] });
+}
+function splitRow(line) {
+  let s = (line || "").trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  return s.split("|").map((c) => c.trim());
+}
+function EditableTable({ mode, conversationId, docId, pageNo, table, onSaved }) {
+  const lines = (table.table_md || "").split("\n");
+  const header = splitRow(lines[0] || "");
+  const rows = lines.slice(2).map(splitRow);
+  const cellMap = new Map((table.cells || []).map((c) => [`${c.row_index}:${c.col_index}`, c]));
+  const [editingKey, setEditingKey] = useState11(null);
+  const [showScan, setShowScan] = useState11(false);
+  const triggerRefs = useRef5({});
+  const closeEditor = useCallback4((key) => {
+    setEditingKey(null);
+    setShowScan(false);
+    triggerRefs.current[key]?.focus();
+  }, []);
+  const editing = editingKey != null ? cellMap.get(editingKey) : null;
+  const [rowIdx, colIdx] = editingKey ? editingKey.split(":").map(Number) : [null, null];
+  const currentCellText = rowIdx != null ? rows[rowIdx]?.[colIdx] ?? "" : "";
+  return /* @__PURE__ */ jsxs14("div", { className: "md", children: [
+    /* @__PURE__ */ jsx16("div", { className: "md__table-wrap", children: /* @__PURE__ */ jsxs14("table", { children: [
+      /* @__PURE__ */ jsx16("thead", { children: /* @__PURE__ */ jsx16("tr", { children: header.map((h, i) => /* @__PURE__ */ jsx16("th", { children: h }, i)) }) }),
+      /* @__PURE__ */ jsx16("tbody", { children: rows.map((row, r) => /* @__PURE__ */ jsx16("tr", { children: row.map((text, c) => {
+        const key = `${r}:${c}`;
+        const cell = cellMap.get(key);
+        if (!cell) return /* @__PURE__ */ jsx16("td", { children: text }, c);
+        const label = `${cell.state === "unreadable" ? "Unreadable" : cell.state === "recovered" ? "Recovered, unconfirmed" : "User-entered"} figure, row ${cell.row_label || r + 1}, column ${cell.column || c + 1}. Press to ${cell.state === "user_entered" ? "edit or revert" : "enter"}.`;
+        return /* @__PURE__ */ jsx16("td", { children: /* @__PURE__ */ jsx16(
+          "button",
+          {
+            type: "button",
+            ref: (el) => {
+              triggerRefs.current[key] = el;
+            },
+            className: `docpane__cellbtn docpane__cellbtn--${cell.state}`,
+            "aria-haspopup": "dialog",
+            "aria-expanded": editingKey === key,
+            "aria-label": label,
+            onClick: () => {
+              setEditingKey(key);
+              setShowScan(false);
+            },
+            children: text
+          }
+        ) }, c);
+      }) }, r)) })
+    ] }) }),
+    editing && /* @__PURE__ */ jsx16(
+      CellEditor,
+      {
+        mode,
+        conversationId,
+        docId,
+        pageNo,
+        tableId: table.table_id,
+        rowIndex: rowIdx,
+        colIndex: colIdx,
+        cell: editing,
+        currentCellText,
+        showScan,
+        onToggleScan: () => setShowScan((v) => !v),
+        onClose: () => closeEditor(editingKey),
+        onSaved: () => {
+          onSaved();
+          closeEditor(editingKey);
+        }
+      }
+    )
+  ] });
+}
+function CellEditor({
+  mode,
+  conversationId,
+  docId,
+  pageNo,
+  tableId,
+  rowIndex,
+  colIndex,
+  cell,
+  currentCellText,
+  showScan,
+  onToggleScan,
+  onClose,
+  onSaved
+}) {
+  const [value, setValue] = useState11(
+    cell.state === "user_entered" ? cell.edit?.value ?? "" : cell.recovered_text ?? ""
+  );
+  const [saving, setSaving] = useState11(false);
+  const [error, setError] = useState11(null);
+  const dialogRef = useRef5(null);
+  useEffect7(() => {
+    dialogRef.current?.focus();
+  }, []);
+  const run = useCallback4(async (action, actionValue) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await fsEditCell(mode, conversationId, docId, tableId, {
+        rowIndex,
+        colIndex,
+        expectedCell: currentCellText,
+        action,
+        ...actionValue !== void 0 ? { value: actionValue } : {}
+      });
+      onSaved();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }, [mode, conversationId, docId, tableId, rowIndex, colIndex, currentCellText, onSaved]);
+  return (
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+    /* @__PURE__ */ jsxs14(
+      "div",
+      {
+        className: "docpane__editor",
+        role: "dialog",
+        "aria-modal": "false",
+        "aria-label": `Edit figure: row ${cell.row_label || ""}, column ${cell.column || ""}`,
+        tabIndex: -1,
+        ref: dialogRef,
+        onKeyDown: (e) => {
+          if (e.key === "Escape") onClose();
+        },
+        children: [
+          /* @__PURE__ */ jsxs14("div", { className: "docpane__editor-head", children: [
+            /* @__PURE__ */ jsx16("strong", { children: cell.row_label || "Row" }),
+            /* @__PURE__ */ jsx16("span", { className: "docpane__editor-col", children: cell.column }),
+            /* @__PURE__ */ jsx16("button", { type: "button", className: "docpane__editor-close", onClick: onClose, "aria-label": "Close editor", children: "\xD7" })
+          ] }),
+          cell.state === "recovered" && /* @__PURE__ */ jsxs14("p", { className: "docpane__editor-hint", children: [
+            "A second read of the scan shows ",
+            /* @__PURE__ */ jsx16("strong", { children: cell.recovered_text }),
+            cell.confidence ? ` (confidence: ${cell.confidence})` : "",
+            ", not confirmed by this column's own arithmetic."
+          ] }),
+          cell.state === "unreadable" && /* @__PURE__ */ jsx16("p", { className: "docpane__editor-hint", children: "The extraction could not read this figure from the scan." }),
+          cell.state === "user_entered" && /* @__PURE__ */ jsxs14("p", { className: "docpane__editor-hint", children: [
+            "Entered by ",
+            cell.edit?.by || "a user",
+            ". Originally ",
+            cell.edit?.original_marker ? "unreadable or recovered" : "unreadable",
+            " before that."
+          ] }),
+          cell.edit?.footing?.verdict === "does_not_tie" && /* @__PURE__ */ jsxs14("p", { className: "docpane__editor-warn", children: [
+            "Not confirmed by this column's arithmetic (simple check): printed total",
+            " ",
+            cell.edit.footing.printed,
+            ", components sum to ",
+            cell.edit.footing.computed,
+            "."
+          ] }),
+          cell.edit?.footing?.verdict === "ties" && /* @__PURE__ */ jsx16("p", { className: "docpane__editor-ok", children: "This column's total ties with this figure included." }),
+          /* @__PURE__ */ jsxs14("label", { className: "docpane__editor-field", children: [
+            /* @__PURE__ */ jsx16("span", { children: "Figure from the scan" }),
+            /* @__PURE__ */ jsx16(
+              "input",
+              {
+                type: "text",
+                inputMode: "decimal",
+                value,
+                onChange: (e) => setValue(e.target.value),
+                disabled: saving,
+                placeholder: "e.g. 12,859 or (5,000)"
+              }
+            )
+          ] }),
+          error && /* @__PURE__ */ jsx16("p", { className: "docpane__editor-error", role: "alert", children: error }),
+          /* @__PURE__ */ jsxs14("div", { className: "docpane__editor-actions", children: [
+            /* @__PURE__ */ jsx16("button", { type: "button", disabled: saving || !value.trim(), onClick: () => run("set", value), children: cell.state === "user_entered" ? "Save change" : "Save" }),
+            cell.state === "recovered" && /* @__PURE__ */ jsx16("button", { type: "button", disabled: saving, onClick: () => run("confirm"), children: "Confirm recovered value" }),
+            cell.state === "user_entered" && /* @__PURE__ */ jsx16("button", { type: "button", className: "docpane__editor-danger", disabled: saving, onClick: () => run("revert"), children: "Revert" }),
+            /* @__PURE__ */ jsx16("button", { type: "button", className: "docpane__editor-ghost", onClick: onToggleScan, children: showScan ? "Hide scan for this page" : "Show scan for this page" })
+          ] }),
+          showScan && /* @__PURE__ */ jsx16("div", { className: "docpane__editor-scan", children: /* @__PURE__ */ jsx16(PageImage, { mode, conversationId, docId, pageNo }) })
+        ]
+      }
+    )
+  );
 }
 
 // test/render.jsx
@@ -1848,13 +2088,51 @@ var CASES = [
   ["DocumentPane (no conversation)", /* @__PURE__ */ jsx17(DocumentPane, { mode: MODE, conversationId: null, doc: DOC, onClose: () => {
   } })],
   ["DocumentPane (null doc)", /* @__PURE__ */ jsx17(DocumentPane, { mode: MODE, conversationId: "c1", doc: null, onClose: () => {
-  } })]
+  } })],
+  // A table with one flagged cell -- the exact shape `page_text` returns
+  // when ARTHA_FS_UPLOAD_USER_EDITS is on (see edits.cells_for_table). Only
+  // this shape switches a table off the plain <Markdown> path, so this is
+  // the one render case that actually exercises the button/badge/ARIA label,
+  // not just the "Loading…" placeholder every other DocumentPane case stops
+  // at (renderToString runs no effects, so PageText's own fetch never fires).
+  ["EditableTable (one flagged cell)", /* @__PURE__ */ jsx17(
+    EditableTable,
+    {
+      mode: MODE,
+      conversationId: "c1",
+      docId: "up_a",
+      pageNo: 5,
+      onSaved: () => {
+      },
+      table: {
+        table_id: "up_a_t1",
+        table_md: '| Particulars | Amount |\n| --- | --- |\n| Revenue | [unreadable: page 5, table t1, row "Revenue", col "Amount"] |',
+        cells: [{
+          row_index: 0,
+          col_index: 1,
+          state: "unreadable",
+          marker: '[unreadable: page 5, table t1, row "Revenue", col "Amount"]',
+          recovered_text: null,
+          confidence: null,
+          row_label: "Revenue",
+          column: "Amount"
+        }]
+      }
+    }
+  ), (html) => {
+    if (!html.includes("docpane__cellbtn--unreadable")) throw new Error("no state badge class");
+    if (!html.includes("<button")) throw new Error("the flagged cell did not render as a button");
+    if (!html.includes("Unreadable figure, row Revenue, column Amount")) {
+      throw new Error("the ARIA label did not name the row/column");
+    }
+  }]
 ];
 var failed = 0;
-for (const [name, element] of CASES) {
+for (const [name, element, check] of CASES) {
   try {
     const html = renderToString(element);
     if (typeof html !== "string") throw new Error("did not produce markup");
+    check?.(html);
     console.log(`  ok    ${name}`);
   } catch (e) {
     failed += 1;
