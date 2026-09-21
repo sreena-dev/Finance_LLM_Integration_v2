@@ -219,8 +219,26 @@ export async function tbPreview(mode, token) {
   return request(`${mode.base_path}/preview?token=${encodeURIComponent(token)}`);
 }
 
-export function tbUploadMapped(mode, mapping) {
-  return post(`${mode.base_path}/upload-mapped`, mapping);
+export function tbUploadMapped(mode, { token, groupingToken, acceptDataQualityRisk, companyDetails, persistToLive }) {
+  const cd = companyDetails || {};
+  return post(`${mode.base_path}/upload-mapped`, {
+    token,
+    grouping_token: groupingToken || null,
+    accept_data_quality_risk: acceptDataQualityRisk || false,
+    company_name: cd.companyName || null,
+    cin: cd.cin || null,
+    financial_year: cd.financialYear || null,
+    standard: cd.standard || null,
+    // Omitted -> backend default True (the ordinary upload-and-audit path).
+    // False is the query-analysis staging path (TbRunPicker's 'query' mode):
+    // same classify/quality-gate chain, canonical_tb.parquet still written,
+    // nothing reaches LIVE.
+    ...(persistToLive === false ? { persist_to_live: false } : {}),
+  });
+}
+
+export async function tbSuggestPriorityCompanies(mode) {
+  return request(`${mode.base_path}/companies/priority`);
 }
 
 /**
@@ -292,15 +310,6 @@ export function tbUploadGrouping(mode, { file, docId, docId2 }) {
     doc_id: docId,
     doc_id_2: docId2,
   });
-}
-
-// Known gap (not fixed in the TB-v2 migration): the backend has no
-// POST /audit/upload-grouping-mapped route to receive this. The only way
-// /audit/upload-grouping returns needs_mapping is a grouping file
-// preview_excel_data cannot parse at all, which has no recovery path yet —
-// GroupingMapper.jsx will open, but submitting it 404s.
-export function tbUploadGroupingMapped(mode, mapping) {
-  return post(`${mode.base_path}/audit/upload-grouping-mapped`, mapping);
 }
 
 export async function tbAuditWorkbook(mode, { docId, docIdPrior, uploadDocIds, format }) {

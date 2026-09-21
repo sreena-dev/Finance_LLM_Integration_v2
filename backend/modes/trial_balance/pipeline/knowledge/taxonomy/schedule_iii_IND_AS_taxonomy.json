@@ -1,65 +1,564 @@
 {
   "_meta": {
-    "source": "Companies Act 2013, Schedule III, Division II (Ind AS)",
-    "purpose": "Closed classification taxonomy for TB grouping. LLM should SELECT from this list, not generate free text.",
-    "fields": ["BS/PL", "MAIN HEAD", "SUB HEAD 1", "SUB HEAD 2"],
-    "account_type_rule": "Account type is DERIVED, not LLM-generated: BS+MAIN HEAD contains 'asset' -> Asset; BS+MAIN HEAD contains 'liabilit' -> Liability; BS+Equity -> Equity; PL+Revenue/Income heads -> Income; PL+Expense heads -> Expense"
+    "name": "Schedule III Division II (Ind AS) Taxonomy v3",
+    "purpose": "Closed vocabulary for Trial Balance / Grouping normalization plus source-faithful Schedule III Division II presentation and disclosure taxonomy.",
+    "source_file": "Schedule III.pdf",
+    "source_basis": "Uploaded Schedule III.pdf only",
+    "source_scope": "Division II — Financial Statements for a company whose financial statements are drawn up in compliance with the Companies (Indian Accounting Standards) Rules, 2015.",
+    "source_scope_start": "PDF page 18 / printed page 271",
+    "source_scope_end": "PDF page 35 / printed page 288",
+    "important_limitation": "This v3 is faithful to the supplied PDF. The supplied PDF contains the Division II text beginning at printed page 271 and then Division III begins at printed page 288. It contains 2018-era Division II amendments visible in the document. Later amendments not present in the supplied PDF are intentionally NOT added from outside knowledge.",
+    "closed_vocabulary_rule": "LLM may only select values present in gl_mapping_taxonomy or the applicable source taxonomy. It must not invent taxonomy labels.",
+    "account_type": {
+      "status": "DERIVED_BY_ENGINE",
+      "not_source_taxonomy": true,
+      "values": [
+        "Asset",
+        "Liability",
+        "Equity",
+        "Income",
+        "Expense"
+      ],
+      "rule": {
+        "BS/Non-current assets": "Asset",
+        "BS/Current assets": "Asset",
+        "BS/Equity": "Equity",
+        "BS/Non-current liabilities": "Liability",
+        "BS/Current liabilities": "Liability",
+        "PL/Revenue from operations": "Income",
+        "PL/Other income": "Income",
+        "PL/Expenses": "Expense",
+        "PL/Exceptional items": "Expense",
+        "PL/Tax expense": "Expense",
+        "PL/Other Comprehensive Income": "OCI"
+      }
+    }
   },
   "taxonomy": [
-    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Property, Plant and Equipment", "sub_head_2": ["Land", "Buildings", "Plant and Equipment", "Furniture and Fixtures", "Vehicles", "Office equipment", "Bearer Plants", "Other property, plant and equipment"]},
-    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Capital Work-in-Progress", "sub_head_2": ["Capital work-in-progress", "Acquisition cost for acquiring mineral rights"]},
-    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Investment Property", "sub_head_2": ["Investment Property"]},
-    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Goodwill", "sub_head_2": ["Goodwill"]},
-    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Other Intangible assets", "sub_head_2": ["Brands or trademarks", "Computer software", "Mastheads and publishing titles", "Mining rights", "Copyrights, patents and other intellectual property rights", "Recipes, formulae, models, designs and prototypes", "Licences and franchise", "Other intangible assets"]},
-    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Intangible assets under development", "sub_head_2": ["Intangible assets under development"]},
-    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Biological Assets other than bearer plants", "sub_head_2": ["Biological Assets other than bearer plants"]},
-    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Financial Assets - Investments (non-current)", "sub_head_2": ["Investments in Equity Instruments", "Investments in Preference Shares", "Investments in Government or trust securities", "Investments in debentures or bonds", "Investments in Mutual Funds", "Investments in partnership firms", "Other non-current investments"]},
-    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Financial Assets - Trade receivables (non-current)", "sub_head_2": ["Trade Receivables considered good - Secured", "Trade Receivables considered good - Unsecured", "Trade Receivables - significant increase in credit risk", "Trade Receivables - credit impaired"]},
-    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Financial Assets - Loans (non-current)", "sub_head_2": ["Security Deposits", "Loans to related parties", "Other loans"]},
-    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Financial Assets - Others (non-current)", "sub_head_2": ["Bank deposits with more than 12 months maturity", "Other financial assets (non-current)"]},
-    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Deferred tax assets (net)", "sub_head_2": ["Deferred tax assets (net)"]},
-    {"bs_pl": "BS", "main_head": "Non-current assets", "sub_head_1": "Other non-current assets", "sub_head_2": ["Capital Advances", "Security Deposits (advance)", "Advances to related parties", "Other advances", "Other non-current assets"]},
-
-    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Inventories", "sub_head_2": ["Raw materials", "Work-in-progress", "Finished goods", "Stock-in-trade", "Stores and spares", "Loose tools", "Other inventories"]},
-    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Financial Assets - Investments (current)", "sub_head_2": ["Investments in Equity Instruments", "Investments in Preference Shares", "Investments in Government or trust securities", "Investments in debentures or bonds", "Investments in Mutual Funds", "Investments in partnership firms", "Other current investments"]},
-    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Financial Assets - Trade receivables (current)", "sub_head_2": ["Trade Receivables considered good - Secured", "Trade Receivables considered good - Unsecured", "Trade Receivables - significant increase in credit risk", "Trade Receivables - credit impaired"]},
-    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Cash and cash equivalents", "sub_head_2": ["Balances with Banks", "Cheques, drafts on hand", "Cash on hand", "Other cash equivalents"]},
-    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Bank balances other than cash and cash equivalents", "sub_head_2": ["Earmarked balances with banks", "Margin money / security deposits with banks", "Bank deposits with more than 12 months maturity", "Other bank balances"]},
-    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Financial Assets - Loans (current)", "sub_head_2": ["Security deposits", "Loans to related parties", "Other loans"]},
-    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Financial Assets - Others (current)", "sub_head_2": ["Other financial assets (current)"]},
-    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Current Tax Assets (Net)", "sub_head_2": ["Current Tax Assets (Net)"]},
-    {"bs_pl": "BS", "main_head": "Current assets", "sub_head_1": "Other current assets", "sub_head_2": ["Security Deposits (advance)", "Advances to related parties", "Other advances", "Prepaid expenses", "Balances with government authorities / GST / TDS receivable", "Other current assets"]},
-
-    {"bs_pl": "BS", "main_head": "Equity", "sub_head_1": "Equity Share Capital", "sub_head_2": ["Equity Share Capital"]},
-    {"bs_pl": "BS", "main_head": "Equity", "sub_head_1": "Other Equity", "sub_head_2": ["Capital Reserve", "Capital Redemption Reserve", "Securities Premium", "Debenture Redemption Reserve", "Revaluation Reserve", "Share Options Outstanding Account", "Statutory Reserves", "Retained Earnings", "Other Reserves"]},
-    {"bs_pl": "BS", "main_head": "Equity", "sub_head_1": "Share application money pending allotment", "sub_head_2": ["Share application money pending allotment"]},
-
-    {"bs_pl": "BS", "main_head": "Non-current liabilities", "sub_head_1": "Financial Liabilities - Borrowings (non-current)", "sub_head_2": ["Bonds/debentures", "Term loans - from banks", "Term loans - from other parties", "Deferred payment liabilities", "Deposits", "Loans from related parties", "Long term maturities of finance lease obligations", "Liability component of compound financial instruments", "Other loans"]},
-    {"bs_pl": "BS", "main_head": "Non-current liabilities", "sub_head_1": "Financial Liabilities - Trade payables (non-current)", "sub_head_2": ["Total outstanding dues of micro and small enterprises", "Total outstanding dues of creditors other than micro and small enterprises"]},
-    {"bs_pl": "BS", "main_head": "Non-current liabilities", "sub_head_1": "Other financial liabilities (non-current)", "sub_head_2": ["Other financial liabilities (non-current)"]},
-    {"bs_pl": "BS", "main_head": "Non-current liabilities", "sub_head_1": "Provisions (non-current)", "sub_head_2": ["Provision for employee benefits", "Other provisions"]},
-    {"bs_pl": "BS", "main_head": "Non-current liabilities", "sub_head_1": "Deferred tax liabilities (Net)", "sub_head_2": ["Deferred tax liabilities (Net)"]},
-    {"bs_pl": "BS", "main_head": "Non-current liabilities", "sub_head_1": "Other non-current liabilities", "sub_head_2": ["Advances", "Other non-current liabilities"]},
-
-    {"bs_pl": "BS", "main_head": "Current liabilities", "sub_head_1": "Financial Liabilities - Borrowings (current)", "sub_head_2": ["Loans repayable on demand - from banks", "Loans repayable on demand - from other parties", "Loans from related parties", "Deposits", "Other loans"]},
-    {"bs_pl": "BS", "main_head": "Current liabilities", "sub_head_1": "Trade payables", "sub_head_2": ["Total outstanding dues of micro and small enterprises", "Total outstanding dues of creditors other than micro and small enterprises"]},
-    {"bs_pl": "BS", "main_head": "Current liabilities", "sub_head_1": "Other financial liabilities", "sub_head_2": ["Current maturities of long-term debt", "Current maturities of finance lease obligations", "Interest accrued but not due on borrowings", "Interest accrued and due on borrowings", "Income received in advance", "Unpaid dividends", "Application money refundable", "Unpaid matured deposits and interest accrued thereon", "Unpaid matured debentures and interest accrued thereon", "Other payables"]},
-    {"bs_pl": "BS", "main_head": "Current liabilities", "sub_head_1": "Other current liabilities", "sub_head_2": ["Revenue received in advance", "Other advances", "Statutory dues payable (GST/TDS/PF/ESI etc.)", "Other current liabilities"]},
-    {"bs_pl": "BS", "main_head": "Current liabilities", "sub_head_1": "Provisions (current)", "sub_head_2": ["Provision for employee benefits", "Other provisions"]},
-    {"bs_pl": "BS", "main_head": "Current liabilities", "sub_head_1": "Current Tax Liabilities (Net)", "sub_head_2": ["Current Tax Liabilities (Net)"]},
-
-    {"bs_pl": "PL", "main_head": "Revenue from operations", "sub_head_1": "Revenue from operations", "sub_head_2": ["Sale of products", "Sale of services", "Other operating revenues"]},
-    {"bs_pl": "PL", "main_head": "Other income", "sub_head_1": "Other income", "sub_head_2": ["Interest Income", "Dividend Income", "Net gain/loss on sale of investments", "Other non-operating income"]},
-    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Cost of materials consumed", "sub_head_2": ["Cost of materials consumed"]},
-    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Purchases of Stock-in-Trade", "sub_head_2": ["Purchases of Stock-in-Trade"]},
-    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Changes in inventories of finished goods, WIP and Stock-in-Trade", "sub_head_2": ["Changes in inventories"]},
-    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Employee benefits expense", "sub_head_2": ["Salaries and wages", "Contribution to provident and other funds", "Share based payments to employees (ESOP/ESPP)", "Staff welfare expenses"]},
-    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Finance costs", "sub_head_2": ["Interest expense", "Other borrowing costs", "Net gain/loss on foreign currency transactions and translation (finance cost)"]},
-    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Depreciation and amortisation expense", "sub_head_2": ["Depreciation - Property, Plant and Equipment", "Amortisation - Intangible assets"]},
-    {"bs_pl": "PL", "main_head": "Expenses", "sub_head_1": "Other expenses", "sub_head_2": ["Consumption of stores and spare parts", "Power and fuel", "Rent", "Repairs to buildings", "Repairs to machinery", "Insurance", "Rates and taxes (excluding income tax)", "Statutory Audit Fee", "other miscellaneous expenses", "Business development and other miscellaneous expenses", "Legal and professional charges", "Communication costs", "Printing and stationery", "Advertisement and publicity", "Travelling and conveyance", "Corporate social responsibility (CSR) expenditure", "Net loss on foreign currency transaction and translation (non-finance)", "Loss on sale/disposal of assets", "Bad debts / provision for doubtful debts", "Other miscellaneous expenses"]},
-    {"bs_pl": "PL", "main_head": "Exceptional items", "sub_head_1": "Exceptional items", "sub_head_2": ["Exceptional items"]},
-    {"bs_pl": "PL", "main_head": "Tax expense", "sub_head_1": "Tax expense", "sub_head_2": ["Current tax", "Deferred tax"]},
-    {"bs_pl": "PL", "main_head": "Other Comprehensive Income", "sub_head_1": "Items not reclassified to profit or loss", "sub_head_2": ["Changes in revaluation surplus", "Remeasurements of defined benefit plans", "Equity Instruments through OCI", "Fair value changes - own credit risk", "Share of OCI in Associates/JVs (not reclassified)"]},
-    {"bs_pl": "PL", "main_head": "Other Comprehensive Income", "sub_head_1": "Items reclassified to profit or loss", "sub_head_2": ["Exchange differences on translating foreign operations", "Debt Instruments through OCI", "Effective portion of cash flow hedge gains/losses", "Share of OCI in Associates/JVs (reclassified)"]}
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current assets",
+      "sub_head_1": "Property, Plant and Equipment",
+      "sub_head_2": [
+        "Land",
+        "Buildings",
+        "Plant and Equipment",
+        "Furniture and Fixtures",
+        "Vehicles",
+        "Office equipment",
+        "Bearer Plants",
+        "Others"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current assets",
+      "sub_head_1": "Capital Work-in-Progress",
+      "sub_head_2": [
+        "Capital work-in-progress"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current assets",
+      "sub_head_1": "Investment Property",
+      "sub_head_2": [
+        "Investment Property"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current assets",
+      "sub_head_1": "Goodwill",
+      "sub_head_2": [
+        "Goodwill"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current assets",
+      "sub_head_1": "Other Intangible assets",
+      "sub_head_2": [
+        "Brands or trademarks",
+        "Computer software",
+        "Mastheads and publishing titles",
+        "Mining rights",
+        "Copyrights, patents, other intellectual property rights, services and operating rights",
+        "Recipes, formulae, models, designs and prototypes",
+        "Licenses and franchises",
+        "Others (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current assets",
+      "sub_head_1": "Intangible assets under development",
+      "sub_head_2": [
+        "Intangible assets under development"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current assets",
+      "sub_head_1": "Biological Assets other than bearer plants",
+      "sub_head_2": [
+        "Biological Assets other than bearer plants"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current assets",
+      "sub_head_1": "Financial Assets - Investments",
+      "sub_head_2": [
+        "Investments in Equity Instruments",
+        "Investments in Preference Shares",
+        "Investments in Government or trust securities",
+        "Investments in debentures or bonds",
+        "Investments in Mutual Funds",
+        "Investments in partnership firms",
+        "Other investments (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current assets",
+      "sub_head_1": "Financial Assets - Trade receivables",
+      "sub_head_2": [
+        "Trade Receivables considered good - Secured",
+        "Trade Receivables considered good - Unsecured",
+        "Trade Receivables which have significant increase in Credit Risk",
+        "Trade Receivables - credit impaired"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current assets",
+      "sub_head_1": "Financial Assets - Loans",
+      "sub_head_2": [
+        "Security Deposits",
+        "Loans to related parties (giving details thereof)",
+        "Other loans (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current assets",
+      "sub_head_1": "Financial Assets - Others",
+      "sub_head_2": [
+        "Other financial assets",
+        "Bank deposits with more than 12 months maturity"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current assets",
+      "sub_head_1": "Deferred tax assets (net)",
+      "sub_head_2": [
+        "Deferred tax assets (net)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current assets",
+      "sub_head_1": "Other non-current assets",
+      "sub_head_2": [
+        "Capital Advances",
+        "Advances other than capital advances - Security Deposits",
+        "Advances other than capital advances - Advances to related parties",
+        "Advances other than capital advances - Other advances",
+        "Others (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current assets",
+      "sub_head_1": "Inventories",
+      "sub_head_2": [
+        "Raw materials",
+        "Work-in-progress",
+        "Finished goods",
+        "Stock-in-trade (in respect of goods acquired for trading)",
+        "Stores and spares",
+        "Loose tools",
+        "Others (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current assets",
+      "sub_head_1": "Financial Assets - Investments",
+      "sub_head_2": [
+        "Investments in Equity Instruments",
+        "Investment in Preference Shares",
+        "Investments in government or trust securities",
+        "Investments in debentures or bonds",
+        "Investments in Mutual Funds",
+        "Investments in partnership firms",
+        "Other investments (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current assets",
+      "sub_head_1": "Financial Assets - Trade receivables",
+      "sub_head_2": [
+        "Loans Receivables considered good - Secured",
+        "Loans Receivables considered good - Unsecured",
+        "Loans Receivables which have significant increase in Credit Risk",
+        "Trade Receivables - credit impaired"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current assets",
+      "sub_head_1": "Financial Assets - Cash and cash equivalents",
+      "sub_head_2": [
+        "Balances with Banks (of the nature of cash and cash equivalents)",
+        "Cheques, drafts on hand",
+        "Cash on hand",
+        "Others (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current assets",
+      "sub_head_1": "Financial Assets - Bank balances other than cash and cash equivalents",
+      "sub_head_2": [
+        "Earmarked balances with banks",
+        "Balances with banks held as margin money or security against borrowings, guarantees or other commitments",
+        "Other bank balances",
+        "Bank deposits with more than 12 months maturity"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current assets",
+      "sub_head_1": "Financial Assets - Loans",
+      "sub_head_2": [
+        "Security deposits",
+        "Loans to related parties (giving details thereof)",
+        "Others (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current assets",
+      "sub_head_1": "Financial Assets - Others",
+      "sub_head_2": [
+        "Other financial assets"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current assets",
+      "sub_head_1": "Current Tax Assets (Net)",
+      "sub_head_2": [
+        "Current Tax Assets (Net)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current assets",
+      "sub_head_1": "Other current assets",
+      "sub_head_2": [
+        "Advances other than capital advances - Security Deposits",
+        "Advances other than capital advances - Advances to related parties",
+        "Advances other than capital advances - Other advances",
+        "Others (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Equity",
+      "sub_head_1": "Equity Share Capital",
+      "sub_head_2": [
+        "Equity Share Capital"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Equity",
+      "sub_head_1": "Other Equity",
+      "sub_head_2": [
+        "Share application money pending allotment",
+        "Equity component of compound financial instruments",
+        "Capital Reserve",
+        "Securities Premium Reserve",
+        "Other Reserves",
+        "Retained Earnings",
+        "Debt instruments through Other Comprehensive Income",
+        "Equity Instruments through Other Comprehensive Income",
+        "Effective portion of Cash Flow Hedges",
+        "Revaluation Surplus",
+        "Exchange differences on translating the financial statements of a foreign operation",
+        "Other items of Other Comprehensive Income",
+        "Money received against share warrants"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current liabilities",
+      "sub_head_1": "Financial Liabilities - Borrowings",
+      "sub_head_2": [
+        "Bonds or debentures",
+        "Term loans - from banks",
+        "Term loans - from other parties",
+        "Deferred payment liabilities",
+        "Deposits",
+        "Loans from related parties",
+        "Long term maturities of finance lease obligations",
+        "Liability component of compound financial instruments",
+        "Other loans (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current liabilities",
+      "sub_head_1": "Trade payables",
+      "sub_head_2": [
+        "Total outstanding dues of micro enterprises and small enterprises",
+        "Total outstanding dues of creditors other than micro enterprises and small enterprises"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current liabilities",
+      "sub_head_1": "Other financial liabilities",
+      "sub_head_2": [
+        "Other financial liabilities (to be specified)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current liabilities",
+      "sub_head_1": "Provisions",
+      "sub_head_2": [
+        "Provision for employee benefits",
+        "Others (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current liabilities",
+      "sub_head_1": "Deferred tax liabilities (Net)",
+      "sub_head_2": [
+        "Deferred tax liabilities (Net)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Non-current liabilities",
+      "sub_head_1": "Other non-current liabilities",
+      "sub_head_2": [
+        "Advances",
+        "Others (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current liabilities",
+      "sub_head_1": "Financial Liabilities - Borrowings",
+      "sub_head_2": [
+        "Loans repayable on demand - from banks",
+        "Loans repayable on demand - from other parties",
+        "Loans from related parties",
+        "Deposits",
+        "Other loans (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current liabilities",
+      "sub_head_1": "Trade payables",
+      "sub_head_2": [
+        "Total outstanding dues of micro enterprises and small enterprises",
+        "Total outstanding dues of creditors other than micro enterprises and small enterprises"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current liabilities",
+      "sub_head_1": "Other financial liabilities",
+      "sub_head_2": [
+        "Current maturities of long-term debt",
+        "Current maturities of finance lease obligations",
+        "Interest accrued",
+        "Unpaid dividends",
+        "Application money received for allotment of securities to the extent refundable and interest accrued thereon",
+        "Unpaid matured deposits and interest accrued thereon",
+        "Unpaid matured debentures and interest accrued thereon",
+        "Others (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current liabilities",
+      "sub_head_1": "Other current liabilities",
+      "sub_head_2": [
+        "Revenue received in advance",
+        "Other advances (specify nature)",
+        "Others (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current liabilities",
+      "sub_head_1": "Provisions",
+      "sub_head_2": [
+        "Provision for employee benefits",
+        "Others (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "BS",
+      "main_head": "Current liabilities",
+      "sub_head_1": "Current Tax Liabilities (Net)",
+      "sub_head_2": [
+        "Current Tax Liabilities (Net)"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Revenue from operations",
+      "sub_head_1": "Revenue from operations",
+      "sub_head_2": [
+        "Sale of products (including Excise Duty)",
+        "Sale of services",
+        "Other operating revenues"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Other income",
+      "sub_head_1": "Other income",
+      "sub_head_2": [
+        "Interest Income",
+        "Dividend Income",
+        "Other non-operating income (net of expenses directly attributable to such income)"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Expenses",
+      "sub_head_1": "Cost of materials consumed",
+      "sub_head_2": [
+        "Cost of materials consumed"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Expenses",
+      "sub_head_1": "Purchases of Stock-in-Trade",
+      "sub_head_2": [
+        "Purchases of Stock-in-Trade"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Expenses",
+      "sub_head_1": "Changes in inventories of finished goods, Stock-in-Trade and work-in-progress",
+      "sub_head_2": [
+        "Changes in inventories of finished goods, Stock-in-Trade and work-in-progress"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Expenses",
+      "sub_head_1": "Employee benefits expense",
+      "sub_head_2": [
+        "Salaries and wages",
+        "Contribution to provident and other funds",
+        "Share based payments to employees",
+        "Staff welfare expenses"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Expenses",
+      "sub_head_1": "Finance costs",
+      "sub_head_2": [
+        "Interest",
+        "Dividend on redeemable preference shares",
+        "Exchange differences regarded as an adjustment to borrowing costs",
+        "Other borrowing costs (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Expenses",
+      "sub_head_1": "Depreciation and amortisation expense",
+      "sub_head_2": [
+        "Depreciation and amortisation expense"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Expenses",
+      "sub_head_1": "Other expenses",
+      "sub_head_2": [
+        "Other expenses"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Exceptional items",
+      "sub_head_1": "Exceptional items",
+      "sub_head_2": [
+        "Exceptional items"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Tax expense",
+      "sub_head_1": "Tax expense",
+      "sub_head_2": [
+        "Current tax",
+        "Deferred tax"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Discontinued operations",
+      "sub_head_1": "Discontinued operations",
+      "sub_head_2": [
+        "Profit/(loss) from discontinued operations",
+        "Tax expense of discontinued operations",
+        "Profit/(loss) from discontinued operations (after tax)"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Other Comprehensive Income",
+      "sub_head_1": "Items that will not be reclassified to profit or loss",
+      "sub_head_2": [
+        "Changes in revaluation surplus",
+        "Remeasurements of the defined benefit plans",
+        "Equity Instruments through Other Comprehensive Income",
+        "Fair value changes relating to own credit risk of financial liabilities designated at fair value through profit or loss",
+        "Share of Other Comprehensive Income in Associates and Joint Ventures, to the extent not to be classified into profit or loss",
+        "Others (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Other Comprehensive Income",
+      "sub_head_1": "Items that will be reclassified to profit or loss",
+      "sub_head_2": [
+        "Exchange differences in translating the financial statements of a foreign operation",
+        "Debt Instruments through Other Comprehensive Income",
+        "The effective portion of gains and loss on hedging instruments in a cash flow hedge",
+        "Share of Other Comprehensive Income in Associates and Joint Ventures, to the extent to be classified into profit or loss",
+        "Others (specify nature)"
+      ]
+    },
+    {
+      "bs_pl": "PL",
+      "main_head": "Other Comprehensive Income",
+      "sub_head_1": "Income tax relating to OCI",
+      "sub_head_2": [
+        "Income tax relating to items that will not be reclassified to profit or loss",
+        "Income tax relating to items that will be reclassified to profit or loss"
+      ]
+    }
   ]
 }

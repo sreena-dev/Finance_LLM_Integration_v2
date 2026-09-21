@@ -8,6 +8,15 @@ this 401s, and get_context_window() silently falls back to its hardcoded
 8x, which makes the agent trim conversation history far earlier than
 necessary on exactly the model picked for its larger context window."""
 
+import pytest
+
+pytest.importorskip(
+    "yukta",
+    reason="yukta is installed from a local path and published to no index, so it is "
+           "absent on a clean checkout -- see requirements.txt. These tests import "
+           "backend.agent, which needs it.",
+)
+
 from modes.trial_balance.pipeline.agent import SafeVLLMClient
 
 

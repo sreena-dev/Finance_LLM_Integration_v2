@@ -10,6 +10,7 @@ staging writes) skip cleanly rather than fail when no DB is reachable.
 import sys
 from pathlib import Path
 
+import fakeredis
 import openpyxl
 import polars as pl
 import pytest
@@ -17,6 +18,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from modes.trial_balance.pipeline.tools import CANONICAL_TB_ALL_COLUMNS  # noqa: E402
+import modes.trial_balance.pipeline.valkey_client as _valkey_client  # noqa: E402
 
 
 @pytest.fixture
@@ -107,6 +109,20 @@ def db_available():
     failing -- the DB is an external dependency, not something every dev/CI
     box is guaranteed to have running."""
     return _db_reachable()
+
+
+@pytest.fixture(autouse=True)
+def fake_valkey(monkeypatch):
+    """Every test gets a fresh in-memory fakeredis instance in place of a real
+    Valkey connection, so the suite exercises real preview-store/failed-call-
+    guard/chat-cache/agent-memory round-trips (not backend.valkey_client's
+    no-op degradation path, which is covered separately by
+    tests/test_valkey_client.py's own unreachable-Valkey case) without
+    depending on a Valkey server being up in CI or on a dev machine.
+    Autouse + function-scoped: state never leaks between tests."""
+    fake = fakeredis.FakeStrictRedis(decode_responses=True)
+    monkeypatch.setattr(_valkey_client, "get_valkey_client", lambda: fake)
+    return fake
 
 
 # ── Phase-2 screen fixtures ───────────────────────────────────────────────────

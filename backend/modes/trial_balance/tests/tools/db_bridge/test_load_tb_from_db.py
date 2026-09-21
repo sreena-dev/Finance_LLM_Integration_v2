@@ -6,8 +6,7 @@ already fetches the full CANONICAL_TB_ALL_COLUMNS set from tb_table."""
 import polars as pl
 import pytest
 
-from modes.trial_balance.pipeline.tools import CANONICAL_TB_ALL_COLUMNS
-from modes.trial_balance.pipeline.tools import load_tb_from_db
+from modes.trial_balance.pipeline.tools import CANONICAL_TB_ALL_COLUMNS, load_tb_from_db
 
 _TEST_DOC_ID = "PYTEST_LOAD_TB_FROM_DB_DOC"
 

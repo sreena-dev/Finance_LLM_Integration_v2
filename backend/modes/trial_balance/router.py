@@ -3,12 +3,10 @@ finance_llm_integrated_v1 frontend expects (see frontend/src/api/client.js).
 Every route is thin: parse input, call one tool directly (deterministic
 lookups) or hand off to the agent (multi-step reasoning), return JSON.
 
-Some routes below call tools that sibling agents are porting in parallel
-(process_input_documents, extract_grouping_mapping, build_*). Those calls go
-through `call_tool()`, which raises ToolNotAvailableError with a clear 424
-response if the module isn't registered yet — this file does not hardcode
-their exact signatures beyond what PROMPT.md documents, since the parallel
-work may still shift parameter names slightly.
+Routes below call tools (ingest_tb_to_live, load_tb_from_db, build_*, etc.) via
+`call_tool()`, which raises ToolNotAvailableError with a clear 424 response if a
+module isn't registered — this file does not hardcode tool signatures beyond what
+PROMPT.md documents.
 
 Note: frontend/src/api/client.js also calls `/pdfs/health`, `POST /pdfs`, and
 `GET/DELETE /pdfs` -- a separate PDF-evidence/embedding sub-feature with its
@@ -28,46 +26,89 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from modes.trial_balance.pipeline.agent import ToolNotAvailableError, call_tool, get_agent
-from modes.trial_balance.pipeline.tools import PipelineDBError, PipelineFileError, resolve_output_dir, verify_packs
+from modes.trial_balance.pipeline.agent import ToolNotAvailableError, call_tool, get_agent, llm_reachable
+from modes.trial_balance.pipeline.agent_memory import invoke_scoped
 from modes.trial_balance.pipeline.config import settings
-from modes.trial_balance.pipeline.db import add_findings, create_session, find_latest_session, update_session_status
+from modes.trial_balance.pipeline.db import add_findings, create_session, find_latest_session, learn_priority_company, update_session_status
+from modes.trial_balance.pipeline.tools import PipelineDBError, PipelineFileError, resolve_output_dir, verify_packs
+from modes.trial_balance.pipeline.valkey_client import preview_store_get, preview_store_set, preview_store_update
 
 logger = logging.getLogger(__name__)
 
-# Fail fast if any audit-knowledge pack is missing or malformed. Several packs are
-# read at module scope in pipeline/tools.py because their values are imported by
-# name; without this check a missing pack would surface only as a tool quietly
-# registering with degraded data, which on an audit pipeline is a silent
-# capability loss rather than a visible error.
-verify_packs()
-
 router = APIRouter(prefix="/api/trial-balance", tags=["trial-balance"])
+
+# Standalone TB-v2 calls this from its own main.py, which this gateway doesn't
+# use -- module load here is the equivalent startup-time hook, verifying every
+# versioned knowledge pack (taxonomy/keyword/weight JSON) is well-formed before
+# the first request rather than failing deep inside a tool call.
+verify_packs()
 
 _UPLOAD_ROOT = settings.OUTPUT_DIR / "uploads"
 _UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
-# In-process token -> upload metadata store, backing /preview and /upload-mapped.
-# TB-v2 has no shared preview-token store yet (only backend/db.py's
-# pipeline_sessions CRUD exists) -- this is intentionally process-local, matching
-# TB-v1's single-worker deployment assumption.
-_PREVIEW_STORE: dict = {}
+# Token -> upload metadata, backing /preview and /upload-mapped. Backed by Valkey
+# (backend/valkey_client.py's preview_store_*, 30-min TTL) rather than an
+# in-process dict -- the prior in-process store didn't survive a restart and
+# broke under any multi-worker deployment.
 
 
 def _tool_error_response(exc: Exception):
     if isinstance(exc, ToolNotAvailableError):
         return JSONResponse(status_code=424, content={"detail": str(exc)})
     if isinstance(exc, (PipelineFileError, PipelineDBError)):
+        # Both carry deliberately-constructed, caller-safe messages (a labelled missing
+        # artifact, a summarised DB failure) -- these are meant to be actionable to the
+        # caller, so they pass through unchanged.
         return JSONResponse(status_code=400, content={"detail": str(exc)})
-    logger.exception("Unhandled tool error")
-    return JSONResponse(status_code=500, content={"detail": str(exc)})
+    # Anything else is an unclassified internal failure. str(exc) on those routinely
+    # carries infrastructure detail (DB DSNs with host:port, LLM endpoint URLs, absolute
+    # server paths), so it goes to the log and the client gets a correlation id instead.
+    error_id = uuid.uuid4().hex[:12]
+    logger.exception("Unhandled tool error (error_id=%s)", error_id)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error. Quote the error_id when reporting this.",
+            "error_id": error_id,
+        },
+    )
 
 
 # ── Request models ───────────────────────────────────────────────────────────
 
 class UploadMappedRequest(BaseModel):
     token: str
-    column_mapping: dict
+    # No longer used server-side: ingest_tb_to_live's native parser auto-detects TB
+    # columns (backend/tools/input_header_detect.py), so there is no manual mapping
+    # step any more. Kept optional, accepted-but-ignored, so an existing client that
+    # still sends it doesn't break.
+    column_mapping: Optional[dict] = None
+    # Token returned by /audit/upload-grouping for the matching grouping workbook.
+    # Genuinely optional: ingest_tb_to_live can parse a single self-contained
+    # workbook (a normalized TB_GROUPING_TEMPLATE.xlsx, or any combined TB+grouping
+    # sheet) with no second file at all -- the same way a Live template submission
+    # can. Only a two-separate-files upload (TB + a distinct grouping/chart-of-
+    # accounts workbook) needs this.
+    grouping_token: Optional[str] = None
+    # Explicit opt-in to proceed past a CASE_3/high-incomplete-CASE_2
+    # CONFIRMATION_REQUIRED result (see ingest_tb_to_live's own docstring).
+    # Defaults False so a first attempt always stops for review; the picker
+    # re-submits with this set True only after the user clicks "Proceed
+    # anyway" on the surfaced confirmation reason.
+    accept_data_quality_risk: bool = False
+    # Optional user-supplied corrections from the picker's Company Details
+    # fields (Upload new tab only) -- each applies independently on top of
+    # ingest_tb_to_live's own auto-parse/auto-detect; a blank field changes
+    # nothing. See ingest_tb_to_live's docstring for the multi-year caveat.
+    company_name: Optional[str] = None
+    cin: Optional[str] = None
+    financial_year: Optional[str] = None
+    standard: Optional[str] = None
+    # False for the query-analysis staging flow (TbRunPicker's 'query' mode) --
+    # runs the identical classify/quality-gate chain and still writes
+    # canonical_tb.parquet, but never writes to LIVE. True (default) is the
+    # ordinary upload-and-audit path, unchanged.
+    persist_to_live: bool = True
 
 
 class AskRequest(BaseModel):
@@ -76,10 +117,15 @@ class AskRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+# NOTE: `upload_doc_ids` was declared on this model, AuditRequest and
+# AuditWorkbookRequest but never read by any handler -- accepted by the schema and
+# silently discarded, which reads to a caller as a supported feature. Removed rather
+# than wired up: nothing in the pipeline consumes a list of upload doc ids today.
+# Pydantic's default extra="ignore" means a client still sending the field is
+# unaffected; it is simply no longer advertised in the OpenAPI schema.
 class AskGeneralRequest(BaseModel):
     question: str
     session_id: Optional[str] = None
-    upload_doc_ids: Optional[list] = None
 
 
 class AuditRequest(BaseModel):
@@ -89,7 +135,6 @@ class AuditRequest(BaseModel):
     engagement_context: Optional[str] = None
     framework: Optional[str] = None
     grouping_token: Optional[str] = None
-    upload_doc_ids: Optional[list] = None
 
 
 class ValidateRequest(BaseModel):
@@ -100,7 +145,6 @@ class ValidateRequest(BaseModel):
 class AuditWorkbookRequest(BaseModel):
     doc_id: str
     doc_id_prior: Optional[str] = None
-    upload_doc_ids: Optional[list] = None
     format: Optional[str] = None  # "xlsx" | "docx", default "xlsx"
 
 
@@ -108,7 +152,22 @@ class AuditWorkbookRequest(BaseModel):
 
 @router.get("/health")
 def health():
-    return {"status": "ok", "mode": "trial-balance", "available": True}
+    from modes.trial_balance.pipeline.health_checks import check_storage_health
+
+    storage = check_storage_health()
+    # Postgres is the only hard dependency among the four storage engines --
+    # Valkey/MinIO are designed to degrade gracefully to a no-op when down
+    # (see valkey_client.py/object_store.py's module docstrings), and DuckDB
+    # is in-process with no external service to be down. A Postgres outage is
+    # the only one of the four that should read as the app itself being
+    # unhealthy, not just running in a degraded mode.
+    postgres_ok = storage["postgres"]["status"] == "ok"
+    return {
+        "status": "ok" if postgres_ok else "degraded",
+        "mode": "trial-balance",
+        "available": True,
+        "storage": storage,
+    }
 
 
 # ── Upload / preview / mapped-upload ────────────────────────────────────────
@@ -122,7 +181,7 @@ async def upload(file: UploadFile = File(...)):
     with open(dest_path, "wb") as f:
         f.write(await file.read())
 
-    _PREVIEW_STORE[token] = {"file_path": str(dest_path), "filename": file.filename}
+    preview_store_set(token, {"file_path": str(dest_path), "filename": file.filename})
 
     try:
         result = call_tool("preview_excel_data", excel_path=str(dest_path))
@@ -132,13 +191,13 @@ async def upload(file: UploadFile = File(...)):
     if result.get("execution_status") != "SUCCESS":
         raise HTTPException(status_code=422, detail={"needs_mapping": True, "preview_token": token, **result})
 
-    _PREVIEW_STORE[token]["preview"] = result
+    preview_store_update(token, {"preview": result})
     return {"token": token, "filename": file.filename, **result}
 
 
 @router.get("/preview")
 def preview(token: str):
-    entry = _PREVIEW_STORE.get(token)
+    entry = preview_store_get(token)
     if not entry:
         raise HTTPException(status_code=404, detail="Unknown or expired preview token.")
     return entry.get("preview", entry)
@@ -146,36 +205,125 @@ def preview(token: str):
 
 @router.post("/upload-mapped")
 def upload_mapped(request: UploadMappedRequest):
-    entry = _PREVIEW_STORE.get(request.token)
+    entry = preview_store_get(request.token)
     if not entry:
         raise HTTPException(status_code=404, detail="Unknown or expired preview token.")
 
-    output_dir = str(resolve_output_dir(request.token))
+    # grouping_token is optional -- a self-contained workbook (a normalized
+    # TB_GROUPING_TEMPLATE.xlsx, Scenario A, or any combined TB+grouping sheet,
+    # Scenario C) needs no second file; ingest_tb_to_live auto-detects which shape
+    # it got from content alone. Only resolve a grouping file when one was actually
+    # supplied.
+    grouping_file_path = None
+    if request.grouping_token:
+        grouping_entry = preview_store_get(request.grouping_token)
+        if not grouping_entry:
+            raise HTTPException(status_code=404, detail="Unknown or expired grouping token.")
+        grouping_file_path = grouping_entry["file_path"]
+
+    # resolve_output_dir() anchors a RELATIVE path to the repo root, so passing the bare
+    # token wrote every upload's parquet/JSON artifacts to <repo_root>/<uuid>/ -- one
+    # stray UUID directory at the project root per upload, outside the configured
+    # OUTPUT_DIR entirely. The uploaded source files already live in
+    # OUTPUT_DIR/uploads/<token> (see _UPLOAD_ROOT above); the artifacts derived from
+    # them belong beside their source, which is also how /audit scopes its own run
+    # directory (sessions/<session_id>).
+    #
+    # persist_to_live=False is the query-analysis staging path: nothing reaches
+    # LIVE, so there's no reason to key its output off the upload token -- it gets
+    # a real pipeline_sessions row (mode="CHAT_QUERY", the same mode /ask and
+    # /ask-general already use for this feature area) under sessions/<session_id>,
+    # the same convention /audit uses, so a future query feature can find it.
+    query_session_id = None
+    if request.persist_to_live:
+        output_dir = str(_UPLOAD_ROOT / request.token)
+    else:
+        query_session_id = create_session(mode="CHAT_QUERY", source="chat_upload")
+        output_dir = str(resolve_output_dir(f"sessions/{query_session_id}"))
+
     try:
         result = call_tool(
-            "process_input_documents",
-            tb_excel_path=entry["file_path"],
-            tb_column_mapping=request.column_mapping,
+            "ingest_tb_to_live",
+            tb_grouping_template_path=entry["file_path"],
+            grouping_file_path=grouping_file_path,
             output_dir=output_dir,
+            accept_data_quality_risk=request.accept_data_quality_risk,
+            company_name=request.company_name,
+            cin=request.cin,
+            financial_year=request.financial_year,
+            standard=request.standard,
+            persist_to_live=request.persist_to_live,
         )
-    except ToolNotAvailableError as exc:
+    except (ToolNotAvailableError, PipelineFileError, PipelineDBError) as exc:
+        if query_session_id:
+            update_session_status(query_session_id, "FAILED", error_message=str(exc))
         return _tool_error_response(exc)
 
-    entry["processed"] = result
+    if query_session_id:
+        # CONFIRMATION_REQUIRED writes nothing (no canonical_tb.parquet either --
+        # see ingest_tb_to_live's own early-return, before the write) -- not a
+        # real completion, so this attempt's session is marked FAILED same as a
+        # genuine failure; "Proceed anyway" creates a fresh session on retry
+        # rather than resurrecting this one, same one-session-per-attempt model
+        # /audit already uses.
+        succeeded = result.get("execution_status") == "SUCCESS" and result.get("pipeline_status") in ("SUCCESS", "WARNING")
+        update_session_status(
+            query_session_id,
+            "SUCCESS" if succeeded else "FAILED",
+            error_message=None if succeeded else result.get("message"),
+        )
+        result["session_id"] = query_session_id
 
-    if result.get("execution_status") == "SUCCESS":
+    preview_store_update(request.token, {"processed": result})
+
+    # Grow the Company Details suggestion list from this explicit user override --
+    # never from ingest_tb_to_live's own auto-detected value, only from what the
+    # user actually typed. Best-effort: a failure here must never fail the upload
+    # itself, matching this route's existing graceful-degradation style.
+    if request.company_name and result.get("execution_status") == "SUCCESS":
+        try:
+            learn_priority_company(request.company_name, cin=request.cin, financial_year=request.financial_year)
+        except PipelineDBError:
+            logger.exception("learn_priority_company failed for %r -- upload result unaffected.", request.company_name)
+
+    def _attach_validation(doc: dict) -> dict:
+        canonical_tb_file = next((a for a in doc.get("artifacts", []) if a.endswith("canonical_tb.parquet")), None)
+        if doc.get("execution_status") != "SUCCESS" or not canonical_tb_file:
+            return doc
         try:
             validation = call_tool(
-                "validate_layer1_tb",
-                tb_excel_path=entry["file_path"],
-                tb_column_mapping=request.column_mapping,
-                output_dir=output_dir,
+                "validate_layer1_tb", canonical_tb_file=canonical_tb_file, output_dir=str(Path(canonical_tb_file).parent),
             )
-        except ToolNotAvailableError as exc:
+        except (ToolNotAvailableError, PipelineFileError, PipelineDBError) as exc:
             validation = _tool_error_response(exc)
-        entry["layer1_validation"] = validation
-        result["layer1_validation"] = validation
+        doc["layer1_validation"] = validation
+        return doc
 
+    # Scenario D (multi-year input) ingests every detected fiscal year as its own LIVE
+    # document -- each carries its own canonical_tb.parquet, so each needs its own
+    # Layer 1 validation rather than the single top-level one the old single-document-
+    # only upload path always returned.
+    if "documents" in result:
+        result["documents"] = [_attach_validation(doc) for doc in result["documents"]]
+    else:
+        result = _attach_validation(result)
+
+    preview_store_update(request.token, {"layer1_validation": result.get("layer1_validation")})
+    return result
+
+
+# ── Priority companies (suggestion list, not MAIN/LIVE) ─────────────────────
+
+@router.get("/companies/priority")
+def list_priority_companies():
+    """Backs the upload picker's optional Company Details fields' autocomplete.
+    No query params -- small enough (order-of-hundreds rows) to fetch in full and
+    filter client-side, same as /documents already does for TbRunPicker's own
+    company/period pickers."""
+    try:
+        result = call_tool("list_priority_companies")
+    except ToolNotAvailableError as exc:
+        return _tool_error_response(exc)
     return result
 
 
@@ -225,15 +373,40 @@ def delete_document(doc_id: str):
 
 # ── Chat ─────────────────────────────────────────────────────────────────────
 
+_LLM_UNAVAILABLE_ANSWER = (
+    "The assistant is temporarily unavailable. Your trial balance data and any "
+    "completed audit reports are unaffected -- please retry shortly."
+)
+
+
 @router.post("/ask")
 def ask(request: AskRequest):
     """A question about a specific uploaded/analyzed Trial Balance (doc_id)."""
-    session_id = create_session(mode="CHAT_QUERY", source="ask", tb_doc_id=request.doc_id)
+    # Same DB-write guard as /audit: a Postgres hiccup here must degrade gracefully
+    # rather than escape as an unhandled 500.
+    try:
+        session_id = create_session(mode="CHAT_QUERY", source="ask", tb_doc_id=request.doc_id)
+    except Exception as e:
+        return _tool_error_response(e)
+
+    # The agent swallows connection failures and returns the raw error text as its
+    # answer, which put an internal endpoint URL in front of the end user. Probe once
+    # up front (same rationale as /audit) and answer plainly instead.
+    if not llm_reachable():
+        logger.warning("LLM endpoint unreachable (%s) -- /ask answered as unavailable.", settings.LLM_BASE_URL)
+        update_session_status(session_id, "FAILED", error_message="LLM endpoint unreachable")
+        return {"answer": _LLM_UNAVAILABLE_ANSWER, "session_id": session_id, "available": False}
+
     try:
         prompt = f"Trial Balance doc_id: {request.doc_id}\nQuestion: {request.question}"
-        response = get_agent().invoke(prompt)
+        # request.session_id (client-echoed, spans multiple /ask turns) is the
+        # conversation-memory key when the caller supplies one; the freshly
+        # created accounting session_id otherwise (single-turn, no continuity
+        # across calls). Either way this is now isolated per key -- never the
+        # agent's old shared, cross-tenant default memory (see agent_memory.py).
+        response = invoke_scoped(get_agent(), prompt, session_id=request.session_id or session_id)
         update_session_status(session_id, "SUCCESS")
-        return {"answer": response, "session_id": session_id}
+        return {"answer": response, "session_id": session_id, "available": True}
     except Exception as e:
         update_session_status(session_id, "FAILED", error_message=str(e))
         return _tool_error_response(e)
@@ -242,11 +415,26 @@ def ask(request: AskRequest):
 @router.post("/ask-general")
 def ask_general(request: AskGeneralRequest):
     """A question with no Trial Balance attached — answered from reference corpora."""
-    session_id = create_session(mode="CHAT_QUERY", source="ask-general")
     try:
-        response = get_agent().invoke(request.question)
+        session_id = create_session(mode="CHAT_QUERY", source="ask-general")
+    except Exception as e:
+        return _tool_error_response(e)
+
+    if not llm_reachable():
+        logger.warning("LLM endpoint unreachable (%s) -- /ask-general answered as unavailable.", settings.LLM_BASE_URL)
+        update_session_status(session_id, "FAILED", error_message="LLM endpoint unreachable")
+        return {
+            "answer": _LLM_UNAVAILABLE_ANSWER, "session_id": session_id,
+            "computed": None, "guardrail": None, "available": False,
+        }
+
+    try:
+        response = invoke_scoped(get_agent(), request.question, session_id=request.session_id or session_id)
         update_session_status(session_id, "SUCCESS")
-        return {"answer": response, "session_id": session_id, "computed": None, "guardrail": None}
+        return {
+            "answer": response, "session_id": session_id,
+            "computed": None, "guardrail": None, "available": True,
+        }
     except Exception as e:
         update_session_status(session_id, "FAILED", error_message=str(e))
         return _tool_error_response(e)
@@ -260,10 +448,17 @@ _LAYER1_SEVERITY_MAP = {"Blocking": "high", "Warning": "medium", "Info": "low"}
 def _run_layer1_precheck(
     session_id: str, tb_doc_id: str, output_dir: str, run_full_analytics: bool = True
 ) -> Optional[dict]:
-    """Deterministically load a DB-sourced doc and run validate_layer1_tb against it,
-    recording any HALTED/WARNING rule outcomes as pipeline_findings. Returns the
-    validation tool response, or None if the doc isn't DB-resolvable (e.g. an
-    upload token) -- in that case the agent's own dynamic flow handles it later.
+    """Deterministically load a DB-sourced doc (MAIN, or LIVE for a document
+    ingest_tb_to_live wrote this session and hasn't been promoted to MAIN yet)
+    and run validate_layer1_tb against it, recording any HALTED/WARNING rule
+    outcomes as pipeline_findings. Returns the validation tool response, or
+    None if the doc isn't resolvable from either (e.g. a stale/unknown upload
+    token) -- in that case the agent's own dynamic flow handles it later.
+
+    Tries MAIN first (the common case -- most audits run against already-
+    promoted documents), only falling back to LIVE when MAIN doesn't resolve,
+    so a doc_id that happens to exist in both never silently prefers the
+    staging copy over the promoted one.
 
     run_full_analytics=False skips the full single-TB analytics chain below (used for
     the COMPARISON PY leg, which only ever needs canonical_tb.parquet -- running
@@ -274,7 +469,12 @@ def _run_layer1_precheck(
     except ToolNotAvailableError:
         return None
     if loaded.get("execution_status") != "SUCCESS":
-        return None
+        try:
+            loaded = call_tool("load_tb_from_live", tb_doc_id=tb_doc_id, output_dir=output_dir)
+        except ToolNotAvailableError:
+            return None
+        if loaded.get("execution_status") != "SUCCESS":
+            return None
 
     canonical_tb_file = loaded["artifacts"][0]
 
@@ -359,6 +559,64 @@ def _run_layer1_precheck(
         except Exception:
             logger.exception("PY-leg financial snapshot chain failed for output_dir=%s", output_dir)
 
+        # Wave 2 Fix 4a: materiality was previously CY-only, so every PY-side movement
+        # (continuity breaks included) was graded against a threshold derived from a year
+        # it doesn't belong to. build_materiality's own inputs (financial_snapshot_
+        # statistics.json, fsli_summary.parquet, canonical_tb.parquet, snapshot_drilldown.
+        # parquet) are already produced by the two calls just above -- build_entity_profile
+        # also already ran earlier in this same function -- so this has no unmet
+        # dependency, it was simply never invoked for PY before.
+        try:
+            call_tool("build_materiality", canonical_tb_file=canonical_tb_file, output_dir=output_dir)
+        except ToolNotAvailableError:
+            logger.warning("build_materiality not available for PY leg -- PY-side movements have no PY materiality threshold.")
+        except Exception:
+            logger.exception("PY-leg materiality failed for output_dir=%s", output_dir)
+
+        # Remark #30 fix: validate_layer2_tb (TB-012/013/016/017/018/020 -- 6 rules,
+        # including TB-012's Assets=Liabilities+Equity identity check, the single most
+        # consequential integrity rule) previously only ran inside
+        # _run_core_analytics_chain, which run_full_analytics=False (this branch) never
+        # invokes -- so PY only ever got layer1's ~20+ rules, never layer2's 6. It only
+        # needs canonical_tb_file + the layer1_results.json validate_layer1_tb already
+        # wrote above (no dependency on materiality/exceptions/reasoning), so it can run
+        # here directly, decoupled from the full analytics chain.
+        layer1_results_file = Path(output_dir) / "layer1_results.json"
+        if layer1_results_file.exists():
+            try:
+                call_tool(
+                    "validate_layer2_tb",
+                    canonical_tb_file=canonical_tb_file,
+                    layer1_results_file=str(layer1_results_file),
+                    output_dir=output_dir,
+                )
+            except ToolNotAvailableError:
+                logger.warning("validate_layer2_tb not available for PY leg -- PY register omits layer2 rules.")
+            except Exception:
+                logger.exception("PY-leg validate_layer2_tb failed for output_dir=%s", output_dir)
+
+        # Remark #21 fix: the comparative report's Sections 6/8/10 and ratio-trend
+        # section were CY-only because these 4 tools never ran for PY, even though
+        # every prerequisite they need (fsli_summary.parquet, financial_snapshot_
+        # statistics.json) was already produced by the calls above in this same
+        # branch. Same call pattern as _run_core_analytics_chain's CY-leg calls
+        # (routes.py ~567-600); build_risk_indicators needs relationship_analytics.
+        # json to exist first, same ordering constraint as the CY leg.
+        try:
+            call_tool("build_financial_ratios", canonical_tb_file=canonical_tb_file, output_dir=output_dir)
+            call_tool("build_audit_ratio_pack", canonical_tb_file=canonical_tb_file, output_dir=output_dir)
+            call_tool(
+                "build_relationship_analytics",
+                canonical_tb_file=canonical_tb_file,
+                fsli_summary_file=str(Path(output_dir) / "fsli_summary.parquet"),
+                output_dir=output_dir,
+            )
+            call_tool("build_risk_indicators", canonical_tb_file=canonical_tb_file, output_dir=output_dir)
+        except ToolNotAvailableError:
+            logger.warning("Ratio/relationship/risk tools not available for PY leg -- comparative Sections 6/8/10 and ratio-trend stay CY-only.")
+        except Exception:
+            logger.exception("PY-leg ratio/relationship/risk chain failed for output_dir=%s", output_dir)
+
     return validation
 
 
@@ -391,6 +649,39 @@ def _run_core_analytics_chain(canonical_tb_file: str, output_dir: str) -> None:
             logger.exception("%s failed for output_dir=%s", tool_name, output_dir)
         return None
 
+    # ── TB-012/013/016/017/018/020 patch runs FIRST (TB-R19/R21 fix) ─────────
+    # Previously this block ran after build_exception_consolidator/build_assertion_
+    # evidence_map/validate_tb_pipeline (further down this chain), so all three
+    # consumed layer1_results.json while TB-012 etc. were still SKIPPED stubs -- a
+    # genuinely HALTED TB-012 (the TB doesn't foot) never reached exception
+    # consolidation or pipeline validation at all. validate_layer2_tb only needs
+    # canonical_tb_file + the layer1_results.json validate_layer1_tb already wrote
+    # before this chain started, so it has no dependency on anything below and can
+    # safely move to the front -- every downstream consumer of layer1_results.json
+    # now sees the real, patched status.
+    layer1_results_file = out_dir / "layer1_results.json"
+    layer2_result = None
+    if layer1_results_file.exists():
+        layer2_result = run(
+            "validate_layer2_tb",
+            canonical_tb_file=canonical_tb_file,
+            layer1_results_file=str(layer1_results_file),
+            output_dir=output_dir,
+        )
+        if layer2_result and layer2_result.get("can_continue") is False:
+            logger.error(
+                "validate_layer2_tb HALTED for output_dir=%s: %s -- analytics below will run "
+                "(per this chain's graceful-degradation contract) but the report must surface "
+                "this HALT; see _finalize_audit_result.",
+                output_dir, layer2_result.get("halted_rules"),
+            )
+        run(
+            "build_data_sufficiency_grade",
+            layer1_results_file=str(layer1_results_file),
+            canonical_tb_file=canonical_tb_file,
+            output_dir=output_dir,
+        )
+
     # build_financial_snapshot actually requires fsli_summary.parquet to already exist
     # (confirmed by direct reproduction -- its own PipelineFileError names
     # "FSLI Summary (run build_fsli_summary first)"), the reverse of what the file names
@@ -419,6 +710,12 @@ def _run_core_analytics_chain(canonical_tb_file: str, output_dir: str) -> None:
     # liquidity/leverage set rather than replacing it; reads the same snapshot.
     run("build_audit_ratio_pack", canonical_tb_file=canonical_tb_file, output_dir=output_dir)
     run("build_materiality", canonical_tb_file=canonical_tb_file, output_dir=output_dir)
+    # SA 530 sampling with default parameters (95% confidence, whole mapped population,
+    # both MUS and stratified). Deliberately the one screen in this chain that samples
+    # rather than tests the full population -- every parameter that shaped the sample is
+    # recorded on its own output so it can be re-run with different parameters (a narrower
+    # population_head, a different confidence level) without touching this default.
+    run("build_sample_selection", canonical_tb_file=canonical_tb_file, output_dir=output_dir)
     # build_risk_indicators' own required-file check demands relationship_analytics.json
     # already exist, so relationship_analytics must run before it, not after.
     run(
@@ -460,6 +757,20 @@ def _run_core_analytics_chain(canonical_tb_file: str, output_dir: str) -> None:
         llm_client=get_agent().llm_client,
     )
 
+    # Wave 2 Fix 3: -R/-P/-M clearing pairs (e.g. GL 20950021/20950022) reported gross
+    # instead of netted -- must run BEFORE build_going_concern_screen so netted_balances.
+    # parquet exists for it to read; going_concern_screen degrades gracefully to its prior
+    # gross behavior if this is ever skipped, so ordering here is a should, not a hard
+    # dependency, but running it after would defeat the point entirely.
+    run("build_netting_screen", canonical_tb_file=canonical_tb_file, output_dir=output_dir)
+
+    # Wave 3 Fix 1: must run BEFORE build_deposit_margin_money_screen so
+    # contract_exposure.json's bank_guarantee category exists for that screen's
+    # guarantee-book cross-reference; degrades gracefully (cross-reference unavailable,
+    # not a failure) if this is ever skipped.
+    run("build_contract_exposure_lens", canonical_tb_file=canonical_tb_file, output_dir=output_dir)
+    run("build_foreign_operations_lens", canonical_tb_file=canonical_tb_file, output_dir=output_dir)
+
     # ── India-specific and public-sector screens (sec 9.16, sec 10, sec 12) ───
     # build_override_indicators reads anomaly_findings.json to reframe the
     # round-sum/Benford signals rather than recomputing them, so it follows the
@@ -471,6 +782,15 @@ def _run_core_analytics_chain(canonical_tb_file: str, output_dir: str) -> None:
         "build_going_concern_screen",
         "build_caro_indicators",
         "build_override_indicators",
+        "build_deposit_margin_money_screen",
+        "build_provisions_writeoff_screen",
+        "build_msme_interest_screen",
+        # Remarks #25/#26/#27 (Wave 8): single-TB-callable -- #25 (unbilled revenue vs
+        # receivables) degrades to a balance-only report without a prior-period TB
+        # (wired with one in the comparison chain below); #26/#27 need only this period.
+        "build_unbilled_revenue_screen",
+        "build_dta_recoverability_screen",
+        "build_wip_contract_asset_screen",
     ):
         run(_screen, canonical_tb_file=canonical_tb_file, output_dir=output_dir)
 
@@ -481,14 +801,9 @@ def _run_core_analytics_chain(canonical_tb_file: str, output_dir: str) -> None:
     # records (Appendix B/C). Must follow build_exception_consolidator.
     run("build_assertion_evidence_map", output_dir=output_dir)
     run("validate_tb_pipeline", output_dir=output_dir)
-    layer1_results_file = out_dir / "layer1_results.json"
-    if layer1_results_file.exists():
-        run(
-            "build_data_sufficiency_grade",
-            layer1_results_file=str(layer1_results_file),
-            canonical_tb_file=canonical_tb_file,
-            output_dir=output_dir,
-        )
+    # (validate_layer2_tb / build_data_sufficiency_grade already ran at the top of this
+    # chain -- see the TB-R19/R21 fix above -- so build_exception_consolidator and
+    # validate_tb_pipeline above now see the real, patched layer1_results.json.)
     # ── consolidated output (sec 13, sec 14, sec 15.1) ───────────────────────
     # build_finding_records collects every screen's findings into the specification's
     # record shape; build_request_lists then turns them into the de-duplicated
@@ -548,7 +863,14 @@ def _run_comparison_analytics_chain(report_dir: Path, cy_dir: Path, py_dir: Path
     # them is harmless, they overwrite deterministically" pattern already used for report
     # generation in _finalize_audit_result.
     try:
-        call_tool("run_comparison_prechecks", **common_kwargs)
+        precheck_result = call_tool("run_comparison_prechecks", **common_kwargs)
+        if precheck_result and precheck_result.get("can_continue") is False:
+            logger.error(
+                "run_comparison_prechecks HALTED for report_dir=%s: %s -- comparison analytics "
+                "below will still run (graceful-degradation contract) but the report must "
+                "surface this HALT.",
+                report_dir, precheck_result.get("halted_checks"),
+            )
         call_tool("run_comparison_structural", **common_kwargs)
         materiality_file = cy_dir / "materiality.json"
         call_tool(
@@ -567,6 +889,17 @@ def _run_comparison_analytics_chain(report_dir: Path, cy_dir: Path, py_dir: Path
                 output_dir=str(report_dir),
                 llm_client=get_agent().llm_client,
             )
+        # Remark #25 (Wave 8): re-run with the PY leg's canonical TB now available, so
+        # the movement-correlation check (unbilled revenue vs receivables) actually runs
+        # instead of the single-period, balance-only fallback the CY-only chain wrote
+        # earlier. Overwrites cy_dir's unbilled_revenue_screen.json in place -- same
+        # deterministic-overwrite pattern the four calls above already use.
+        call_tool(
+            "build_unbilled_revenue_screen",
+            canonical_tb_file=str(cy_canonical_tb),
+            prior_canonical_tb_file=str(py_canonical_tb),
+            output_dir=str(cy_dir),
+        )
     except ToolNotAvailableError:
         logger.warning("Comparison analytics tool(s) not available -- skipping.")
     except Exception:
@@ -595,6 +928,24 @@ def _finalize_audit_result(mode: str, run_dir: Path, entity_hint: Optional[str] 
     if not Path(canonical_tb_file).exists():
         logger.warning("Skipping report generation: canonical_tb.parquet not found at %s", canonical_tb_file)
         return result
+
+    # TB-R19: surface a genuinely HALTED rule (post validate_layer2_tb patch, most
+    # commonly TB-012 -- the TB doesn't foot) on the API response itself, not just in
+    # logs -- "block" must mean the caller can tell the report is standing on a broken
+    # invariant, not that the pipeline silently reports as if everything passed.
+    layer1_results_path = cy_dir / "layer1_results.json"
+    if layer1_results_path.exists():
+        try:
+            with open(layer1_results_path, encoding="utf-8") as f:
+                layer1_results = json.load(f)
+            halted = [r for r in layer1_results if r.get("status") == "HALTED"]
+            if halted:
+                result["tb_integrity_halted"] = True
+                result["tb_integrity_halted_rules"] = [
+                    {"rule": r.get("rule"), "message": r.get("message")} for r in halted
+                ]
+        except Exception:
+            logger.exception("Failed to read layer1_results.json for run_dir=%s", run_dir)
 
     if is_comparison:
         _run_comparison_analytics_chain(report_dir, cy_dir, py_dir)
@@ -690,13 +1041,22 @@ def audit(request: AuditRequest):
     """Routes to the SINGLE_TB chain when doc_id_prior is absent, or the
     COMPARISON chain when both doc_id and doc_id_prior are given."""
     mode = "COMPARISON" if request.doc_id_prior else "SINGLE_TB"
-    session_id = create_session(
-        mode=mode,
-        source="audit",
-        tb_doc_id=request.doc_id,
-        tb_doc_id_prior=request.doc_id_prior,
-        entity_id=request.entity,
-    )
+    # create_session() is a live DB write and the Postgres host has been observed to go
+    # briefly unreachable. Outside the try below it produced a bare unhandled 500, unlike
+    # every other failure mode in this handler; inside its own guard it degrades the same
+    # graceful way. session_id is needed by the main try's own except clause, so this
+    # cannot simply be folded into that block.
+    try:
+        session_id = create_session(
+            mode=mode,
+            source="audit",
+            tb_doc_id=request.doc_id,
+            tb_doc_id_prior=request.doc_id_prior,
+            entity_id=request.entity,
+        )
+    except Exception as e:
+        return _tool_error_response(e)
+
     run_dir = resolve_output_dir(f"sessions/{session_id}")
     try:
         cy_validation = _run_layer1_precheck(session_id, request.doc_id, f"{run_dir}/cy" if mode == "COMPARISON" else str(run_dir))
@@ -725,11 +1085,32 @@ def audit(request: AuditRequest):
         if request.framework:
             prompt += f"\nFramework: {request.framework}"
         if request.grouping_token:
-            entry = _PREVIEW_STORE.get(request.grouping_token)
+            entry = preview_store_get(request.grouping_token)
             if entry:
                 prompt += f"\nGrouping file: {entry['file_path']}"
 
-        get_agent().invoke(prompt)
+        # A COMPARISON run leans on the agent for far more of its own tool orchestration
+        # than SINGLE_TB does (most of SINGLE_TB's real work already ran deterministically
+        # above, in _run_layer1_precheck/_run_core_analytics_chain) -- when the LLM
+        # endpoint is down, that difference is what made a comparison look hung for many
+        # minutes: the agent's own retry loop (already layered on top of the LLM client's
+        # own internal retries) burns through iterations against a connection that will
+        # never succeed. One cheap TCP probe here (a few ms when reachable) avoids ever
+        # starting that doomed loop; skipping the agent call outright, not aborting the
+        # whole request, since _finalize_audit_result already reports "not available" for
+        # any section whose backing artifact never got written, same as any other
+        # degraded-but-not-fatal gap in this pipeline.
+        if llm_reachable():
+            # Isolated per audit session_id so this run's orchestration prompt/response
+            # never shares the agent's memory with a concurrent /ask conversation or
+            # another audit run (see agent_memory.py).
+            invoke_scoped(get_agent(), prompt, session_id=session_id)
+        else:
+            logger.warning(
+                "LLM endpoint unreachable (%s) -- skipping agent orchestration for this "
+                "%s run; proceeding with whatever the deterministic chain already produced.",
+                settings.LLM_BASE_URL, mode,
+            )
         result = _finalize_audit_result(mode, Path(run_dir), entity_hint=request.entity)
         update_session_status(session_id, "SUCCESS")
         return {
@@ -756,13 +1137,13 @@ async def audit_upload_grouping(
     with open(dest_path, "wb") as f:
         f.write(await file.read())
 
-    _PREVIEW_STORE[token] = {
+    preview_store_set(token, {
         "file_path": str(dest_path),
         "filename": file.filename,
         "doc_id": doc_id,
         "doc_id_2": doc_id_2,
         "is_grouping": True,
-    }
+    })
 
     try:
         result = call_tool("preview_excel_data", excel_path=str(dest_path), is_grouping=True)
@@ -772,7 +1153,7 @@ async def audit_upload_grouping(
     if result.get("execution_status") != "SUCCESS":
         raise HTTPException(status_code=422, detail={"needs_mapping": True, "preview_token": token, **result})
 
-    _PREVIEW_STORE[token]["preview"] = result
+    preview_store_update(token, {"preview": result})
     return {"token": token, "filename": file.filename, **result}
 
 
@@ -783,7 +1164,12 @@ def validate(request: ValidateRequest):
     try:
         result = call_tool("load_tb_from_db", tb_doc_id=request.doc_id)
         if result.get("execution_status") != "SUCCESS":
-            return result
+            # Same MAIN-then-LIVE fallback as _run_layer1_precheck -- a
+            # freshly ingest_tb_to_live'd document (not yet promoted to MAIN)
+            # would otherwise never validate right after upload.
+            result = call_tool("load_tb_from_live", tb_doc_id=request.doc_id)
+            if result.get("execution_status") != "SUCCESS":
+                return result
         canonical_tb_file = result["artifacts"][0]
         output_dir = str(Path(canonical_tb_file).parent)
         validation = call_tool("validate_layer1_tb", canonical_tb_file=canonical_tb_file, output_dir=output_dir)

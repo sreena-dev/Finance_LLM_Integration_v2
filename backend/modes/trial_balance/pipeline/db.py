@@ -12,13 +12,44 @@ from contextlib import contextmanager
 from typing import Optional
 
 import psycopg2
+import psycopg2.errorcodes
 import psycopg2.extras
 import psycopg2.pool
 
 from modes.trial_balance.pipeline.config import settings
 
-# backend.tools imports db_cursor/repository functions from THIS module at its own
-# module level, so importing backend.tools back here at module level would circularly
+# Friendly messages for the ingestion error catalog's Section 7 "DB
+# constraint safety net" (TB-v2-git/Trial_Balance_ingestion_error.md) --
+# these mirror app-level checks (quality_gate.py's new WARN entries) and
+# should never normally fire; they exist so a gap in app-level validation
+# still surfaces a readable message instead of a raw psycopg2 traceback.
+_CONSTRAINT_MESSAGES = {
+    psycopg2.errorcodes.UNIQUE_VIOLATION: (
+        "A record with this identifier already exists. Please check for a duplicate submission."
+    ),
+    psycopg2.errorcodes.NOT_NULL_VIOLATION: (
+        "A required field (e.g. GL Code or GL Name) was missing when writing to the database. "
+        "Please check the source file for blank required columns."
+    ),
+    psycopg2.errorcodes.FOREIGN_KEY_VIOLATION: (
+        "Internal error: line items could not be linked to their document. Please contact support."
+    ),
+    psycopg2.errorcodes.CHECK_VIOLATION: (
+        "Internal error: a value did not meet the required database constraint. Please contact support."
+    ),
+    psycopg2.errorcodes.STRING_DATA_RIGHT_TRUNCATION: (
+        "A value in this file is too long for its column (e.g. an account name or classification "
+        "label over 255 characters). Please shorten it and re-upload."
+    ),
+}
+
+
+def _translate_db_error(e: Exception) -> str:
+    pgcode = getattr(e, "pgcode", None)
+    return _CONSTRAINT_MESSAGES.get(pgcode, f"Database operation failed: {e}")
+
+# modes.trial_balance.pipeline.tools imports db_cursor/repository functions from THIS module at its own
+# module level, so importing modes.trial_balance.pipeline.tools back here at module level would circularly
 # deadlock whichever of the two modules is imported first. PipelineDBError /
 # CANONICAL_TB_ALL_COLUMNS / DOCUMENT_OPTIONAL_COLUMNS are only ever needed inside a
 # function body below, never at module load time, so each is imported locally at the
@@ -67,7 +98,7 @@ def db_cursor(dict_rows: bool = True):
         conn.rollback()
         if isinstance(e, PipelineDBError):
             raise
-        raise PipelineDBError(f"Database operation failed: {e}")
+        raise PipelineDBError(_translate_db_error(e))
     finally:
         pool.putconn(conn)
 
@@ -137,12 +168,90 @@ def fetch_main_document_by_entity_fy(entity_id: str, financial_year: str) -> Opt
         return dict(row) if row else None
 
 
+# ---------------------------------------------------------------------------
+# priority_companies -- company/CIN/financial-year suggestion list for the
+# upload picker's optional Company Details fields (see database/schema.sql
+# for the table). Not MAIN/LIVE -- its own small reference table, seeded once
+# from the client's Priority Companies List and grown at request time from
+# explicit user-supplied overrides only (never from the parser's own guesses).
+# ---------------------------------------------------------------------------
+
+
+def list_priority_companies() -> list:
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT company_name, cin, financial_years FROM priority_companies "
+            "WHERE deleted_at IS NULL ORDER BY company_name"
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def upsert_priority_companies(rows: list) -> int:
+    """Bulk upsert, used by backend/scripts/ingest_priority_companies.py. The
+    client's list is authoritative, so a re-run overwrites cin/financial_years
+    outright on conflict -- safe to re-run if the client sends an updated list."""
+    if not rows:
+        return 0
+    with db_cursor() as cur:
+        psycopg2.extras.execute_batch(
+            cur,
+            """
+            INSERT INTO priority_companies (company_name, cin, financial_years)
+            VALUES (%(company_name)s, %(cin)s, %(financial_years)s)
+            ON CONFLICT (lower(company_name)) WHERE deleted_at IS NULL DO UPDATE SET
+                cin = EXCLUDED.cin,
+                financial_years = EXCLUDED.financial_years,
+                updated_at = now()
+            """,
+            [
+                {
+                    "company_name": r["company_name"],
+                    "cin": r.get("cin"),
+                    "financial_years": psycopg2.extras.Json(r.get("financial_years") or []),
+                }
+                for r in rows
+            ],
+        )
+        return len(rows)
+
+
+def learn_priority_company(company_name: str, cin: Optional[str] = None, financial_year: Optional[str] = None) -> None:
+    """Upserts one company from a live user-supplied override (see
+    routes.py's /upload-mapped). Merges rather than overwrites -- a new
+    financial_year is appended to whatever is already there (never replacing
+    prior years), and cin only fills in if the existing row has none -- this
+    never downgrades a row the bulk client-list ingestion already populated."""
+    if not company_name or not company_name.strip():
+        return
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO priority_companies (company_name, cin, financial_years)
+            VALUES (%(company_name)s, %(cin)s, %(financial_years)s)
+            ON CONFLICT (lower(company_name)) WHERE deleted_at IS NULL DO UPDATE SET
+                cin = COALESCE(priority_companies.cin, EXCLUDED.cin),
+                financial_years = COALESCE((
+                    SELECT jsonb_agg(DISTINCT elem)
+                    FROM jsonb_array_elements(priority_companies.financial_years || EXCLUDED.financial_years) AS elem
+                ), '[]'::jsonb),
+                updated_at = now()
+            """,
+            {
+                "company_name": company_name.strip(),
+                "cin": cin.strip() if cin else None,
+                "financial_years": psycopg2.extras.Json([financial_year] if financial_year else []),
+            },
+        )
+
+
 def fetch_main_lines(tb_doc_id: str) -> list:
     from modes.trial_balance.pipeline.tools import CANONICAL_TB_ALL_COLUMNS
 
     with db_cursor() as cur:
+        # Column list is a fixed internal constant, never user input; the actual
+        # value (tb_doc_id) is passed as a %s parameter below (reviewed 2026-09).
         cur.execute(
-            f"SELECT {', '.join(CANONICAL_TB_ALL_COLUMNS)} FROM tb_table WHERE tb_doc_id = %s",
+            f"SELECT {', '.join(CANONICAL_TB_ALL_COLUMNS)} FROM tb_table WHERE tb_doc_id = %s",  # nosec B608
             (tb_doc_id,),
         )
         return _normalize_mapped_status([dict(r) for r in cur.fetchall()])
@@ -153,52 +262,112 @@ def fetch_main_lines(tb_doc_id: str) -> list:
 # ---------------------------------------------------------------------------
 
 
+def fetch_live_lines(tb_doc_id: str) -> list:
+    """LIVE counterpart to fetch_main_lines -- same column contract
+    (CANONICAL_TB_ALL_COLUMNS), same table shape (live_tb_table is
+    column-for-column identical to tb_table by design), reading GL lines for
+    a document that only exists in staging, not yet promoted to MAIN."""
+    from modes.trial_balance.pipeline.tools import CANONICAL_TB_ALL_COLUMNS
+
+    with db_cursor() as cur:
+        # Column list is a fixed internal constant, never user input; the actual
+        # value (tb_doc_id) is passed as a %s parameter below (reviewed 2026-09).
+        cur.execute(
+            f"SELECT {', '.join(CANONICAL_TB_ALL_COLUMNS)} FROM live_tb_table WHERE tb_doc_id = %s",  # nosec B608
+            (tb_doc_id,),
+        )
+        return _normalize_mapped_status([dict(r) for r in cur.fetchall()])
+
+
+def fetch_live_document(tb_doc_id: str) -> Optional[dict]:
+    """Used to detect (informationally, never to block -- see
+    upsert_live_document's own "delete-then-insert by design" docstring)
+    that a LIVE row already exists for this tb_doc_id before it gets
+    replaced by a new upload."""
+    with db_cursor() as cur:
+        cur.execute("SELECT * FROM live_document_table WHERE tb_doc_id = %s LIMIT 1", (tb_doc_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def _upsert_live_document_exec(cur, doc: dict) -> None:
+    cur.execute("DELETE FROM live_document_table WHERE tb_doc_id = %s", (doc["tb_doc_id"],))
+    cur.execute(
+        """
+        INSERT INTO live_document_table
+            (entity_id, entity_name, cin, company_name, fy_period_start, fy_period_end,
+             tb_doc_id, tb_doc_name, statement_type, financial_year, has_grouping,
+             grouping_doc_id, grouping_doc_name, document_version, modification_dump,
+             custom_field_1, custom_field_2, custom_field_3)
+        VALUES (%(entity_id)s, %(entity_name)s, %(cin)s, %(company_name)s,
+                %(fy_period_start)s, %(fy_period_end)s, %(tb_doc_id)s, %(tb_doc_name)s,
+                %(statement_type)s, %(financial_year)s, %(has_grouping)s,
+                %(grouping_doc_id)s, %(grouping_doc_name)s, %(document_version)s,
+                %(modification_dump)s, %(custom_field_1)s, %(custom_field_2)s, %(custom_field_3)s)
+        """,
+        doc,
+    )
+
+
+def _fill_document_optional_columns(doc: dict) -> dict:
+    from modes.trial_balance.pipeline.tools import DOCUMENT_OPTIONAL_COLUMNS
+
+    return {**{c: None for c in DOCUMENT_OPTIONAL_COLUMNS}, **doc}
+
+
 def upsert_live_document(doc: dict) -> str:
     """Delete-then-insert by tb_doc_id (no unique constraint exists to ON CONFLICT against).
     custom_field_1/2/3 are reserved/not-yet-defined -- passed through as
     optional/nullable (doc.get, not doc[...]) so callers never have to supply
     them."""
-    from modes.trial_balance.pipeline.tools import DOCUMENT_OPTIONAL_COLUMNS
-
-    tb_doc_id = doc["tb_doc_id"]
-    doc = {**{c: None for c in DOCUMENT_OPTIONAL_COLUMNS}, **doc}
+    doc = _fill_document_optional_columns(doc)
     with db_cursor(dict_rows=False) as cur:
-        cur.execute("DELETE FROM live_document_table WHERE tb_doc_id = %s", (tb_doc_id,))
-        cur.execute(
-            """
-            INSERT INTO live_document_table
-                (entity_id, entity_name, cin, company_name, fy_period_start, fy_period_end,
-                 tb_doc_id, tb_doc_name, statement_type, financial_year, has_grouping,
-                 grouping_doc_id, grouping_doc_name, document_version, modification_dump,
-                 custom_field_1, custom_field_2, custom_field_3)
-            VALUES (%(entity_id)s, %(entity_name)s, %(cin)s, %(company_name)s,
-                    %(fy_period_start)s, %(fy_period_end)s, %(tb_doc_id)s, %(tb_doc_name)s,
-                    %(statement_type)s, %(financial_year)s, %(has_grouping)s,
-                    %(grouping_doc_id)s, %(grouping_doc_name)s, %(document_version)s,
-                    %(modification_dump)s, %(custom_field_1)s, %(custom_field_2)s, %(custom_field_3)s)
-            """,
-            doc,
-        )
-    return tb_doc_id
+        _upsert_live_document_exec(cur, doc)
+    return doc["tb_doc_id"]
 
 
-def insert_live_lines_batch(tb_doc_id: str, rows: list) -> int:
-    """Batched insert via execute_values. `rows` are dicts already shaped to
-    CANONICAL_TB_ALL_COLUMNS (custom_field_1/2/3 optional/nullable)."""
+def _insert_live_lines_batch_exec(cur, tb_doc_id: str, rows: list) -> int:
     from modes.trial_balance.pipeline.tools import CANONICAL_TB_ALL_COLUMNS
 
     if not rows:
         return 0
     cols = CANONICAL_TB_ALL_COLUMNS
     values = [tuple(r.get(c) for c in cols) for r in rows]
-    with db_cursor(dict_rows=False) as cur:
-        cur.execute("DELETE FROM live_tb_table WHERE tb_doc_id = %s", (tb_doc_id,))
-        psycopg2.extras.execute_values(
-            cur,
-            f"INSERT INTO live_tb_table ({', '.join(cols)}) VALUES %s",
-            values,
-        )
+    cur.execute("DELETE FROM live_tb_table WHERE tb_doc_id = %s", (tb_doc_id,))
+    # Column list is a fixed internal constant, never user input; row values are
+    # passed through execute_values' own parameterization (reviewed 2026-09).
+    psycopg2.extras.execute_values(
+        cur,
+        f"INSERT INTO live_tb_table ({', '.join(cols)}) VALUES %s",  # nosec B608
+        values,
+    )
     return len(values)
+
+
+def insert_live_lines_batch(tb_doc_id: str, rows: list) -> int:
+    """Batched insert via execute_values. `rows` are dicts already shaped to
+    CANONICAL_TB_ALL_COLUMNS (custom_field_1/2/3 optional/nullable)."""
+    if not rows:
+        return 0
+    with db_cursor(dict_rows=False) as cur:
+        return _insert_live_lines_batch_exec(cur, tb_doc_id, rows)
+
+
+def upsert_live_document_and_lines(doc: dict, rows: list) -> tuple:
+    """Atomic combination of upsert_live_document + insert_live_lines_batch:
+    the document row and its GL lines are written under the SAME pooled
+    connection/cursor inside ONE db_cursor transaction, so they commit or
+    roll back together. Before this, ingest_tb_to_live called the two
+    functions separately (two independent transactions) -- a crash between
+    them could leave a document row with no lines, or stale lines sitting
+    under a document row that no longer matches them. Returns
+    (tb_doc_id, rows_written)."""
+    doc = _fill_document_optional_columns(doc)
+    tb_doc_id = doc["tb_doc_id"]
+    with db_cursor(dict_rows=False) as cur:
+        _upsert_live_document_exec(cur, doc)
+        rows_written = _insert_live_lines_batch_exec(cur, tb_doc_id, rows)
+    return tb_doc_id, rows_written
 
 
 # =============================================================================
@@ -314,6 +483,85 @@ def record_tool_artifacts(run_id: str, tool_name: str, artifact_paths: list, pip
             """,
             (run_id, tool_name, json.dumps(artifact_paths or []), pipeline_status),
         )
+
+
+def record_artifact_files(session_id: str, tool_name: str, files: list) -> None:
+    """Per-file durable-artifact-plane metadata, one row per file in `files`.
+    Each entry: {artifact_path, checksum_sha256, size_bytes, format,
+    storage_backend, storage_uri, uploaded_at}. Purely additive/observability,
+    same posture as record_tool_artifacts -- never read back by any tool, and
+    a DB hiccup here must not fail the tool call that produced these files
+    (see backend/tools/pipeline_tool.py's _register_artifacts, the only
+    caller)."""
+    if not files:
+        return
+    with db_cursor(dict_rows=False) as cur:
+        for f in files:
+            cur.execute(
+                """
+                INSERT INTO pipeline_artifact_files
+                    (session_id, tool_name, artifact_path, checksum_sha256, size_bytes,
+                     format, storage_backend, storage_uri, uploaded_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    session_id,
+                    tool_name,
+                    f["artifact_path"],
+                    f["checksum_sha256"],
+                    f["size_bytes"],
+                    f["format"],
+                    f.get("storage_backend", "local"),
+                    f.get("storage_uri"),
+                    f.get("uploaded_at"),
+                ),
+            )
+
+
+def soft_delete_expired_sessions(older_than_days: int = 90) -> list:
+    """Marks pipeline_sessions.deleted_at for every session older than the
+    retention window (resolved decision: 90 days) that isn't already soft-
+    deleted. Purely a Postgres-side flag flip -- does not touch any local
+    file or MinIO object; backend/scripts/cleanup_sessions.py is the
+    separate, deliberately-run step that acts on this flag to remove local
+    scratch once a durable MinIO copy is confirmed for every file. Returns
+    the list of session_ids just flagged, for the caller to log/report."""
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE pipeline_sessions
+            SET deleted_at = now()
+            WHERE deleted_at IS NULL
+              AND created_at < now() - (%s || ' days')::interval
+            RETURNING session_id
+            """,
+            (older_than_days,),
+        )
+        return [r["session_id"] for r in cur.fetchall()]
+
+
+def list_artifact_files_for_session(session_id: str) -> list:
+    """All pipeline_artifact_files rows for one session -- used by
+    backend/scripts/cleanup_sessions.py to confirm every local file has a
+    recorded durable (MinIO) copy before that session's local directory is
+    removed."""
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT * FROM pipeline_artifact_files WHERE session_id = %s AND deleted_at IS NULL",
+            (session_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def list_expired_sessions(limit: int = 1000) -> list:
+    """Soft-deleted pipeline_sessions rows -- the population
+    cleanup_sessions.py iterates over."""
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT * FROM pipeline_sessions WHERE deleted_at IS NOT NULL ORDER BY deleted_at LIMIT %s",
+            (limit,),
+        )
+        return [dict(r) for r in cur.fetchall()]
 
 
 def get_findings(session_id: str, severity: Optional[str] = None, category: Optional[str] = None) -> list:

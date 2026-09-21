@@ -133,3 +133,48 @@ def test_missing_bs_pl_column_degrades_to_unfiltered_breaks(tmp_path):
 
     assert check["break_count"] == 1
     assert check["expected_pl_reset_count"] == 0
+
+
+# TB-R18/R20: the CY/PY debit==credit control-total check must foot on signed CLOSING
+# BALANCES, not raw debit/credit TURNOVER (which ties by construction and would mask a
+# genuine imbalance), and a genuinely HALTED check must surface as pipeline_status=
+# "HALTED"/can_continue=False rather than being downgraded to WARNING "so the pipeline
+# can continue" -- the same defect fixed in validate_layer1_tb/validate_layer2_tb,
+# mirrored here for the comparative precheck.
+
+def test_cy_control_total_halts_on_closing_balance_mismatch_despite_tied_turnover(tmp_path):
+    py_df = pl.DataFrame({
+        "gl_code": ["1", "2"],
+        "closing_balance": [50000.0, -50000.0],
+        "debit": [500.0, 500.0], "credit": [500.0, 500.0],
+    })
+    cy_df = pl.DataFrame({
+        "gl_code": ["1", "2"],
+        "opening_balance": [50000.0, -50000.0],
+        # Turnover ties exactly (debit == credit, both 1000), but closing balances leave
+        # an 80,000 residual instead of netting to zero -- the genuine footing defect.
+        "closing_balance": [100000.0, -20000.0],
+        "debit": [500.0, 500.0], "credit": [500.0, 500.0],
+    })
+    py_path = tmp_path / "py.parquet"
+    cy_path = tmp_path / "cy.parquet"
+    py_df.write_parquet(py_path)
+    cy_df.write_parquet(cy_path)
+
+    result = run_comparison_prechecks(str(py_path), str(cy_path), output_dir=str(tmp_path))
+
+    import json
+    report = json.loads((tmp_path / "precheck_results.json").read_text())
+    cy_check = next(c for c in report["checks"] if c["check"] == "cy_debit_credit_control_totals")
+    py_check = next(c for c in report["checks"] if c["check"] == "py_debit_credit_control_totals")
+
+    assert cy_check["status"] == "HALTED"
+    assert cy_check["diff"] == 80000.0
+    assert cy_check["turnover_total_debit"] == cy_check["turnover_total_credit"] == 1000.0
+    assert py_check["status"] == "PASS"
+
+    # The downgrade must be gone: a genuinely HALTED check propagates all the way to the
+    # function's own return value, not just precheck_results.json.
+    assert result["pipeline_status"] == "HALTED"
+    assert result["can_continue"] is False
+    assert "cy_debit_credit_control_totals" in result["halted_checks"]

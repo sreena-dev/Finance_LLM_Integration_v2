@@ -3,8 +3,7 @@ import { tbAuditWorkbook } from '../../api/client';
 import Collapsible from '../common/Collapsible';
 import Icon from '../common/Icon';
 import Markdown from '../common/Markdown';
-import FullTrialBalance from './FullTrialBalance';
-import { fmtNum, printReportHtml } from './tbFormat';
+import { fmtINR, fmtPct, humanize, printReportHtml } from './tbFormat';
 import './AuditCard.css';
 
 const RISK_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -15,14 +14,14 @@ function Finding({ f }) {
     <div className="tbcard-finding">
       <div className="tbcard-finding__head">
         <span className={`pill pill--${RISK_TONE[f.risk_rating] || 'mute'}`}>
-          {f.risk_rating || 'info'}
+          {f.risk_rating ? humanize(f.risk_rating) : 'Information'}
         </span>
         {f.reference_id && <span className="tbcard-finding__ref">{f.reference_id}</span>}
         {f.account && <span className="tbcard-finding__account">{f.account}</span>}
       </div>
       {f.observation && <p className="tbcard-finding__text">{f.observation}</p>}
       <div className="tbcard-finding__meta">
-        {f.amount != null && <span>Amount: {fmtNum(f.amount)}</span>}
+        {f.amount != null && <span>Amount: {fmtINR(f.amount)}</span>}
         {f.gap && <span>Gap: {f.gap}</span>}
       </div>
       {f.evidence_requested?.length > 0 && (
@@ -39,18 +38,13 @@ function Finding({ f }) {
 /**
  * One completed audit run.
  *
- * `fullTb` is composed in by the caller from a separate `/validate` call —
- * `/audit` returns no per-ledger table. It arrives as `null` when that call
- * failed, which is reported rather than hidden: a missing arithmetic table is
- * not the same as one that came back empty.
- *
  * `msg.result` is the full `/audit` response envelope ({session_id, mode,
  * result, layer1_validation}) — `result` below is the structured report data
  * one level in, assembled server-side from materiality.json/audit_reasoning.json/
  * the markdown report (see backend/api/routes.py::_finalize_audit_result).
  */
 export default function AuditCard({ mode, msg }) {
-  const { result: envelope, fullTb, doc, priorDoc, pdfIds } = msg;
+  const { result: envelope, doc, priorDoc, pdfIds } = msg;
   const result = envelope.result || {};
   const [downloading, setDownloading] = useState(false);
   const [dlError, setDlError] = useState(null);
@@ -104,7 +98,7 @@ async function downloadWorkbook(format) {
         <div className="tbcard__stat">
           <span className="tbcard__stat-label">Materiality</span>
           <span className="tbcard__stat-value">
-            {fmtNum(result.materiality?.overall_materiality)}
+            {fmtINR(result.materiality?.overall_materiality)}
           </span>
         </div>
       </div>
@@ -116,20 +110,6 @@ async function downloadWorkbook(format) {
         <div className="tbcard__report" ref={reportRef}>
           <Markdown>{result.report}</Markdown>
         </div>
-      )}
-
-      {fullTb === null ? (
-        <p className="tbcard__inset">
-          Full trial balance/variance check could not be completed
-          {priorDoc ? ' for this comparison' : ''}.
-        </p>
-      ) : (
-        <Collapsible
-          title={`Full trial balance (${fullTb.rows.length} ledger${fullTb.rows.length === 1 ? '' : 's'})`}
-          count={fullTb.halted ? undefined : fullTb.rows.length}
-        >
-          <FullTrialBalance fullTb={fullTb} />
-        </Collapsible>
       )}
 
       {findings.length > 0 && (
@@ -150,9 +130,9 @@ async function downloadWorkbook(format) {
               {result.materiality.benchmark_analysis.map((b) => (
                 <tr key={b.benchmark} className={b.benchmark === result.materiality.benchmark_used ? 'is-chosen' : ''}>
                   <td>{b.benchmark}</td>
-                  <td>{fmtNum(b.base_amount)}</td>
-                  <td>{b.pct}%</td>
-                  <td>{fmtNum(b.hypothetical_materiality)}</td>
+                  <td>{fmtINR(b.base_amount)}</td>
+                  <td>{fmtPct(b.pct)}</td>
+                  <td>{fmtINR(b.hypothetical_materiality)}</td>
                 </tr>
               ))}
             </tbody>

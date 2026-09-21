@@ -65,6 +65,123 @@ class TestSignConventionHeuristic:
         status, _ = _check_sign_convention(df)
         assert status in ("PASS", "WARNING")  # must not raise
 
+    def test_message_carries_basis_label(self):
+        # TB-R31: three different sign-convention screens (this one, run_comparison_
+        # sign_check, sign_convention_stats) each compute a genuinely different
+        # percentage for the same TB -- every message must say which one produced it.
+        df = pl.DataFrame(
+            {
+                "gl_name": ["Cash", "Bank Account", "Trade Receivable", "Inventory",
+                            "Trade Payable", "Share Capital", "Sales Revenue", "General Reserve"],
+                "closing_balance": [1500.0, 2500.0, 3200.0, 3900.0, -1500.0, -5000.0, -9000.0, -2300.0],
+            }
+        )
+        _, message = _check_sign_convention(df)
+        assert "single-TB, whole-file basis" in message
+
+
+class TestOverallPipelineStatusNotDowngraded:
+    # TB-R18: a genuinely HALTED rule (e.g. TB-009's Dr != Cr blocking check) must surface
+    # as pipeline_status="HALTED"/can_continue=False -- this function used to silently
+    # downgrade HALTED to WARNING "to force the pipeline to continue," which meant a TB
+    # that doesn't foot never actually stopped anything downstream.
+    def test_halted_rule_is_not_downgraded_to_warning(self, make_tb_workbook, tmp_path):
+        # Debit total (1000) vs Credit total (0) is a 100% relative difference -- well past
+        # TB-009's 5% HALTED threshold -- while opening+debit-credit still ties to closing,
+        # so TB-005 stays PASS and this isolates TB-009 as the sole HALTED rule.
+        rows = [("1001", "Cash", 0, 1000, 0, 1000)]
+        wb_path = make_tb_workbook(rows)
+        result = validate_layer1_tb(tb_excel_path=str(wb_path), output_dir=str(tmp_path))
+        results = _results_by_rule(tmp_path)
+        assert results["TB-009"]["status"] == "HALTED"
+        assert result["pipeline_status"] == "HALTED"
+        assert result["can_continue"] is False
+
+    def test_passing_workbook_still_reports_success(self, make_tb_workbook, tmp_path):
+        # NOTE: the shared `balanced_anchor_rows` fixture is turnover-balanced (debit
+        # total == credit total) but its closing balances do NOT sum to zero (they sum to
+        # 800) -- TB-010/TB-011 correctly HALT on it, and did so even before this fix; the
+        # old downgrade bug just silently hid that HALT as a WARNING. A row set that is
+        # genuinely balanced under the closing-balance identity is used here instead, to
+        # isolate "does a clean TB still report success" from that separate, pre-existing
+        # fixture-labelling issue.
+        rows = [
+            ("1001", "Cash", 0, 1000, 0, 1000),
+            ("2001", "Trade Payable", 0, 0, 1000, -1000),
+        ]
+        wb_path = make_tb_workbook(rows)
+        result = validate_layer1_tb(tb_excel_path=str(wb_path), output_dir=str(tmp_path))
+        assert result["pipeline_status"] != "HALTED"
+        assert result["can_continue"] is True
+
+
+class TestRoundingToleranceAbsoluteFloor:
+    # TB-R22: TB-009/010/011/019 previously escalated past PASS on ANY nonzero relative
+    # residual, however microscopically small -- the exact "false precision" defect a
+    # client review flagged directly (a residual of 0.000122 against a multi-thousand-
+    # crore control total reported as an exception). Each rule must now clear an
+    # absolute-currency-unit floor (_TB_ROUNDING_ABS_EPSILON = 1.0) before a nonzero
+    # relative residual is treated as a genuine exception.
+
+    def test_tiny_residual_within_absolute_epsilon_passes(self, make_tb_workbook, tmp_path):
+        rows = [
+            ("1001", "Cash", 0, 1000, 0, 1000.3),
+            ("2001", "Trade Payable", 0, 0, 1000, -999.8),
+        ]
+        wb_path = make_tb_workbook(rows)
+        validate_layer1_tb(tb_excel_path=str(wb_path), output_dir=str(tmp_path))
+        results = _results_by_rule(tmp_path)
+        assert results["TB-011"]["status"] == "PASS"
+        assert results["TB-019"]["status"] == "PASS"
+        assert results["TB-009"]["status"] == "PASS"
+        assert results["TB-010"]["status"] == "PASS"
+
+    def test_moderate_residual_beyond_epsilon_but_within_5pct_warns(self, make_tb_workbook, tmp_path):
+        rows = [
+            ("1001", "A", 0, 0, 0, 1050),
+            ("2001", "B", 0, 0, 0, -1000),
+        ]
+        wb_path = make_tb_workbook(rows)
+        validate_layer1_tb(tb_excel_path=str(wb_path), output_dir=str(tmp_path))
+        results = _results_by_rule(tmp_path)
+        assert results["TB-011"]["status"] == "WARNING"
+        assert results["TB-019"]["status"] == "WARNING"
+
+    def test_large_residual_beyond_5pct_halts(self, make_tb_workbook, tmp_path):
+        rows = [("1001", "A", 0, 0, 0, 5000)]
+        wb_path = make_tb_workbook(rows)
+        validate_layer1_tb(tb_excel_path=str(wb_path), output_dir=str(tmp_path))
+        results = _results_by_rule(tmp_path)
+        assert results["TB-011"]["status"] == "HALTED"
+        assert results["TB-019"]["status"] == "HALTED"
+
+    def test_tb019_no_longer_permanently_skipped(self, make_tb_workbook, tmp_path):
+        rows = [("1001", "Cash", 0, 1000, 0, 1000), ("2001", "Trade Payable", 0, 0, 1000, -1000)]
+        wb_path = make_tb_workbook(rows)
+        validate_layer1_tb(tb_excel_path=str(wb_path), output_dir=str(tmp_path))
+        results = _results_by_rule(tmp_path)
+        assert results["TB-019"]["status"] != "SKIPPED"
+
+
+class TestTB005SeverityConsistency:
+    # TB-R22: TB-005's PASS branch previously recorded severity "Blocking" while both its
+    # WARNING branches record "Warning" for the identical rule -- inconsistent by
+    # construction. Severity must not depend on which branch fired.
+    def test_pass_and_warning_severities_match(self, make_tb_workbook, tmp_path):
+        clean_rows = [("1001", "Cash", 0, 1000, 0, 1000)]
+        wb_path = make_tb_workbook(clean_rows, filename="clean.xlsx")
+        validate_layer1_tb(tb_excel_path=str(wb_path), output_dir=str(tmp_path / "clean"))
+        pass_result = _results_by_rule(tmp_path / "clean")["TB-005"]
+        assert pass_result["status"] == "PASS"
+
+        mismatch_rows = [("1001", "Cash", 0, 1000, 0, 1.0)]
+        wb_path2 = make_tb_workbook(mismatch_rows, filename="mismatch.xlsx")
+        validate_layer1_tb(tb_excel_path=str(wb_path2), output_dir=str(tmp_path / "mismatch"))
+        warn_result = _results_by_rule(tmp_path / "mismatch")["TB-005"]
+        assert warn_result["status"] == "WARNING"
+
+        assert pass_result["severity"] == warn_result["severity"] == "Warning"
+
 
 class TestValidateLayer1TbEndToEnd:
     def test_tb000_pass_on_balanced_anchor_workbook(self, make_tb_workbook, balanced_anchor_rows, tmp_path):

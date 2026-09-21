@@ -15,23 +15,29 @@ that matter are therefore symmetric: no sheet unreferenced, and no reference dan
 """
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from docx import Document
 from openpyxl import load_workbook
 
+pytest.importorskip(
+    "yukta",
+    reason="yukta is installed from a local path and published to no index, so it is "
+           "absent on a clean checkout -- see requirements.txt. These tests import "
+           "backend.agent, which needs it.",
+)
+
 from modes.trial_balance.router import _run_core_analytics_chain
 from modes.trial_balance.pipeline.tools import (
     MANIFEST_FILENAME,
     SCHEDULES,
+    build_docx_report,
+    build_excel_report,
     read_manifest,
     reference_line,
     validate_registry,
 )
-from modes.trial_balance.pipeline.tools import build_docx_report
-from modes.trial_balance.pipeline.tools import build_excel_report
 
 
 @pytest.fixture(scope="module")

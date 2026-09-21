@@ -66,6 +66,40 @@ class Settings:
     DB_POOL_MIN: int = int(os.getenv("TB_DB_POOL_MIN", "1"))
     DB_POOL_MAX: int = int(os.getenv("TB_DB_POOL_MAX", "5"))
 
+    # Query-time (candidate retrieval) and compile-time (taxonomy node) embedding
+    # endpoint for the native classification engine (pipeline/tools/taxonomy_repository.py).
+    # NOT the same knob as the gateway's shared EMBEDDING_BASE_URL (used by Financial
+    # Statement/SAR/FDR): those modes read a bare base URL and each mode appends its
+    # own path convention (e.g. Financial Statement appends "/v1/embeddings" at
+    # startup). This client instead POSTs directly to EMBEDDING_BASE_URL as the full
+    # request URL (default ends in "/embeddings", not "/v1/embeddings") -- the two
+    # conventions are incompatible under one shared value, so this mode keeps its own.
+    EMBEDDING_BASE_URL: str = os.getenv("TB_EMBEDDING_BASE_URL", "http://localhost:11652/embeddings")
+    EMBEDDING_MODEL: str = os.getenv("TB_EMBEDDING_MODEL", "BAAI/bge-m3")
+    EMBEDDING_API_KEY: str = os.getenv("TB_EMBEDDING_API_KEY", "EMPTY")
+    EMBEDDING_DIM: int = int(os.getenv("TB_EMBEDDING_DIM", "1024"))
+
+    # Hot-state / cache / coordination plane (pipeline/valkey_client.py). Enabled by
+    # default (unlike MinIO below) -- Valkey replaces two in-process, per-worker
+    # dicts (the old _PREVIEW_STORE, _FAILED_CALLS) that don't survive a restart or a
+    # multi-worker deployment; every helper still degrades gracefully to a no-op if
+    # the service isn't reachable, so a dev machine without Valkey running does not
+    # fail requests, only loses caching/coordination.
+    VALKEY_HOST: str = os.getenv("TB_VALKEY_HOST", "localhost")
+    VALKEY_PORT: int = int(os.getenv("TB_VALKEY_PORT", "6379"))
+    VALKEY_DB: int = int(os.getenv("TB_VALKEY_DB", "0"))
+    VALKEY_ENABLED: bool = os.getenv("TB_VALKEY_ENABLED", "true").lower() == "true"
+    VALKEY_PASSWORD: str = os.getenv("TB_VALKEY_PASSWORD", "")
+
+    # Durable artifact plane (pipeline/object_store.py). Disabled by default --
+    # unlike Valkey, this is a genuinely new capability, so a clean checkout keeps
+    # working as pure local-filesystem-only until an operator explicitly opts in.
+    MINIO_ENDPOINT: str = os.getenv("TB_MINIO_ENDPOINT", "http://localhost:9000")
+    MINIO_ACCESS_KEY: str = os.getenv("TB_MINIO_ACCESS_KEY", "")
+    MINIO_SECRET_KEY: str = os.getenv("TB_MINIO_SECRET_KEY", "")
+    MINIO_BUCKET: str = os.getenv("TB_MINIO_BUCKET", "tb-artifacts")
+    MINIO_ENABLED: bool = os.getenv("TB_MINIO_ENABLED", "false").lower() == "true"
+
     SYSTEM_PROMPT_MAX_TOKENS: int = int(os.getenv("TB_SYSTEM_PROMPT_MAX_TOKENS", "2048"))
 
     # Tool domains the LLM agent may CHOOSE BETWEEN. Everything else still runs --
@@ -79,13 +113,15 @@ class Settings:
     # assembled prompt permanently over budget.
     #
     # Set to "*" to expose every domain (the pre-Phase-5 behaviour).
-    # grouping + canonical are REQUIRED here, not optional: the upload path has no
-    # deterministic chain, so the agent itself runs
-    # process_input_documents -> extract_grouping_mapping -> build_canonical_tb ->
-    # persist_canonical_tb_to_live. Dropping either domain silently breaks uploads --
-    # the route still returns 200 and no canonical TB is ever produced.
+    # The upload path (router.py's /upload-mapped) now deterministically calls
+    # ingest_tb_to_live (domain db_bridge) directly -- no agent tool-chaining is
+    # needed for ingestion any more. canonical stays required for the agent's own
+    # post-ingestion analytics flow (validate_layer1_tb, build_data_sufficiency_grade,
+    # build_normalisation_note). The old "grouping" domain (extract_grouping_mapping)
+    # was retired upstream along with the manual-column-mapping upload flow -- there
+    # is nothing left to expose under it.
     AGENT_TOOL_DOMAINS: str = os.getenv(
-        "TB_AGENT_TOOL_DOMAINS", "chat,db_bridge,input,grouping,canonical"
+        "TB_AGENT_TOOL_DOMAINS", "chat,db_bridge,input,canonical"
     )
 
     # Shared platform-wide tracing config (one Phoenix project for every mode) --

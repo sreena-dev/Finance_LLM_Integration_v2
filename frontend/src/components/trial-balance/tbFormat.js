@@ -22,6 +22,22 @@ export function fmtPct(v) {
 }
 
 /**
+ * Humanizes a raw backend enum (SCREAMING_SNAKE_CASE, snake_case, or lowercase) into a
+ * Title Case label for display — e.g. "HIGH_PRIORITY" / "high_priority" -> "High Priority".
+ * Without this, whatever case convention the API happens to use leaks straight into the
+ * UI verbatim, which is why risk ratings and movement flags previously showed as
+ * lowercase or SCREAMING_SNAKE_CASE strings instead of a formatted label.
+ */
+export function humanize(v) {
+  if (v == null || v === '') return '—';
+  return String(v)
+    .toLowerCase()
+    .split(/[_\s]+/)
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(' ');
+}
+
+/**
  * Variance/movement flag → severity tone. HIGH_PRIORITY and DROPPED are the two
  * that warrant attention; NO_THRESHOLD means "computed but not judged", because
  * no materiality threshold was supplied, so it must not look like a pass.

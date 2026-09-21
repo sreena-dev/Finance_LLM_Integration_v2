@@ -58,9 +58,9 @@ one. Never paste large tabular or JSON data into the conversation; relay `messag
 Every tool returns `{execution_status, pipeline_status, can_continue, message,
 artifacts, errors}`. Check `can_continue`; stop and report if it is false.
 
-After building a canonical TB from a processed upload (not a DB load), persist it to
-LIVE staging with `persist_canonical_tb_to_live`. This is a normal step, not
-optional — nothing else in the pipeline performs it.
+Both live-template submissions and uploaded documents are ingested by
+`ingest_tb_to_live` deterministically (routes.py calls it directly for uploads) —
+there is no separate persist-after-build step to remember.
 
 ## Safety Floor
 
@@ -96,15 +96,14 @@ rather than answering from the closest tool anyway.
 Every tool below is registered in `backend/tools.py`'s `TOOL_REGISTRY` and tagged with
 the `domain` shown here (its former `backend/tools/<domain>/` directory). Only tools
 in a domain listed in `AGENT_TOOL_DOMAINS` (see `backend/config.py`, default
-`chat,db_bridge,input,grouping,canonical`) are advertised to the agent directly — the
+`chat,db_bridge,input,canonical`) are advertised to the agent directly — the
 rest are still fully callable, but `backend/routes.py` invokes them
-deterministically as part of the `/audit` chain rather than leaving their sequencing
-to the LLM. `?` marks an optional parameter.
+deterministically as part of the `/audit` chain (and, for ingestion, the `/upload-mapped`
+chain) rather than leaving their sequencing to the LLM. `?` marks an optional parameter.
 
 <!-- BEGIN GENERATED TOOL TABLE — regenerate from backend.tools.TOOL_REGISTRY, do not hand-edit -->
 | Domain | Tool | Params (`?`=optional) | Notes |
 |---|---|---|---|
-| canonical | `build_canonical_tb` | manifest_file, ground_truth_file, metadata_file?, output_dir?, llm_client?, tb_excel_path?, tb_doc_id?, company_details? | Constructs the Canonical Trial Balance by combining Parsed Trial Balance and grouping data. |
 | canonical | `build_data_sufficiency_grade` | layer1_results_file, canonical_tb_file?, comparative_data_present?, output_dir? | Grade Trial Balance data sufficiency (Low/Medium/High/Information request only) and list weakened/unavailable checks. |
 | canonical | `build_normalisation_note` | canonical_tb_file, layer1_results_file?, engagement_context_file?, grouping_statistics_file?, source_file_name?, output_dir? | Assemble the normalisation note the specification requires before any audit output. |
 | canonical | `validate_layer1_tb` | tb_excel_path?, tb_column_mapping?, canonical_tb_file?, output_dir?, expected_financial_year?, source_system?, extraction_date? | Executes the complete Layer 1 Trial Balance validation, sourced either from a raw Excel path or an existing canonical TB. |
@@ -125,10 +124,9 @@ to the LLM. `?` marks an optional parameter.
 | comparison | `run_comparison_structural` | py_canonical_tb, cy_canonical_tb, output_dir? | Compute PY vs CY ledger count delta and new/removed GL codes / FS groupings. |
 | comparison | `run_comparison_variance` | py_canonical_tb, cy_canonical_tb, materiality_file?, output_dir? | Compute PY vs CY closing-balance variance per GL code, flagged against materiality thresholds. |
 | db_bridge | `delete_db_document` | tb_doc_id | Delete a Trial Balance document and its GL lines from LIVE staging by tb_doc_id. |
-| db_bridge | `ingest_tb_to_live` | tb_grouping_template_path, output_dir?, standard? | Ingest a filled TB_GROUPING_TEMPLATE.xlsx submitted by the client team into LIVE staging. |
+| db_bridge | `ingest_tb_to_live` | tb_grouping_template_path, grouping_file_path?, output_dir?, standard?, accept_data_quality_risk?, custom_fields? | Single entry point for both live-template and uploaded TB(+Grouping) submissions into LIVE staging -- native auto-detecting parser + classification engine, one or two files, Scenario A/B/C/D auto-detected from content. |
 | db_bridge | `list_db_documents` | entity_id?, financial_year? | List Trial Balance documents already ingested into the MAIN database, optionally filtered. |
 | db_bridge | `load_tb_from_db` | tb_doc_id?, entity_id?, financial_year?, output_filename?, output_dir? | Load a Trial Balance from the MAIN database (document_table/tb_table) into a canonical file. |
-| db_bridge | `persist_canonical_tb_to_live` | canonical_tb_file, tb_metadata_file?, entity_id?, entity_name?, company_name?, cin?, fy_period_start?, fy_period_end?, financial_year?, tb_doc_id?, tb_doc_name?, output_dir? | Persist a canonical_tb.parquet from a processed upload into LIVE staging tables. |
 | entity | `build_engagement_context` | canonical_tb_file, engagement_context?, accounting_framework?, entity_name?, period_end?, currency?, scale?, consolidation_basis?, source_system?, caro_applicable?, government_company?, output_dir? | Record the engagement context, reporting framework, currency, scale, period, etc. |
 | entity | `build_entity_profile` | canonical_tb_file, output_dir? | Classifies the entity's business shape from the canonical TB itself. |
 | fsli | `build_audit_ratio_pack` | canonical_tb_file, fsli_summary_file?, materiality_file?, output_dir? | Compute the audit-analytical ratios — debtor, creditor and related turnover metrics. |
@@ -136,9 +134,7 @@ to the LLM. `?` marks an optional parameter.
 | fsli | `build_financial_snapshot` | canonical_tb_file, metadata_file?, output_dir? | Enrich the FSLI rollup tree with percent-of-parent/percent-of-main-head and materiality rank. |
 | fsli | `build_fsli_summary` | canonical_tb_file, metadata_file?, output_dir? | Aggregate canonical TB GL rows into a main_head/sub_head_1/sub_head_2 rollup tree. |
 | fsli | `build_mapping_quality` | canonical_tb_file, output_dir? | Flags near-duplicate main_head labels and other mapping-quality issues. |
-| grouping | `extract_grouping_mapping` | manifest_file, grouping_structure?, hierarchy_levels?, output_dir?, hierarchy_tree?, standard? | ERP-agnostic hierarchy extraction engine (flat and nested groupings). |
 | input | `preview_excel_data` | excel_path, is_grouping?, output_dir? | Reads the given Excel file to provide raw columns and sample structural headers to the Agent. |
-| input | `process_input_documents` | tb_excel_path, grouping_excel_path, tb_column_mapping?, output_dir?, tb_sheet_name?, grouping_sheet_name? | Ingests Trial Balance and Grouping input files (Excel/CSV), converts them into Parquet. |
 | materiality | `build_materiality` | canonical_tb_file, metadata_file?, output_dir? | Compute overall/performance/trivial materiality and material FSLI/GL populations. |
 | materiality | `build_materiality_lens` | materiality_file?, sensitive_accounts_file?, layer1_results_file?, audit_approved_materiality?, output_dir? | Layer materiality by nature and context over the computed quantitative thresholds. |
 | reasoning | `build_assertion_evidence_map` | consolidated_exceptions_file?, sensitive_accounts_file?, output_dir? | Map every consolidated exception to the assertions its account area exposes. |

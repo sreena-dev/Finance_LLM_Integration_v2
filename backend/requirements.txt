@@ -32,6 +32,17 @@ fastexcel>=0.12.0
 numpy>=1.26.0
 python-docx>=1.1.0
 
+# Trial Balance's multi-engine storage plane (Valkey/MinIO/DuckDB) and
+# password-protected-Excel detection. All degrade gracefully when unconfigured —
+# Valkey/MinIO helpers no-op if unreachable (TB_VALKEY_ENABLED/TB_MINIO_ENABLED
+# in .env.example), DuckDB and msoffcrypto-tool have no external service at all —
+# so a clean checkout keeps working with zero new infrastructure required.
+msoffcrypto-tool>=5.4.2
+redis>=5.2.1
+boto3>=1.43.64
+duckdb>=1.5.5
+fakeredis>=2.38.0
+
 # Financial Diagnostic Report pipeline (vendored fs_db + fdr)
 # fs_db is written against psycopg v3 and is vendored verbatim, so the driver is
 # added rather than the package forked. v3 installs under a different module

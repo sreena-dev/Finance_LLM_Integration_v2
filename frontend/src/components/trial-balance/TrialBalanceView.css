@@ -29,15 +29,15 @@
 }
 .tb__dismiss:hover { color: var(--navy-900); }
 
-/* ── Top row: chat mode tabs + quick actions, same line ──────────────────── */
+/* ── Top row: quick actions + query bar, same line ───────────────────────── */
 
 .tb__toprow {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px 20px 0;
+  gap: 12px;
+  padding: 12px 20px 16px;
   background: var(--surface);
 }
 
@@ -85,18 +85,6 @@
   line-height: 1.5;
 }
 
-.tb__assistant {
-  align-self: flex-start;
-  max-width: 76%;
-  padding: 10px 15px;
-  border-radius: 14px 14px 14px 3px;
-  background: var(--ink-50);
-  border: 1px solid var(--border);
-  color: var(--ink-700);
-  font-size: 13.5px;
-  line-height: 1.5;
-}
-
 .tb__note {
   margin: 0;
   font-size: 12.5px;
@@ -106,28 +94,6 @@
   border-radius: var(--radius-sm);
 }
 .tb__muted { margin: 0; font-size: 13px; color: var(--ink-500); }
-
-.tb__answer { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
-/* Which scope answered. Shown because a question about "revenue" means something
-   different against one trial balance than against the annual-report corpus, and
-   the answer text alone does not always make that obvious. */
-.tb__answer-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.tb__ai-mark { color: var(--blue-500); flex-shrink: 0; margin-right: 2px; vertical-align: -2px; }
-.tb__computed {
-  margin: 0;
-  padding: 10px 12px;
-  background: var(--ink-50);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
-  overflow-x: auto;
-  white-space: pre-wrap;
-  color: var(--ink-700);
-}
-.tb__answer .md { font-size: 13.5px; line-height: 1.7; }
-.tb__sources { display: flex; flex-wrap: wrap; gap: 5px; }
 
 .tb__loading { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-500); }
 .tb__loading-text { font-variant-numeric: tabular-nums; }
@@ -157,49 +123,62 @@
 .tb__idle p { margin: 0; font-size: 13px; max-width: 440px; line-height: 1.6; }
 .tb__idle-welcome { font-size: 15px; font-weight: 600; color: var(--ink-700); }
 
-/* ── Chat mode toggle ─────────────────────────────────────────────────── */
+/* ── Query-source toggle switch (top-left of the toprow, physical on/off,
+   not a tab) ─────────────────────────────────────────────────────────────── */
 
-.tb__chatmode {
+.tb__querytoggle {
   display: flex;
-  gap: 4px;
-  background: var(--surface);
-}
-.tb__chatmode-tab {
-  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-500);
-  background: var(--ink-50);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.16s var(--ease), color 0.16s var(--ease), border-color 0.16s var(--ease);
-}
-.tb__chatmode-tab:hover { color: var(--ink-800); }
-.tb__chatmode-tab.is-active {
-  background: var(--navy-50);
-  color: var(--navy-800);
-  border-color: var(--navy-600);
+  gap: 8px;
+  flex: none;
 }
 
-/* ── Composer ─────────────────────────────────────────────────────────── */
+.tb__toggle {
+  flex: none;
+  width: 40px;
+  height: 24px;
+  padding: 3px;
+  display: flex;
+  align-items: center;
+  background: var(--ink-200);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+.tb__toggle.is-on { background: var(--navy-600); border-color: var(--navy-600); }
+.tb__toggle-knob {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--white);
+  box-shadow: 0 1px 2px rgb(16 24 40 / 20%);
+  transition: transform 0.16s var(--ease);
+}
+.tb__toggle.is-on .tb__toggle-knob { transform: translateX(16px); }
+.tb__toggle-label {
+  flex: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-700);
+  margin-right: 2px;
+}
+
+/* ── Composer: its own row below the toprow ──────────────────────────────── */
 
 .tb__composer {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
+  gap: 10px;
   padding: 8px 20px 16px;
   border-top: 1px solid var(--border);
   background: var(--surface);
 }
-.tb__file { display: none; }
+
 .tb__attach {
   flex: none;
-  width: 36px;
-  height: 36px;
+  width: 42px;
+  height: 42px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -215,15 +194,15 @@
   border-color: var(--navy-600);
   color: var(--navy-800);
 }
-.tb__attach:disabled { opacity: 0.55; cursor: default; }
+.tb__attach:disabled { opacity: 0.4; cursor: default; }
 
 .tb__input {
   flex: 1;
-  min-height: 36px;
+  min-height: 42px;
   max-height: 140px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   font: inherit;
-  font-size: 13.5px;
+  font-size: 14.5px;
   line-height: 1.5;
   color: var(--ink-900);
   background: var(--white);
@@ -232,6 +211,8 @@
   resize: vertical;
 }
 .tb__input:focus { outline: none; border-color: var(--navy-600); }
+
+.tb__ask { flex: none; min-width: 0; padding: 10px 20px; }
 
 @media (max-width: 900px) {
   .tb__stream-inner { padding: 16px 16px 24px; }

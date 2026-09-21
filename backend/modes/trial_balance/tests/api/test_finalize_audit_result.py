@@ -7,6 +7,14 @@ for comparison runs)."""
 import json
 
 import polars as pl
+import pytest
+
+pytest.importorskip(
+    "yukta",
+    reason="yukta is installed from a local path and published to no index, so it is "
+           "absent on a clean checkout -- see requirements.txt. These tests import "
+           "backend.agent, which needs it.",
+)
 
 from modes.trial_balance.router import _finalize_audit_result
 
@@ -15,6 +23,49 @@ def _write_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f)
+
+
+# TB-R19: a genuinely HALTED layer1 rule (post validate_layer2_tb patch, most commonly
+# TB-012 -- the TB doesn't foot) must be surfaced on the API result itself, not just
+# logged -- the caller needs to be able to tell the report stands on a broken invariant.
+
+def test_finalize_audit_result_surfaces_halted_rule(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+
+    pl.DataFrame({"gl_code": ["1"], "closing_balance": [100.0]}).write_parquet(
+        run_dir / "canonical_tb.parquet"
+    )
+    _write_json(run_dir / "layer1_results.json", [
+        {"rule": "TB-009", "rule_name": "Total Dr = Total Cr", "status": "PASS", "message": "Balanced."},
+        {"rule": "TB-012", "rule_name": "Assets = Liabilities + Equity + Net P/L", "status": "HALTED",
+         "message": "Residual of 4,600.00 instead of netting to zero."},
+    ])
+
+    result = _finalize_audit_result("SINGLE_TB", run_dir)
+
+    assert result["tb_integrity_halted"] is True
+    assert result["tb_integrity_halted_rules"] == [
+        {"rule": "TB-012", "message": "Residual of 4,600.00 instead of netting to zero."}
+    ]
+
+
+def test_finalize_audit_result_no_halt_flag_when_all_rules_pass(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+
+    pl.DataFrame({"gl_code": ["1"], "closing_balance": [100.0]}).write_parquet(
+        run_dir / "canonical_tb.parquet"
+    )
+    _write_json(run_dir / "layer1_results.json", [
+        {"rule": "TB-009", "rule_name": "Total Dr = Total Cr", "status": "PASS", "message": "Balanced."},
+        {"rule": "TB-012", "rule_name": "Assets = Liabilities + Equity + Net P/L", "status": "PASS",
+         "message": "Nets to 0.00."},
+    ])
+
+    result = _finalize_audit_result("SINGLE_TB", run_dir)
+
+    assert "tb_integrity_halted" not in result
 
 
 def test_finalize_audit_result_parses_comparison_reasoning(tmp_path):

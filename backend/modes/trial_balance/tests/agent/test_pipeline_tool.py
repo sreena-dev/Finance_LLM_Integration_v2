@@ -136,3 +136,59 @@ class TestRegistrationHook:
 
         result = dummy_tool(output_dir=str(tmp_path))
         assert result["execution_status"] == "SUCCESS"
+
+
+class TestUnexpectedExceptionIsNotLeakedToCallers:
+    """The decorator's catch-all used to put traceback.format_exc() into both
+    response["message"] and response["errors"][0]["traceback"]. Every route returns
+    that dict verbatim to the API client, so absolute server paths, internal module
+    structure and source lines were shipped to whoever called the endpoint. The trace
+    now goes to the log only, correlated by error_id."""
+
+    def _failing_tool(self):
+        @pipeline_tool("dummy_tool_that_raises")
+        def dummy_tool(output_dir=None):
+            secret_local = "SERVER-ONLY-DETAIL"  # noqa: F841 -- must not reach the client
+            raise ValueError("boom with internals")
+
+        return dummy_tool
+
+    def test_response_carries_no_traceback_and_no_source_paths(self, tmp_path):
+        result = self._failing_tool()(output_dir=str(tmp_path))
+        blob = json.dumps(result)
+
+        assert result["execution_status"] == "FAILED"
+        assert "traceback" not in result["errors"][0]
+        assert "Traceback (most recent call last)" not in blob
+        assert "boom with internals" not in blob
+        assert "SERVER-ONLY-DETAIL" not in blob
+        assert "pipeline_tool.py" not in blob
+        assert "test_pipeline_tool.py" not in blob
+
+    def test_response_still_identifies_the_failure_usefully(self, tmp_path):
+        result = self._failing_tool()(output_dir=str(tmp_path))
+
+        # The caller must still learn WHICH tool failed and WHAT class of error it was,
+        # plus a handle to give an operator -- just not the trace itself.
+        assert "dummy_tool_that_raises" in result["message"]
+        assert "ValueError" in result["message"]
+        assert result["errors"][0]["type"] == "ValueError"
+
+        error_id = result["errors"][0]["error_id"]
+        assert len(error_id) == 12
+        assert error_id in result["message"]
+
+    def test_error_id_is_unique_per_failure(self, tmp_path):
+        tool = self._failing_tool()
+        first = tool(output_dir=str(tmp_path))["errors"][0]["error_id"]
+        second = tool(output_dir=str(tmp_path))["errors"][0]["error_id"]
+        assert first != second
+
+    def test_full_traceback_is_written_to_the_server_log(self, tmp_path, caplog):
+        with caplog.at_level("ERROR", logger="modes.trial_balance.pipeline.tools.pipeline_tool"):
+            result = self._failing_tool()(output_dir=str(tmp_path))
+
+        error_id = result["errors"][0]["error_id"]
+        assert error_id in caplog.text
+        assert "Traceback (most recent call last)" in caplog.text
+        assert "boom with internals" in caplog.text

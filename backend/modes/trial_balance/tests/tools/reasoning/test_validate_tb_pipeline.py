@@ -6,26 +6,25 @@ existence fallback rather than fixed at the source; (2) the financial
 integrity check previously read a "metric"/"balance" keyed structure from
 financial_snapshot.json that tool never actually writes, so fin_status was
 always "UNKNOWN" -- now reads financial_snapshot_statistics.json's real
-total_assets/total_liabilities/total_equity keys instead; (3) unconditionally
-requiring processing_manifest.json/grouping_ground_truth.parquet (upload-path
--only artifacts) made every DB-sourced (load_tb_from_db) SINGLE_TB run fail
-pipeline integrity by construction -- now only required when mapping_summary.
-json/processing_manifest.json indicate this was actually an upload run;
-(4) the financial-integrity check compared only Assets vs Liabilities+Equity,
+total_assets/total_liabilities/total_equity keys instead; (3) the
+financial-integrity check compared only Assets vs Liabilities+Equity,
 which fails on almost every real (unclosed/interim) trial balance since
 current-period P&L hasn't been rolled into retained earnings yet -- now nets
 Revenue+Expenses into the comparison, matching the whole-TB signed-sum
-identity that holds whether or not the books have been closed."""
+identity that holds whether or not the books have been closed.
+
+processing_manifest.json/grouping_ground_truth.parquet (the old upload-path-
+only artifacts, from the now-retired process_input_documents/
+extract_grouping_mapping/build_canonical_tb chain) are no longer produced by
+anything -- ingest_tb_to_live is the single ingestion entry point for both
+live and uploaded documents now, so there is no upload-vs-DB-sourced
+distinction left to test here."""
 
 import json
-
-import pytest
 
 from modes.trial_balance.pipeline.tools import validate_tb_pipeline
 
 _EXPECTED_FILES = [
-    "processing_manifest.json",
-    "grouping_ground_truth.parquet",
     "canonical_tb.parquet",
     "layer1_results.json",
     "financial_snapshot.json",
@@ -49,23 +48,11 @@ def _touch_all_expected_files(out_dir):
                 json.dump({}, fh)
 
 
-_DB_SOURCED_EXPECTED_FILES = [f for f in _EXPECTED_FILES if f not in ("processing_manifest.json", "grouping_ground_truth.parquet")]
-
-
-def test_db_sourced_run_not_blocked_by_missing_upload_only_files(tmp_path):
-    """A canonical TB from load_tb_from_db never produces processing_manifest.json or
-    grouping_ground_truth.parquet -- their absence must not fail pipeline integrity."""
-    for f in _DB_SOURCED_EXPECTED_FILES:
-        p = tmp_path / f
-        if f.endswith(".parquet"):
-            import polars as pl
-
-            pl.DataFrame({"x": [1]}).write_parquet(p)
-        else:
-            with open(p, "w") as fh:
-                json.dump({}, fh)
+def test_a_complete_run_passes_pipeline_integrity(tmp_path):
+    _touch_all_expected_files(tmp_path)
 
     result = validate_tb_pipeline(output_dir=str(tmp_path))
+    assert result["execution_status"] == "SUCCESS", result.get("message")
 
     with open(tmp_path / "validation_report.json") as f:
         report = json.load(f)
@@ -73,34 +60,10 @@ def test_db_sourced_run_not_blocked_by_missing_upload_only_files(tmp_path):
     assert report["pipeline_integrity"]["overall_status"] == "PASS"
 
 
-def test_upload_sourced_run_still_requires_manifest_and_ground_truth(tmp_path):
-    """When mapping_summary.json is present (an upload run happened), a genuinely
-    missing processing_manifest.json must still be flagged, not silently skipped."""
-    for f in _DB_SOURCED_EXPECTED_FILES:
-        p = tmp_path / f
-        if f.endswith(".parquet"):
-            import polars as pl
-
-            pl.DataFrame({"x": [1]}).write_parquet(p)
-        else:
-            with open(p, "w") as fh:
-                json.dump({}, fh)
-    with open(tmp_path / "mapping_summary.json", "w") as f:
-        json.dump({}, f)
-    # processing_manifest.json / grouping_ground_truth.parquet deliberately NOT created.
-
-    result = validate_tb_pipeline(output_dir=str(tmp_path))
-
-    with open(tmp_path / "validation_report.json") as f:
-        report = json.load(f)
-    assert "processing_manifest.json" in report["pipeline_integrity"]["missing_outputs"]
-    assert "grouping_ground_truth.parquet" in report["pipeline_integrity"]["missing_outputs"]
-    assert report["pipeline_integrity"]["overall_status"] == "FAILED"
-
-
 def test_expected_files_accepts_relationship_analytics_filename(tmp_path):
     _touch_all_expected_files(tmp_path)
     result = validate_tb_pipeline(output_dir=str(tmp_path))
+    assert result["execution_status"] == "SUCCESS", result.get("message")
 
     with open(tmp_path / "validation_report.json") as f:
         report = json.load(f)
@@ -118,11 +81,13 @@ def test_missing_relationship_analytics_is_flagged(tmp_path):
 
 
 def test_financial_integrity_passes_on_balanced_statistics(tmp_path):
-    """Debit-positive convention: assets positive, liabilities/equity negative --
-    matches classify_row's actual sign output, not an arbitrary all-positive fixture."""
+    """Debit-positive convention: assets positive, liabilities negative. total_equity is
+    the ONE exception (TB-R17): build_financial_snapshot negates it to a positive,
+    real-world value before writing it here, so this identity check subtracts it back to
+    its original negative contribution -- see reasoning.py's effective_liab_eq comment."""
     _touch_all_expected_files(tmp_path)
     with open(tmp_path / "financial_snapshot_statistics.json", "w") as f:
-        json.dump({"total_assets": 100000.0, "total_liabilities": -60000.0, "total_equity": -40000.0}, f)
+        json.dump({"total_assets": 100000.0, "total_liabilities": -60000.0, "total_equity": 40000.0}, f)
 
     validate_tb_pipeline(output_dir=str(tmp_path))
 
@@ -145,17 +110,19 @@ def test_financial_integrity_fails_on_unbalanced_statistics(tmp_path):
 
 def test_unclosed_period_pl_nets_into_equity_and_still_passes(tmp_path):
     """A real, un-closed trial balance where current-period profit hasn't been rolled into
-    retained earnings yet: Assets=100, Liabilities=-30, Equity=-20 (short by 50) is only
+    retained earnings yet: Assets=100, Liabilities=-30, Equity=-20 raw (short by 50) is only
     "unbalanced" if Revenue/Expenses are ignored. With Revenue=-80, Expenses=30 (net period
     profit of 50, credit-signed), the full Assets+Liabilities+Equity+Revenue+Expenses
     identity sums to exactly zero -- this must PASS, not FAILED, on a genuinely balanced
-    but unclosed TB."""
+    but unclosed TB. total_equity is given here as +20.0 (TB-R17's positive, real-world
+    value -- see effective_liab_eq's comment), the positive equivalent of the -20.0 raw
+    contribution this identity actually needs."""
     _touch_all_expected_files(tmp_path)
     with open(tmp_path / "financial_snapshot_statistics.json", "w") as f:
         json.dump({
             "total_assets": 100.0,
             "total_liabilities": -30.0,
-            "total_equity": -20.0,
+            "total_equity": 20.0,
             "total_revenue": -80.0,
             "total_expenses": 30.0,
         }, f)
@@ -176,7 +143,7 @@ def test_genuine_imbalance_still_fails_even_with_pl_netted(tmp_path):
         json.dump({
             "total_assets": 100.0,
             "total_liabilities": -30.0,
-            "total_equity": -20.0,
+            "total_equity": 20.0,
             "total_revenue": -10.0,
             "total_expenses": 0.0,
         }, f)

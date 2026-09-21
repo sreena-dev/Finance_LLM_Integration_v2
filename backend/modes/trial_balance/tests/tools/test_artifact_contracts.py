@@ -23,8 +23,7 @@ import json
 import polars as pl
 import pytest
 
-from modes.trial_balance.pipeline.tools import build_relationship_analytics
-from modes.trial_balance.pipeline.tools import build_risk_indicators
+from modes.trial_balance.pipeline.tools import build_relationship_analytics, build_risk_indicators
 
 
 def _get_path(data: dict, dotted: str):
@@ -208,6 +207,8 @@ class TestKnowledgePacksLoad:
         assert len(K.credit_anchors()) == 21
         assert K.normal_debit_heads() == frozenset({"assets", "expenses"})
         assert K.normal_credit_heads() == frozenset({"liabilities", "equity", "revenue"})
-        assert len(K.sensitive_rules()) == 13
+        # Wave 3 Fix 1: +2 categories ("claims", "withheld_recoverable") added to
+        # sensitive_tags.json for build_contract_exposure_lens -- was 13.
+        assert len(K.sensitive_rules()) == 15
         assert K.risk_rule_weights()["SUSPENSE_CLEARING"] == 20
         assert K.mapping_confidence_thresholds() == (80.0, 50.0)

@@ -39,9 +39,14 @@ const emptyTBState = () => ({
   priorId: null,
   messages: [],
   pdfIds: [],
-  // 'db' = free-form questions answered by intent from already-ingested data,
-  // no file needed. 'upload' = questions scoped to a file uploaded this session.
-  chatQueryMode: 'db',
+  // Analysis/Chat toggle -- a physical on/off switch in the toprow. 'analysis'
+  // (OFF, default): Single TB Analysis / Two TB Comparative Analysis are the
+  // active entry points, composer hidden. 'chat' (ON): those two grey out
+  // instead, and the composer (Upload button + text input + Ask) appears --
+  // for the not-yet-built chat query feature. The Upload button's picker
+  // stages a TB for that future feature (session-only, no LIVE write); text
+  // input/Ask stay disabled until the query-answering backend exists.
+  viewMode: 'analysis',
 });
 
 function ModeHeader({ mode, health }) {
