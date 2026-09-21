@@ -272,6 +272,10 @@ async def upload_health():
     return {
         "available": ingest_available and store_available and persist_available,
         "reason": ingest_reason or store_reason or persist_reason,
+        # How long an upload is kept, so the UI states the real retention
+        # ("kept until <date>") instead of hard-coding a number that drifts from
+        # the server's ARTHA_FS_UPLOAD_RETENTION_DAYS.
+        "retention_days": upload_store.RETENTION_DAYS,
     }
 
 

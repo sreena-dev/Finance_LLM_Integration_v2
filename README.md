@@ -258,7 +258,7 @@ both generation endpoints reachable), by exercising the real HTTP surface with
 | `GET /api/modes` without a token | 401 |
 | `POST /api/auth/{signup,login}`, `GET /api/auth/me` | pass; wrong password → 401 |
 | `GET /api/auth/health` | `available: true`, tables `artha_users`, `artha_fs_messages` |
-| Frontend `npm run build` | pass — 690 modules, 530 kB JS |
+| Frontend `npm run build` | pass |
 
 ### Modes
 
@@ -671,3 +671,70 @@ open: a rebuilt table depends on OCR reading its figures, so a page OCR cannot
 read stays a withheld or missing figure; and the 2023-24 balance sheet's
 "Property, Plant and Equipment" row is found but its cells are empty -- a
 different defect, not covered here.
+
+### Financial year detection and long documents
+
+A 120-page filing for FY 2024-25 was being labelled FY 2017-18, and 43 pages
+failed with "document timeout exceeded". Two separate causes, both in `ingestion/`:
+
+- **Year detection** (`identify.py`) now weights only years that appear in
+  statement or account headings ("for the year ended 31 March 2025", "as at ...")
+  and no longer counts years in notes, dates of events or comparative tables.
+  The result is an ordinary detection with a confidence, not a guess: an unclear
+  document is reported as such.
+- **Timeout** (`convert.py`, `config.py`): `INGEST_DOCUMENT_TIMEOUT` defaults to
+  1800 s. Pages that still do not convert are counted, and the quality report
+  says "N pages were not converted" once, instead of one error per page.
+
+Tests: `ingestion/tests/test_identify.py`, `test_convert.py`.
+
+---
+
+## Frontend redesign
+
+The UI follows the "Artha.AI Frontend Design" boards: a paper-toned light theme
+(navy and muted gold), Source Serif 4 headings, Noto Sans body and IBM Plex Mono
+figures. Fonts are self-hosted through `@fontsource` (run `npm install`), so
+nothing is fetched from a CDN on an air-gapped host. Tokens live in
+`frontend/src/styles/index.css`; old token names remain as aliases.
+
+**Figures are never reformatted.** An extracted cell is shown exactly as the
+filing printed it. Four states, each with a text label and not colour alone:
+plain, *unreadable* (red), *recovered* (amber, `[recovered N; ...]`) and
+*user-entered* (gold). Indian digit grouping is applied only to values a user
+types or that are computed. `lib/figures.js` parses the markers, and
+`components/common/FigureCell.jsx` renders them.
+
+Financial Statements:
+
+- **Sidebar and shell:** collapses to a 64 px rail while the document pane is
+  open; the pane docks at 42 % and becomes an overlay below 900 px. An offline
+  banner appears when the browser loses its connection, and a failed question
+  keeps the draft with a "Try again" button.
+- **Answers:** tagged blocks (FINDING, RISK FLAG, AUDIT POINTER, COVERAGE NOTE),
+  a "read as" line, an "answered against N documents" strip, and a collapsed
+  **How this was checked** section holding confidence (and why it was lowered),
+  tools used and the unsourced warning. The backend adds a `checks` field to the
+  answer (`modes/financial_statement/adapter.py::_extract_checks`, read from the
+  rendered answer; the vendored pipeline is unchanged).
+- **Uploads:** a compact wait bar with an expandable panel (`LedgerLoop`, eight
+  stages driven by real progress events, live timer, reduced-motion safe); document
+  chips with counters; a quality drawer whose **Enter** and **Review** buttons open
+  the exact cell in the pane; retention shown as "kept until <date>", computed from
+  `retention_days` returned by `/upload/health`.
+- **Sign-in:** two-pane layout. There is no "Forgot password" link because the
+  backend has no reset flow.
+- **Brand marks:** the State Emblem and CAG logo are legally restricted, so
+  `frontend/src/config/brand.js` holds two empty, default-off slots. The footer
+  states "Independent audit-assistance tool. Not an official government service."
+
+Other modes are re-themed through the shared tokens. Trial Balance results lead
+with severity tiles and an "Arithmetic checks passed / halted" badge (shown only
+when the validation engine reported it); the Statutory Auditor's Report and
+Financial Diagnostic Report take the serif headings and navy top edges.
+The Diagnostic Report's Report tab is still a stub.
+
+**Not done / not verified:** the unit line above tables ("Amount in ₹ lakh") and a
+corpus filing count have no reliable backend source and are omitted. The redesign
+was verified with the render tests and a browser walk-through against mocked API
+responses; a run against the real backend and ingestion stack is still to do.

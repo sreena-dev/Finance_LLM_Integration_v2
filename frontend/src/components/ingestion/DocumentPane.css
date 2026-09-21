@@ -1,80 +1,82 @@
-/* Fixed width, not resizable, for this pass — see the plan's note that
-   drag-resize is a reasonable follow-up rather than part of it. */
+/* Docked at 42% beside the chat; slides in 24px. Under 900px it is a full-width
+   overlay (see the media query at the foot). */
 .docpane {
-  flex: 0 0 42%;
-  max-width: 560px;
-  min-width: 320px;
+  flex: 0 0 var(--pane-w);
+  max-width: 640px;
+  min-width: 340px;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-left: 1px solid var(--border);
-  background: var(--surface);
+  border-left: 1px solid var(--line);
+  background: var(--paper);
+  animation: docpane-in 0.26s var(--ease-slide);
 }
+@keyframes docpane-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 .docpane__head {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 10px;
   padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
-  color: var(--ink-800);
+  border-top: 3px solid var(--navy-700);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
 }
-
+.docpane__headtop { display: flex; align-items: flex-start; gap: 8px; }
+.docpane__headtop > svg { margin-top: 3px; color: var(--navy-600); }
+.docpane__titles { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .docpane__title {
-  flex: 1;
-  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
 }
+.docpane__sub { font-size: 12px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docpane__headrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.docpane__pills { display: flex; flex-wrap: wrap; gap: 6px; }
 
 .docpane__toggle {
   display: flex;
   gap: 2px;
   padding: 2px;
-  border-radius: var(--radius-sm);
-  background: var(--ink-100);
+  border-radius: var(--radius);
+  background: var(--paper-2);
+  border: 1px solid var(--line);
 }
-
 .docpane__toggle button {
+  min-height: 30px;
   border: 0;
   background: none;
-  padding: 3px 10px;
-  font-size: 11.5px;
+  padding: 3px 14px;
+  font-size: 12.5px;
   font-weight: 600;
-  color: var(--ink-500);
-  border-radius: calc(var(--radius-sm) - 2px);
+  color: var(--ink-3);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
-
-.docpane__toggle button.is-active {
-  background: var(--surface);
-  color: var(--ink-900);
-  box-shadow: var(--shadow-sm);
-}
+.docpane__toggle button.is-active { background: var(--navy-700); color: #fff; }
 
 .docpane__close {
   border: 0;
   background: none;
-  color: var(--ink-500);
-  font-size: 22px;
+  color: var(--ink-3);
+  font-size: 24px;
   line-height: 1;
   cursor: pointer;
-  padding: 0 4px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
 }
+.docpane__close:hover { color: var(--ink); background: var(--line); }
 
-.docpane__close:hover { color: var(--ink-900); }
-
-/* Same reasoning as CitationViewer's .cite__body: the page is the whole
-   point, so it scrolls at full size rather than being shrunk to fit. */
+/* The page is the whole point, so it scrolls at full size rather than being
+   shrunk to fit. */
 .docpane__body {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 12px;
-  background: var(--ink-100);
+  padding: 14px;
+  background: var(--paper-2);
 }
 
 .docpane__img {
@@ -83,193 +85,214 @@
   height: auto;
   margin: 0 auto;
   border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
   background: var(--white);
 }
 
 .docpane__text {
   background: var(--white);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
   padding: 14px 16px;
 }
+.docpane__text .md__table-wrap { margin-top: 8px; }
 
 .docpane__chunk {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--ink-800);
+  font-family: var(--font-serif);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink);
   margin: 0 0 10px;
 }
-
-.docpane__chunk--heading {
-  font-weight: 700;
-  color: var(--ink-900);
-}
+.docpane__chunk--heading { font-weight: 700; color: var(--navy-700); font-size: 15.5px; }
 
 .docpane__loading,
 .docpane__error,
 .docpane__empty {
   margin: 24px 0;
   font-size: 12.5px;
-  color: var(--ink-500);
+  color: var(--ink-3);
   text-align: center;
 }
-
 .docpane__error { color: var(--err-600); }
+
+.docpane__note {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--navy-100);
+  color: var(--navy-800);
+  font-size: 13px;
+}
+.docpane__note svg { flex: none; margin-top: 2px; }
+.docpane__link { border: 0; background: none; padding: 0; color: var(--navy-600); font: inherit; text-decoration: underline; cursor: pointer; }
 
 .docpane__nav {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 14px;
+  justify-content: space-between;
+  gap: 10px;
   padding: 10px 14px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
+  background: var(--paper);
 }
-
-.docpane__nav button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  background: none;
-  color: var(--ink-700);
-  cursor: pointer;
-  padding: 4px;
-}
-
-.docpane__nav button:disabled {
-  color: var(--ink-300);
-  cursor: default;
-}
-
-.docpane__nav-label {
-  font-size: 11.5px;
-  color: var(--ink-500);
-  min-width: 120px;
-  text-align: center;
-}
-
-/* `chevron` is a downward-pointing arrow — rotated here into prev/next. */
+.docpane__nav-label { display: flex; flex-direction: column; align-items: center; font-size: 12.5px; text-align: center; }
+.docpane__nav-label small { color: var(--ink-3); font-size: 11.5px; }
+.docpane__nav .btn { gap: 4px; }
+/* `chevron` is a downward-pointing arrow: rotated into prev/next. */
 .docpane__nav-prev { transform: rotate(90deg); }
 .docpane__nav-next { transform: rotate(-90deg); }
 
 /* ── Editable cells ──────────────────────────────────────────────────────
-   A flagged cell is a real, focusable button, tinted by state -- colour is
-   never the only signal, since the state name is also in its ARIA label and
-   its editor. Layout otherwise matches `.md td` exactly, so a table mixing
-   flagged and clean cells reads as one table, not two different ones. */
+   A flagged cell is a real, focusable button, tinted by state. Colour is never
+   the only signal: the text label ("unreadable", "recovered ?", "you") is in
+   the button itself, and in its ARIA label. Colours come from the shared
+   `.fig--*` classes in styles/index.css. */
 .docpane__cellbtn {
-  display: block;
-  width: 100%;
-  text-align: inherit;
-  font: inherit;
-  font-variant-numeric: tabular-nums;
-  padding: 3px 6px;
-  margin: -3px -6px;
-  border: 1px dashed transparent;
-  border-radius: 4px;
   cursor: pointer;
-  background: none;
+  min-height: 28px;
+  font: inherit;
+  font-family: var(--font-mono);
+  transition: box-shadow 0.18s var(--ease);
 }
-.docpane__cellbtn:hover,
-.docpane__cellbtn:focus-visible { border-color: currentColor; }
-.docpane__cellbtn:focus-visible { outline: 2px solid var(--navy-600); outline-offset: 1px; }
+.docpane__cellbtn:hover { border-color: currentColor; }
+.docpane__cellbtn:focus-visible { outline: 2px solid var(--navy-600); outline-offset: 2px; }
+@media (pointer: coarse) { .docpane__cellbtn { min-height: 44px; } }
 
-.docpane__cellbtn--unreadable { background: var(--err-100); color: var(--err-600); }
-.docpane__cellbtn--recovered { background: var(--warn-100); color: var(--warn-600); }
-.docpane__cellbtn--user_entered { background: var(--gold-100); color: var(--gold-700); }
+/* Saved: a gentle gold ring for 900ms. Reduced motion: the gold badge only. */
+.docpane__cellbtn.is-saved { animation: docpane-ring 0.9s ease-out; }
+@keyframes docpane-ring {
+  0% { box-shadow: 0 0 0 0 rgba(184, 137, 43, 0.55); }
+  100% { box-shadow: 0 0 0 10px rgba(184, 137, 43, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .docpane__cellbtn.is-saved { animation: none; } }
 
+/* Inline editor: gold cap; rises 180ms under the row. */
 .docpane__editor {
-  margin-top: 10px;
+  margin-top: 12px;
   background: var(--white);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  border: 1px solid var(--line-2);
+  border-top: 3px solid var(--gold-600);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
   padding: 12px 14px;
+  animation: docpane-editor 0.18s ease-out;
 }
+@keyframes docpane-editor { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
 .docpane__editor:focus { outline: none; }
 
-.docpane__editor-head {
+.docpane__editor-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+.docpane__editor-head strong { display: block; font-size: 13.5px; color: var(--ink); }
+.docpane__editor-col { font-size: 12px; color: var(--ink-3); }
+.docpane__editor-close { border: 0; background: none; color: var(--ink-3); font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; }
+
+.docpane__editor-hint { margin: 0 0 10px; font-size: 12.5px; color: var(--ink-2); }
+.docpane__editor-hint.is-warn { padding: 8px 10px; border-radius: var(--radius); background: var(--warn-100); color: var(--warn-600); border: 1px solid #f0dcae; }
+.docpane__editor-orig { font-size: 12px; color: var(--ink-3); margin-left: 4px; }
+
+.docpane__editor-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--ink-2); margin-bottom: 10px; }
+.docpane__editor-field small { font-weight: 400; color: var(--ink-3); }
+.docpane__editor-input {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
-}
-.docpane__editor-head strong { font-size: 13px; color: var(--ink-900); }
-.docpane__editor-col { flex: 1; font-size: 11.5px; color: var(--ink-500); }
-.docpane__editor-close {
-  border: 0; background: none; color: var(--ink-500); font-size: 18px;
-  line-height: 1; cursor: pointer; padding: 0 2px;
-}
-
-.docpane__editor-hint {
-  font-size: 12px;
-  color: var(--ink-600);
-  margin: 0 0 8px;
-}
-.docpane__editor-warn, .docpane__editor-ok {
-  font-size: 12px;
+  min-height: var(--target);
+  padding: 0 10px;
+  border: 1px solid var(--line-2);
   border-radius: var(--radius-sm);
-  padding: 6px 9px;
-  margin: 0 0 8px;
+  background: #fff;
+  color: var(--ink-3);
 }
-.docpane__editor-warn { background: var(--warn-100); color: var(--warn-600); }
-.docpane__editor-ok { background: var(--ok-100); color: var(--ok-600); }
+.docpane__editor-input:focus-within { border-color: var(--navy-600); box-shadow: 0 0 0 2px var(--navy-100); }
+.docpane__editor-input input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  text-align: right;
+  font: 500 15px var(--font-mono);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
 
-.docpane__editor-field {
+.docpane__editor-ok, .docpane__editor-warn {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 11.5px;
-  color: var(--ink-600);
-  margin-bottom: 10px;
-}
-.docpane__editor-field input {
-  font: inherit;
-  font-size: 14px;
-  padding: 7px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  color: var(--ink-900);
-}
-.docpane__editor-field input:focus { outline: 2px solid var(--navy-600); outline-offset: -1px; }
-
-.docpane__editor-error {
-  font-size: 12px;
-  color: var(--err-600);
-  background: var(--err-100);
-  border-radius: var(--radius-sm);
-  padding: 6px 9px;
+  gap: 8px;
+  align-items: flex-start;
   margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  font-size: 12.5px;
 }
+.docpane__editor-ok { background: var(--ok-100); color: var(--ok-600); border: 1px solid #c5e6d3; }
+.docpane__editor-warn { background: var(--warn-100); color: var(--warn-600); border: 1px solid #f0dcae; }
+.docpane__editor-ok svg, .docpane__editor-warn svg { flex: none; margin-top: 2px; }
 
-.docpane__editor-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+/* Refusals: inline, plain language, never discarding what was typed. */
+.docpane__editor-error {
+  margin: 0 0 10px;
+  padding: 9px 11px;
+  border-radius: var(--radius);
+  background: var(--err-100);
+  border: 1px solid #f3cdc9;
+  color: var(--err-600);
+  font-size: 12.5px;
 }
-.docpane__editor-actions button {
-  font-size: 12px;
+.docpane__editor-error p { margin: 0 0 6px; }
+.docpane__editor-error p:last-child { margin: 0; }
+
+.docpane__editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.docpane__editor-ghost {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  border: 0;
+  background: none;
+  font-size: 12.5px;
   font-weight: 600;
-  padding: 6px 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
-  background: var(--navy-700);
-  color: var(--white);
+  color: var(--ink-2);
   cursor: pointer;
 }
-.docpane__editor-actions button:disabled { opacity: 0.5; cursor: default; }
-.docpane__editor-actions button.docpane__editor-danger { background: var(--err-600); }
-.docpane__editor-actions button.docpane__editor-ghost {
-  background: none;
-  color: var(--ink-600);
-}
+.docpane__editor-ghost:hover { color: var(--navy-700); }
 
 .docpane__editor-scan {
   margin-top: 10px;
   max-height: 320px;
   overflow: auto;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   padding-top: 10px;
 }
 .docpane__editor-scan .docpane__loading { margin: 8px 0; }
+
+/* Narrow widths: a full-width overlay, and the editor becomes a bottom sheet
+   with the scan crop above the input so there is no tab switching. */
+@media (max-width: 900px) {
+  .docpane {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    max-width: none;
+    min-width: 0;
+    width: 100%;
+  }
+  .docpane__editor {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 55;
+    margin: 0;
+    max-height: 80vh;
+    overflow: auto;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    box-shadow: var(--shadow-lg);
+    display: flex;
+    flex-direction: column;
+  }
+  .docpane__editor-scan { order: -1; margin: 0 0 10px; border-top: 0; padding-top: 0; }
+}

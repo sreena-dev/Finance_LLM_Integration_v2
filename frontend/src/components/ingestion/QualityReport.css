@@ -1,183 +1,93 @@
-.qr {
+/* Quality drawer: slides over the chat with a soft scrim. */
+.qd { position: fixed; inset: 0; z-index: 60; display: flex; justify-content: flex-end; }
+.qd__scrim { position: absolute; inset: 0; background: rgba(27, 35, 51, 0.32); }
+.qd__drawer {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px;
+  width: min(560px, 100%);
+  height: 100%;
+  background: var(--paper);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
 }
 
-.qr__head {
+.qd__head {
   display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--line);
+  border-top: 3px solid var(--navy-700);
+}
+.qd__eyebrow { margin: 0 0 2px; font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--gold-700); }
+.qd__file { margin: 0; font-size: 19px; line-height: 1.25; word-break: break-word; }
+.qd__meta { margin: 4px 0 0; font-size: 12.5px; color: var(--ink-3); }
+.qd__close { flex: none; align-self: flex-start; width: var(--target); height: var(--target); border: 0; background: none; font-size: 24px; line-height: 1; color: var(--ink-3); cursor: pointer; border-radius: var(--radius); }
+.qd__close:hover { background: var(--line); }
+
+.qd__body { flex: 1; min-height: 0; overflow: auto; padding: 16px 22px 24px; display: flex; flex-direction: column; gap: 18px; }
+
+.qd__grade {
+  display: flex;
+  gap: 14px;
   align-items: center;
-  gap: 8px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--surface);
 }
-
-.qr__icon { color: var(--navy-600); flex: none; }
-
-.qr__file {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink-900);
-}
-
-.qr__del {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--ink-400);
-  cursor: pointer;
-  transition: color 0.15s var(--ease), background 0.15s var(--ease);
-}
-
-.qr__del:hover { color: var(--err-600); background: var(--err-100); }
-
-.qr__grid {
+.qd__grade.is-ok { background: var(--ok-100); border-color: #c5e6d3; }
+.qd__grade.is-warn { background: var(--warn-100); border-color: #f0dcae; }
+.qd__grade.is-err { background: var(--err-100); border-color: #f3cdc9; }
+.qd__badge {
   display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 3px 12px;
-  margin: 0;
-  font-size: 12.5px;
+  place-items: center;
+  flex: none;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: 3px solid currentColor;
+  font: 700 14px var(--font-serif);
+  background: #fff;
 }
+.qd__grade.is-ok .qd__badge { color: var(--ok-600); }
+.qd__grade.is-warn .qd__badge { color: var(--warn-600); }
+.qd__grade.is-err .qd__badge { color: var(--err-600); }
+.qd__lead { margin: 0 0 3px; font-weight: 700; color: var(--ink); }
+.qd__sub { margin: 0; font-size: 12.5px; color: var(--ink-2); }
 
-.qr__row { display: contents; }
-.qr__key { color: var(--ink-500); }
-.qr__val { margin: 0; color: var(--ink-800); }
-.qr__note { color: var(--ink-500); font-size: 11.5px; }
+.qd__section .section-label { margin-bottom: 8px; }
 
-.qr__stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
+.qd__table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; }
+.qd__table th { padding: 7px 10px; text-align: left; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); border-bottom: 2px solid var(--navy-700); background: var(--paper-2); }
+.qd__table td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.qd__table tr:last-child td { border-bottom: 0; }
+.qd__col { display: block; font-size: 11.5px; color: var(--ink-3); }
+.qd__act { text-align: right; white-space: nowrap; }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
-.qr__stat {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: var(--ink-50);
-  border: 1px solid var(--border);
-  font-size: 11.5px;
-  color: var(--ink-600);
-}
+.qd__rec { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 9px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 6px; }
+.qd__recmain { flex: 1; min-width: 180px; font-size: 13px; }
 
-.qr__stat.is-ok { background: var(--ok-100); border-color: transparent; color: var(--ok-600); }
-.qr__stat.is-bad { background: var(--warn-100); border-color: transparent; color: var(--warn-600); }
-.qr__stat strong { font-variant-numeric: tabular-nums; }
+.qd__warn { display: flex; gap: 9px; margin: 0 0 6px; padding: 10px 12px; font-size: 13px; background: var(--warn-100); border: 1px solid #f0dcae; color: var(--warn-600); border-radius: var(--radius); }
+.qd__warn svg { flex: none; margin-top: 2px; }
 
-.qr__toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  align-self: flex-start;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--navy-600);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
+.qd__cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.qd__box { padding: 10px 12px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); font-size: 13px; }
+.qd__box ul { margin: 0; padding-left: 18px; }
+.qd__boxh { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-weight: 700; }
+.qd__box--ok .qd__boxh { color: var(--ok-600); }
+.qd__box--no .qd__boxh { color: var(--err-600); }
+.qd__none { margin: 0; color: var(--ink-3); }
+.qd__periods { display: flex; flex-wrap: wrap; gap: 6px; }
+.qd__hint { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-3); }
+.qd__notes { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); }
+.qd__notes li { margin: 3px 0; }
 
-.qr__toggle svg { transition: transform 0.2s var(--ease); }
-.qr__toggle svg.is-open { transform: rotate(180deg); }
+.qd__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 22px; border-top: 1px solid var(--line); background: var(--paper-2); font-size: 12px; color: var(--ink-3); }
 
-.qr__detail {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-top: 4px;
-  border-top: 1px solid var(--border);
-}
-
-.qr__h {
-  margin: 6px 0 0;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--ink-800);
-}
-
-.qr__lead {
-  margin: 0;
-  font-size: 11.5px;
-  color: var(--ink-500);
-}
-
-.qr__list {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 12px;
-  color: var(--ink-700);
-}
-
-.qr__list li { margin: 2px 0; }
-.qr__sub { margin: 2px 0; padding-left: 14px; color: var(--ink-600); }
-
-/* The raw cell text as it was printed on the scan. Monospace because the
-   difference that matters is often a single character -- "(1,757" against
-   "(1,757)" -- and a proportional font hides exactly that. */
-.qr__list code {
-  padding: 1px 5px;
-  border-radius: var(--radius-sm);
-  background: var(--ink-100);
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
-
-.qr__why { color: var(--ink-500); font-size: 11px; }
-
-/* --- Retrieval coverage -------------------------------------------------
-   Which questions this document can answer, as distinct from how well it
-   scanned. Only the paths that are limited or unavailable are rendered. */
-
-.qr__coverage {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-
-.qr__paths {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.qr__paths li {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 2px 8px;
-  align-items: baseline;
-  font-size: 12px;
-}
-
-/* The name sits beside the pill; the detail and the fix wrap under both, so a
-   long sentence does not push the badge off the row. */
-.qr__path-name {
-  font-weight: 600;
-  color: var(--ink-800);
-}
-
-.qr__path-detail,
-.qr__path-fix {
-  grid-column: 2;
-  color: var(--ink-600);
-  font-size: 11.5px;
-  line-height: 1.45;
-}
-
-.qr__path-fix {
-  color: var(--navy-700);
+@media (max-width: 900px) {
+  .qd__cols { grid-template-columns: 1fr; }
+  .qd__drawer { width: 100%; }
 }

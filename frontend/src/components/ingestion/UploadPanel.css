@@ -30,3 +30,17 @@
 /* The panel is now a thin result strip above the composer, not a dropzone.
    It renders nothing at all when there is nothing to report. */
 .uploadpanel:empty { display: none; }
+
+/* Centred in the reading column, with the same gutters as the thread and the
+   composer; several documents scroll inside the strip instead of pushing the
+   composer off screen. */
+.uploadpanel {
+  width: 100%;
+  max-width: var(--reading-w);
+  margin: 0 auto;
+  padding: 8px 32px 0;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.uploadpanel:empty { display: none; }
+@media (max-width: 900px) { .uploadpanel { padding: 8px 16px 0; } }

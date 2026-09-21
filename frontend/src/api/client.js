@@ -21,13 +21,14 @@ async function request(path, options = {}) {
       headers: { ...(options.headers || {}), ...authHeaders() },
     });
   } catch {
-    // No port quoted here on purpose: the gateway's port comes from .env
-    // (ARTHA_BACKEND_PORT), so a hard-coded number in this message would go
-    // stale and send people looking at the wrong service.
-    throw new Error(
+    // Said for a reader, not an operator: no port, no docker command. (The
+    // operator hint is in the console; the gateway's port comes from .env, so a
+    // number quoted here would go stale.)
+    console.warn(
       'Could not reach the backend. Start the stack with `docker compose up -d`, ' +
         'or run the gateway directly: uvicorn app.main:app --port $ARTHA_BACKEND_PORT'
     );
+    throw new Error('Can’t reach Artha.AI. Check your connection and try again.');
   }
 
   if (!res.ok) {

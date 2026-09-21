@@ -344,6 +344,37 @@ def _warm_table_config(fs_api) -> None:
 # is produced or which evidence it rests on changes.
 _CAVEAT_OPENER = "confidence was reduced from"
 
+_CONFIDENCE_RE = re.compile(r"\*\*confidence\*\*\s*:\s*(high|medium|low)\b", re.I)
+_REDUCED_RE = re.compile(
+    r">\s*confidence was reduced from\s*\*?(high|medium|low)\*?\s*automatically\s*:\s*(.+)", re.I
+)
+_TOOLS_RE = re.compile(r"\*\*tools\s+used\*\*\s*:\s*(.+)", re.I)
+_UNSOURCED_RE = re.compile(r">\s*\*\*no tool was called for this answer\*\*", re.I)
+
+
+def _extract_checks(answer: str) -> dict:
+    """How the answer was checked, read off the rendered answer BEFORE the UI
+    copy of it is cleaned.
+
+    Confidence, the tools used and the unsourced notice are stripped from the
+    text the reader sees (`_strip_confidence_caveat`, `api_server._clean_section`)
+    -- that display decision stands. They are returned here as separate fields so
+    the interface can offer them in one collapsed "How this was checked" section
+    instead of dropping the information altogether. Nothing here changes what the
+    pipeline computes; it only reads what it already wrote.
+    """
+    text = answer or ""
+    confidence = _CONFIDENCE_RE.search(text)
+    reduced = _REDUCED_RE.search(text)
+    tools = _TOOLS_RE.search(text)
+    return {
+        "confidence": confidence.group(1).capitalize() if confidence else None,
+        "reduced_from": reduced.group(1).capitalize() if reduced else None,
+        "reduced_reason": reduced.group(2).strip() if reduced else None,
+        "tools_used": [t.strip() for t in tools.group(1).split(",") if t.strip()] if tools else [],
+        "unsourced": bool(_UNSOURCED_RE.search(text)),
+    }
+
 
 def _strip_confidence_caveat(text: str) -> str:
     """Drop the auto-generated confidence-reduction blockquote.
@@ -500,6 +531,7 @@ def run_query(
             f"Pipeline error at stage '{result['error']}': {result.get('message', '')}",
         )
 
+    checks = _extract_checks(result.get("answer", ""))
     structured = fs_api._parse_structured_answer(result.get("answer", ""))
 
     # The materiality legend travels with the answer rather than being left for
@@ -533,6 +565,7 @@ def run_query(
         "materiality_legend": legend,
         "uploaded_documents": [d.summary() for d in scope.documents] if scope else [],
         "upload_store_notice": upload_store_notice,
+        "checks": checks,
     }
 
 

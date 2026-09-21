@@ -9,6 +9,15 @@ import './AuditCard.css';
 
 const RISK_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 const RISK_TONE = { critical: 'err', high: 'err', medium: 'warn', low: 'mute' };
+const SEVERITIES = [['critical', 'Critical', 'err'], ['high', 'High', 'err'], ['medium', 'Medium', 'warn'], ['low', 'Low', 'mute']];
+
+/** Only claims what the validation engine reported: no table means no badge. */
+function integrityOf(fullTb) {
+  if (!fullTb) return null;
+  if (fullTb.halted) return { tone: 'err', icon: 'alert', label: 'Arithmetic checks halted' };
+  if ((fullTb.rows || []).length > 0) return { tone: 'ok', icon: 'check', label: 'Arithmetic checks passed' };
+  return null;
+}
 
 function Finding({ f }) {
   return (
@@ -58,6 +67,7 @@ export default function AuditCard({ mode, msg }) {
   const reportRef = useRef(null);
 
   const summary = result.findings_summary || {};
+  const integrity = integrityOf(fullTb);
   const findings = [...(result.findings || [])].sort(
     (a, b) => (RISK_ORDER[a.risk_rating] ?? 9) - (RISK_ORDER[b.risk_rating] ?? 9)
   );
@@ -94,9 +104,21 @@ async function downloadWorkbook(format) {
         </h3>
         <span className="pill pill--navy tbcard__badge">Indicators only — no opinion</span>
       </header>
-      <p className="tbcard__sev">
-        {summary.critical || 0} critical · {summary.high || 0} high · {summary.medium || 0} medium · {summary.low || 0} low
-      </p>
+      {integrity && (
+        <p className="tbcard__integrity">
+          <span className={`pill pill--${integrity.tone}`}><Icon name={integrity.icon} size={12} /> {integrity.label}</span>
+          {priorDoc ? null : <span className="pill pill--mute">{doc.filename}</span>}
+        </p>
+      )}
+
+      <div className="tbcard__sev">
+        {SEVERITIES.map(([key, label, tone]) => (
+          <div key={key} className={`tbcard__sevtile tbcard__sevtile--${tone}`}>
+            <span className="tbcard__sevnum">{summary[key] || 0}</span>
+            <span className="tbcard__sevlabel">{label}</span>
+          </div>
+        ))}
+      </div>
 
       {result.context_note && <p className="tbcard__inset">{result.context_note}</p>}
 

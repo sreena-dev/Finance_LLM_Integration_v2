@@ -33,9 +33,12 @@ export default function UploadPanel({
 }) {
   const [health, setHealth] = useState(null);
   const [docs, setDocs] = useState([]);
-  const [waiting, setWaiting] = useState(0);
+  const [waitingFiles, setWaitingFiles] = useState([]);
   const [active, setActive] = useState(null);
   const [error, setError] = useState(null);
+  // Files that failed to convert, kept whole so Retry can send them again.
+  const [failed, setFailed] = useState([]);
+  const waiting = waitingFiles.length;
 
   // The conversation these uploads belong to, which may not exist yet.
   //
@@ -120,7 +123,7 @@ export default function UploadPanel({
       while (pendingRef.current.length > 0) {
         const file = pendingRef.current.shift();
         if (mountedRef.current) {
-          setWaiting(pendingRef.current.length);
+          setWaitingFiles([...pendingRef.current]);
           setActive({ filename: file.name, stage: 'queued', message: 'Queued…', fraction: 0 });
         }
         try {
@@ -145,14 +148,16 @@ export default function UploadPanel({
           });
           await refresh();
         } catch (e) {
-          if (mountedRef.current) setError(`${file.name}: ${e.message}`);
+          if (mountedRef.current) {
+            setFailed((prev) => [...prev, { id: `${file.name}-${Date.now()}`, file, error: e.message }]);
+          }
         } finally {
           if (mountedRef.current) setActive(null);
         }
       }
     } finally {
       drainingRef.current = false;
-      if (mountedRef.current) setWaiting(0);
+      if (mountedRef.current) setWaitingFiles([]);
     }
   }, [mode, refresh, onConversationChange]);
 
@@ -167,9 +172,23 @@ export default function UploadPanel({
       : null);
     if (pdfs.length === 0) return;
     pendingRef.current.push(...pdfs);
-    setWaiting(pendingRef.current.length);
+    setWaitingFiles([...pendingRef.current]);
     drain();
   }, [drain]);
+
+  const retry = useCallback((id) => {
+    setFailed((prev) => {
+      const item = prev.find((f) => f.id === id);
+      if (item) {
+        pendingRef.current.push(item.file);
+        setWaitingFiles([...pendingRef.current]);
+        drain();
+      }
+      return prev.filter((f) => f.id !== id);
+    });
+  }, [drain]);
+
+  const dismiss = useCallback((id) => setFailed((prev) => prev.filter((f) => f.id !== id)), []);
 
   const remove = useCallback(async (docId) => {
     try {
@@ -185,8 +204,8 @@ export default function UploadPanel({
   const busy = Boolean(active);
   const available = health ? Boolean(health.available) : true;
   useEffect(() => {
-    onReady?.({ accept, busy, available });
-  }, [onReady, accept, busy, available]);
+    onReady?.({ accept, busy, available, reason: health?.reason || null });
+  }, [onReady, accept, busy, available, health?.reason]);
 
   if (health && !health.available) {
     return (
@@ -201,21 +220,32 @@ export default function UploadPanel({
   // Nothing uploaded and nothing happening: render nothing at all. The attach
   // control lives in the composer, so there is no reason to occupy the
   // conversation area with an empty panel.
-  if (docs.length === 0 && !active && !error && waiting === 0) return null;
+  if (docs.length === 0 && !active && !error && waiting === 0 && failed.length === 0) return null;
 
   return (
     <div className="uploadpanel">
-      {active && <IngestProgress {...active} />}
+      {active && <IngestProgress {...active} status="converting" />}
 
-      {waiting > 0 && (
+      {waitingFiles.map((file, i) => (
+        <IngestProgress key={`${file.name}-${i}`} filename={file.name} status="queued"
+                        ahead={i + (active ? 1 : 0)} />
+      ))}
+
+      {failed.map((f) => (
+        <IngestProgress key={f.id} filename={f.file.name} error={f.error}
+                        onRetry={() => retry(f.id)} onDismiss={() => dismiss(f.id)} />
+      ))}
+
+      {failed.length > 0 && docs.length > 0 && (
         <p className="uploadpanel__queued">
-          {waiting} more waiting — documents are converted one at a time.
+          {docs.length} ready — you can ask about {docs.length === 1 ? 'it' : 'them'} now.
         </p>
       )}
 
       {error && <Notice tone="error" title="Upload failed">{error}</Notice>}
 
-      <DocumentChips docs={docs} onDelete={remove} onView={onView} />
+      <DocumentChips docs={docs} onDelete={remove} onView={onView}
+                     retentionDays={health?.retention_days || 30} />
     </div>
   );
 }

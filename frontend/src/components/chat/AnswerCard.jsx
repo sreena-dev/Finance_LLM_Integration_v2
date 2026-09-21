@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import Icon from '../common/Icon';
 import Markdown from '../common/Markdown';
 import CopyButton from '../common/CopyButton';
+import Notice from '../common/Notice';
 import CitationViewer from './CitationViewer';
 import './AnswerCard.css';
 
@@ -89,6 +90,43 @@ function SourceChunk({ chunk, onShowScan }) {
   );
 }
 
+const hasChecks = (c) =>
+  Boolean(c && (c.confidence || c.unsourced || (c.tools_used || []).length > 0));
+
+/** Confidence, why it was lowered, the tools used, and the unsourced warning. */
+function HowChecked({ checks }) {
+  const tools = checks.tools_used || [];
+  return (
+    <div className="answer__checks">
+      {checks.confidence && (
+        <p>
+          <strong>Confidence:</strong>{' '}
+          <span className={`pill ${checks.reduced_from ? 'pill--warn' : 'pill--ok'}`}>{checks.confidence}</span>
+          {checks.reduced_from && (
+            <span className="answer__checks-why">
+              {' '}Lowered from {checks.reduced_from}
+              {checks.reduced_reason ? `: ${checks.reduced_reason}` : '.'}
+            </span>
+          )}
+        </p>
+      )}
+      {checks.unsourced && (
+        <p className="answer__checks-unsourced">
+          <Icon name="alert" size={14} />
+          <span><strong>Unsourced answer.</strong> No tool was called, so nothing here is checked against
+            a document. Treat it as general knowledge.</span>
+        </p>
+      )}
+      {tools.length > 0 && (
+        <p>
+          <strong>Tools used:</strong>{' '}
+          <span className="answer__tools">{tools.join(' · ')}</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function AnswerCard({ result, mode, conversationId }) {
   const {
     summary,
@@ -102,6 +140,13 @@ export default function AnswerCard({ result, mode, conversationId }) {
     // because a conversation saved before this feature existed rehydrates from
     // a stored payload that has neither key.
     uploaded_documents: uploaded = [],
+    rewritten_query: rewritten = '',
+    materiality_legend: legend = null,
+    upload_store_notice: storeNotice = null,
+    // How the answer was checked. Hidden from the answer text on purpose (the
+    // server strips it); offered here, collapsed, so it is available without
+    // being the first thing a reader sees. Older stored turns have no `checks`.
+    checks = null,
   } = result || {};
 
   // Which citation's scanned region is open, if any.
@@ -130,6 +175,14 @@ export default function AnswerCard({ result, mode, conversationId }) {
         <CopyButton text={copyText} />
       </header>
 
+      {rewritten && (
+        <p className="answer__readas">
+          <span>Read as:</span> <em>“{rewritten}”</em>
+        </p>
+      )}
+
+      {storeNotice && <Notice tone="warn">{storeNotice}</Notice>}
+
       {summary && (
         <div className="answer__summary">
           <Markdown>{summary}</Markdown>
@@ -144,6 +197,13 @@ export default function AnswerCard({ result, mode, conversationId }) {
 
       {!summary && !answer && (
         <p className="answer__blank">The pipeline returned an empty answer.</p>
+      )}
+
+      {/* The materiality legend is server-supplied and shown verbatim, never
+          restyled or rephrased. The model is also told to reproduce it (prompt
+          rule 22), so it is only added when the answer text does not already. */}
+      {legend?.markdown && !/materiality legend/i.test(`${summary || ''} ${answer || ''}`) && (
+        <div className="answer__legend"><Markdown>{legend.markdown}</Markdown></div>
       )}
 
       {uploaded.length > 0 && (
@@ -165,11 +225,17 @@ export default function AnswerCard({ result, mode, conversationId }) {
         </div>
       )}
 
-      {(evidence || chunks.length > 0) && (
+      {(evidence || chunks.length > 0 || hasChecks(checks)) && (
         <div className="answer__extras">
           {evidence && (
             <Collapsible title="Evidence" icon="doc">
               <Markdown>{evidence}</Markdown>
+            </Collapsible>
+          )}
+
+          {hasChecks(checks) && (
+            <Collapsible title="How this was checked" icon="shield">
+              <HowChecked checks={checks} />
             </Collapsible>
           )}
 

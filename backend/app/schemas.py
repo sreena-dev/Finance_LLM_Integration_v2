@@ -80,6 +80,10 @@ class QueryResponse(BaseModel):
     # either no upload was relevant or the store answered normally; it is not
     # a signal that a document exists.
     upload_store_notice: str | None = None
+    # How the answer was checked: confidence (and what it was lowered from and
+    # why), the tools used, and whether no tool was called. Financial-statement
+    # only; None for every other mode. Shown collapsed, never above the answer.
+    checks: dict | None = None
 
 
 # ---------------------------------------------------------------------------

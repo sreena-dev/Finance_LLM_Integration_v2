@@ -383,7 +383,7 @@ export default function TrialBalanceView({ mode, state, setState }) {
           {(messages || []).length === 0 && (
             <div className="tb__idle">
               <Icon name="sparkle" size={26} className="tb__idle-icon" />
-              <p className="tb__idle-welcome">👋 Hi, how can I help you today?</p>
+              <p className="tb__idle-welcome">Hi, how can I help you today?</p>
               <p>
                 Database query for quick questions, Single TB Analysis for one file,
                 or Two TB Comparative Analysis to compare two periods.

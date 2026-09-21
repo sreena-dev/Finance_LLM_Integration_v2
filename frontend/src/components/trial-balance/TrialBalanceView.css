@@ -112,7 +112,7 @@
    different against one trial balance than against the annual-report corpus, and
    the answer text alone does not always make that obvious. */
 .tb__answer-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.tb__ai-mark { color: var(--blue-500); flex-shrink: 0; margin-right: 2px; vertical-align: -2px; }
+.tb__ai-mark { color: var(--navy-600); flex-shrink: 0; margin-right: 2px; vertical-align: -2px; }
 .tb__computed {
   margin: 0;
   padding: 10px 12px;
@@ -153,7 +153,7 @@
   color: var(--ink-500);
   text-align: center;
 }
-.tb__idle-icon { color: var(--blue-500); }
+.tb__idle-icon { color: var(--navy-600); }
 .tb__idle p { margin: 0; font-size: 13px; max-width: 440px; line-height: 1.6; }
 .tb__idle-welcome { font-size: 15px; font-weight: 600; color: var(--ink-700); }
 

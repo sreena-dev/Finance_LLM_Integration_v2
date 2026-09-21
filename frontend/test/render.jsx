@@ -28,6 +28,14 @@ import DocumentChips from '../src/components/ingestion/DocumentChips';
 import Composer from '../src/components/chat/Composer';
 import ChatView from '../src/components/chat/ChatView';
 import DocumentPane, { EditableTable } from '../src/components/ingestion/DocumentPane';
+import Markdown from '../src/components/common/Markdown';
+import AuthScreen from '../src/auth/AuthScreen';
+import { AuthProvider } from '../src/auth/AuthContext';
+import Sidebar from '../src/components/Sidebar';
+import { parseFigureCell } from '../src/lib/figures';
+import { groupIndian, inWords } from '../src/lib/indian';
+import { friendlyError, stageIndex } from '../src/components/ingestion/IngestProgress';
+import { keptUntil, reasonText, tablesWithProblems } from '../src/components/ingestion/QualityReport';
 
 const MODE = { id: 'financial-statement', base_path: '/api/financial-statement', short_label: 'FS' };
 
@@ -156,11 +164,102 @@ const CASES = [
       }],
     }}
   />, (html) => {
-    if (!html.includes('docpane__cellbtn--unreadable')) throw new Error('no state badge class');
+    if (!html.includes('fig--unreadable')) throw new Error('no state badge class');
     if (!html.includes('<button')) throw new Error('the flagged cell did not render as a button');
     if (!html.includes('Unreadable figure, row Revenue, column Amount')) {
       throw new Error('the ARIA label did not name the row/column');
     }
+  }],
+
+  // --- redesign: figure states, tag blocks, drawer, cards, wait bar --------
+  ['Markdown (figure states + tags)', <Markdown>{[
+    '| Particulars | FY 2023-24 | FY 2022-23 |',
+    '| --- | --- | --- |',
+    '| Revenue | 1,42,318.40 | 1,28,904.10 |',
+    '| Finance costs | [unreadable: page 61, table t3, row "Finance costs", col "FY 2023-24"] | 2,318.90 |',
+    '| Impairment losses | [recovered 1,757.00; second read, confidence medium, caveat: page 61] | 1,204.50 |',
+    '| Other expenses | 21946.85 [user-entered] | 19,880.20 |',
+    '| Total expenses | 1,17,559.45 | 1,04,724.55 |',
+    '',
+    '**RISK FLAG** The impairment figure is a second-reader value.',
+  ].join(String.fromCharCode(10))}</Markdown>, (html) => {
+    for (const needle of ['fig--unreadable', 'fig--recovered', 'fig--you', 'md__num', 'tagblock--risk', 'md__total']) {
+      if (!html.includes(needle)) throw new Error(`missing ${needle}`);
+    }
+    // Extracted figures are shown exactly as printed -- never regrouped or padded.
+    if (!html.includes('1,42,318.40')) throw new Error('a printed figure was reformatted');
+    if (html.includes('142,318')) throw new Error('a printed figure was regrouped');
+    if (html.includes('21,946.85')) throw new Error('should show the user figure as typed with Indian grouping only');
+  }],
+  ['QualityReport drawer (Enter / Review / kept until)', <QualityReport doc={{
+    ...DOC, uploaded_at: 1790000000, user_entered_cells: 1, recovered_cells: 1,
+    quality: { ...DOC.quality, unreadable_cells: [
+      { raw: '', page_no: 61, table_id: 'up_a_t1_1', row_label: 'Finance costs', column: 'FY 2023-24', reasons: ['unreadable_text'], recovered_text: null },
+      { raw: '', page_no: 61, table_id: 'up_a_t1_1', row_label: 'Impairment losses', column: 'FY 2023-24', reasons: ['readers_disagree'], recovered_text: '1,757.00', confidence: 'medium' },
+    ] },
+    periods: [{ label: 'FY 2023-24', is_comparative: false }, { label: 'FY 2022-23', is_comparative: true }],
+  }} retentionDays={30} onEnter={() => {}} onOpenPages={() => {}} onClose={() => {}} />, (html) => {
+    for (const needle of ['Enter', 'Review', 'Smudged or unreadable digits', 'kept until', 'prior-year column', 'Quality report']) {
+      if (!html.includes(needle)) throw new Error(`missing ${needle}`);
+    }
+  }],
+  ['DocumentChips (counters)', <DocumentChips docs={[{
+    ...DOC, recovered_cells: 1, user_entered_cells: 2,
+    quality: { ...DOC.quality },
+  }]} onView={() => {}} />, (html) => {
+    for (const needle of ['figure withheld', '1 recovered', 'did not foot', '2 entered by you', 'Open pages']) {
+      if (!html.includes(needle)) throw new Error(`missing ${needle}`);
+    }
+  }],
+  ['IngestProgress (queued ahead)', <IngestProgress filename="b.pdf" status="queued" ahead={1} />, (html) => {
+    if (!html.includes('Queued · 1 ahead')) throw new Error('queue position missing');
+  }],
+  ['IngestProgress (password failure)', <IngestProgress filename="c.pdf" error="c.pdf: file is encrypted" onRetry={() => {}} />, (html) => {
+    if (!html.includes('password-protected') || !html.includes('Retry')) throw new Error('failure not actionable');
+  }],
+  ['AuthScreen (two panes, no dead link)', <AuthProvider><AuthScreen /></AuthProvider>, (html) => {
+    for (const needle of ['Welcome back.', 'Every figure, traced to its page.', 'Not an official government service']) {
+      if (!html.includes(needle)) throw new Error(`missing ${needle}`);
+    }
+    if (/forgot/i.test(html)) throw new Error('there is no password reset, so no Forgot link');
+  }],
+  ['Sidebar (rail + retention)', <AuthProvider><Sidebar rail={false} retentionDays={45} activeId="financial-statement"
+      onSelect={() => {}} health={{ 'trial-balance': { available: false } }}
+      modes={[
+        { id: 'financial-statement', short_label: 'Financial Statements', integrated: true },
+        { id: 'trial-balance', short_label: 'Trial Balance', integrated: true },
+      ]} /></AuthProvider>, (html) => {
+    if (!html.includes('kept for 45 days')) throw new Error('retention note missing');
+    if (!html.includes('Unavailable')) throw new Error('unavailable label missing');
+  }],
+  ['AnswerCard (How this was checked, collapsed)', <AnswerCard mode={MODE} conversationId="c1" result={{
+    ...UPLOAD_RESULT, rewritten_query: 'Compare finance costs FY 2023-24 vs FY 2022-23',
+    upload_store_notice: 'Your uploaded documents could not be reached.',
+    checks: { confidence: 'Medium', reduced_from: 'High', reduced_reason: 'a figure is withheld', tools_used: ['search_corpus'], unsourced: false },
+  }} />, (html) => {
+    for (const needle of ['How this was checked', 'Read as:', 'could not be reached', 'answer']) {
+      if (!html.includes(needle)) throw new Error(`missing ${needle}`);
+    }
+    // Collapsed: the detail must not be in the markup until it is opened.
+    if (html.includes('Lowered from')) throw new Error('checks detail should be collapsed');
+  }],
+  ['pure helpers', <span />, () => {
+    const eq = (a, b, m) => { if (a !== b) throw new Error(`${m}: got ${a}, want ${b}`); };
+    eq(groupIndian('150000.5'), '1,50,000.5', 'lakh grouping');
+    eq(groupIndian('12859'), '12,859', 'no decimals added');
+    eq(groupIndian('(5000)'), '(5,000)', 'negative');
+    eq(groupIndian('10000000'), '1,00,00,000', 'crore');
+    eq(inWords(150000), '₹1.5 lakh', 'words');
+    eq(parseFigureCell('12,859 [user-entered]').kind, 'you', 'user');
+    eq(parseFigureCell('[recovered 1,757.00; second read, confidence low]').value, '1,757.00', 'recovered');
+    eq(parseFigureCell('[unreadable: page 1]').kind, 'unreadable', 'unreadable');
+    eq(parseFigureCell('460').kind, 'plain', 'plain');
+    eq(stageIndex('convert', 0.5), 3, 'stage index');
+    eq(stageIndex('identify', 0.97), 7, 'finishing');
+    eq(friendlyError('x.pdf: PDF is password protected'), 'This file is password-protected. Remove the password and attach it again.', 'password');
+    eq(reasonText('readers_disagree'), 'Read differently by the two readers', 'reason');
+    eq(tablesWithProblems({ unreadable_cells: [{ table_id: 'a' }, { table_id: 'a' }], recovered_cells: [{ table_id: 'b' }] }), 2, 'tables');
+    if (!String(keptUntil(86400 * 365, 30)).includes('1971')) throw new Error('kept until');
   }],
 ];
 
@@ -169,7 +268,7 @@ for (const [name, element, check] of CASES) {
   try {
     const html = renderToString(element);
     if (typeof html !== 'string') throw new Error('did not produce markup');
-    check?.(html);
+    check?.(html.replace(/<!-- -->/g, ''));
     console.log(`  ok    ${name}`);
   } catch (e) {
     failed += 1;

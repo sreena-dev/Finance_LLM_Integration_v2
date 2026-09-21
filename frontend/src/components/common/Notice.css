@@ -7,7 +7,8 @@
   font-size: 13.5px;
 }
 
-.notice--info  { background: var(--navy-50);  border-color: var(--navy-100); color: var(--navy-800); }
+.notice--info  { background: var(--navy-100); border-color: #d3dcf0;         color: var(--navy-800); }
+.notice--ok    { background: var(--ok-100);   border-color: #c5e6d3;         color: var(--ok-600); }
 .notice--warn  { background: var(--warn-100); border-color: #f0dcae;         color: var(--warn-600); }
 .notice--error { background: var(--err-100);  border-color: #f3cdc9;         color: var(--err-600); }
 

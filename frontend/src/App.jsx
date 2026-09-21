@@ -5,6 +5,7 @@ import {
   fetchConversation,
   fetchModes,
   listConversations,
+  fsUploadHealth,
   probeMode,
 } from './api/client';
 import Sidebar from './components/Sidebar';
@@ -51,7 +52,7 @@ function ModeHeader({ mode, health }) {
     : health === undefined
       ? { tone: 'mute', text: 'Checking…' }
       : health.available
-        ? { tone: 'ok', text: 'Pipeline ready' }
+        ? { tone: 'ok', text: 'Available' }
         : { tone: 'err', text: 'Unavailable' };
 
   return (
@@ -66,9 +67,6 @@ function ModeHeader({ mode, health }) {
           <span className="dot" />
           {state.text}
         </span>
-        <code className="head__path" title="This mode's API namespace">
-          {mode.base_path}
-        </code>
       </div>
     </header>
   );
@@ -97,7 +95,25 @@ export default function App() {
   // conversation, so switching conversations closes a stale pane rather than
   // leaving it open on a document the new conversation doesn't have.
   const [fsViewDoc, setFsViewDoc] = useState(null);
-  useEffect(() => { setFsViewDoc(null); }, [convoId]);
+  // A cell to open straight away in the pane's editor (from the quality drawer's
+  // Enter / Review buttons): `{ page_no, table_id, row_index, col_index }`.
+  const [fsFocus, setFsFocus] = useState(null);
+  const openDocPane = useCallback((doc, focus = null) => {
+    setFsViewDoc(doc);
+    setFsFocus(focus);
+  }, []);
+  useEffect(() => { setFsViewDoc(null); setFsFocus(null); }, [convoId]);
+
+  // How long the server keeps an upload, for the sidebar note and the report.
+  const [retentionDays, setRetentionDays] = useState(30);
+  const [offline, setOffline] = useState(() => typeof navigator !== 'undefined' && navigator.onLine === false);
+  useEffect(() => {
+    const on = () => setOffline(false);
+    const off = () => setOffline(true);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+  }, []);
 
   // ── Boot: load the mode list, then probe each mode in the background ────
   useEffect(() => {
@@ -201,6 +217,10 @@ export default function App() {
 
   // ── Financial Statements conversations ──────────────────────────────────
   const fsMode = useMemo(() => modes.find((m) => m.id === 'financial-statement') || null, [modes]);
+  useEffect(() => {
+    if (!fsMode) return;
+    fsUploadHealth(fsMode).then((h) => { if (h?.retention_days) setRetentionDays(h.retention_days); });
+  }, [fsMode]);
 
   const refreshConversations = useCallback(async () => {
     if (!fsMode) return;
@@ -324,7 +344,9 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar modes={sidebarModes} activeId={activeId} onSelect={setActiveId} health={health}>
+      <Sidebar modes={sidebarModes} activeId={activeId} onSelect={setActiveId} health={health}
+               rail={activeId === 'financial-statement' && Boolean(fsViewDoc)}
+               retentionDays={activeId === 'financial-statement' ? retentionDays : null}>
         {/* Only Financial Statements persists a thread, so only it gets a
             history list. Rendering this for every mode would advertise a
             feature the others do not have. */}
@@ -366,6 +388,14 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
               >
+                {offline && (
+                  <div className="main__notice">
+                    <Notice tone="warn" title="You are offline">
+                      Anything you have typed is kept. Questions will send once the connection is back.
+                    </Notice>
+                  </div>
+                )}
+
                 {/* A mode that is down or unintegrated shows the gateway's
                     own reason string — it names the exact missing setting. */}
                 {health[activeMode.id] && !health[activeMode.id].available && (
@@ -418,7 +448,7 @@ export default function App() {
                       conversationId={convoId}
                       onConversationChange={onConversationChange}
                       onViewDocument={
-                        activeMode.id === 'financial-statement' ? setFsViewDoc : undefined
+                        activeMode.id === 'financial-statement' ? openDocPane : undefined
                       }
                     />
                     {activeMode.id === 'financial-statement' && fsViewDoc && (
@@ -426,7 +456,9 @@ export default function App() {
                         mode={activeMode}
                         conversationId={convoId}
                         doc={fsViewDoc}
-                        onClose={() => setFsViewDoc(null)}
+                        focus={fsFocus}
+                        retentionDays={retentionDays}
+                        onClose={() => { setFsViewDoc(null); setFsFocus(null); }}
                       />
                     )}
                   </div>

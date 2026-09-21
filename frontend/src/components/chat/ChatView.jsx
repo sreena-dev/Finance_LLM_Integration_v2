@@ -11,11 +11,11 @@ import ErrorBoundary from '../common/ErrorBoundary';
 import './ChatView.css';
 
 const PIPELINE_STEPS = [
-  'Interpreting the question',
-  'Searching the knowledge base',
-  'Reranking retrieved evidence',
-  'Reasoning over the evidence',
-  'Validating citations',
+  'Reading the question…',
+  'Searching the documents and the corpus…',
+  'Reading the statements and checking the arithmetic…',
+  'Reasoning over the evidence…',
+  'Validating citations…',
 ];
 
 const SUGGESTIONS = {
@@ -54,6 +54,8 @@ export default function ChatView({
 }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);
+  // The question that failed, so a failed turn keeps the draft and can be retried.
+  const [failedDraft, setFailedDraft] = useState(null);
   const scrollRef = useRef(null);
   const endRef = useRef(null);
 
@@ -61,13 +63,13 @@ export default function ChatView({
   // button and the pane's drop handler can both push files in without either
   // of them owning the queue.
   const uploadRef = useRef(null);
-  const [uploadState, setUploadState] = useState({ busy: false, available: true });
+  const [uploadState, setUploadState] = useState({ busy: false, available: true, reason: null });
   const onUploadReady = useCallback((api) => {
     uploadRef.current = api;
     setUploadState((prev) => (
-      prev.busy === api.busy && prev.available === api.available
+      prev.busy === api.busy && prev.available === api.available && prev.reason === (api.reason || null)
         ? prev
-        : { busy: api.busy, available: api.available }
+        : { busy: api.busy, available: api.available, reason: api.reason || null }
     ));
   }, []);
 
@@ -93,6 +95,7 @@ export default function ChatView({
     if (!query || pending) return;
 
     setError(null);
+    setFailedDraft(null);
     setPending(true);
     setThread((prev) => [...prev, { role: 'user', text: query, id: `u-${Date.now()}` }]);
 
@@ -110,6 +113,7 @@ export default function ChatView({
       }
     } catch (err) {
       setError(err.message);
+      setFailedDraft(query);
     } finally {
       setPending(false);
     }
@@ -240,8 +244,17 @@ export default function ChatView({
 
             {error && (
               <motion.div key="err" layout>
-                <Notice tone="error" title="The request could not be completed">
-                  {error}
+                <Notice
+                  tone="error"
+                  title="Something went wrong while preparing this answer."
+                  action={failedDraft ? (
+                    <button type="button" className="btn btn--ghost btn--sm"
+                            onClick={() => submit(failedDraft)}>
+                      <Icon name="refresh" size={13} /> Try again
+                    </button>
+                  ) : null}
+                >
+                  {error} Nothing was lost{failedDraft ? ' — your question is still in the box.' : '.'}
                 </Notice>
               </motion.div>
             )}
@@ -270,6 +283,7 @@ export default function ChatView({
 
       <Composer
         onSubmit={submit}
+        draft={failedDraft}
         disabled={pending || blocked}
         placeholder={
           blocked
@@ -277,6 +291,13 @@ export default function ChatView({
             : `Ask about ${mode.short_label.toLowerCase()}…`
         }
         onFiles={canUpload ? dropFiles : undefined}
+        // Uploads switched off: keep the paperclip, disabled, and say why, so
+        // the reader knows the feature exists and the chat still works.
+        attachUnavailable={
+          mode.id === 'financial-statement' && !uploadState.available
+            ? (uploadState.reason || 'Document upload is not available right now.')
+            : undefined
+        }
         attachBusy={uploadState.busy}
         attachTitle={
           uploadState.busy

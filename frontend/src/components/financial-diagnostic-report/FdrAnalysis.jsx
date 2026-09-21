@@ -661,24 +661,10 @@ export default function FdrAnalysis() {
 }
 
 /* ═══════════════════════════════ STYLES ═══════════════════════════════════
- * Token values mirror src/styles/index.css. Scoped to .fdr-root only. */
+ * Uses the global tokens from src/styles/index.css. Scoped to .fdr-root only. */
 
 const CSS = `
 .fdr-root{
-  --navy-900:#0f2136; --navy-800:#16324f; --navy-700:#1e3a5f; --navy-600:#2c5282;
-  --navy-100:#e3ecf6; --navy-50:#f2f7fc;
-  --ink-900:#101720; --ink-800:#1d2733; --ink-700:#33404f; --ink-600:#52616f;
-  --ink-500:#6f7d8c; --ink-400:#97a3b0; --ink-300:#c3cbd4; --ink-200:#e0e5ea;
-  --ink-100:#eef1f4; --ink-50:#f7f9fb; --white:#fff;
-  --bg:#f4f6f9; --surface:#fff; --border:#e0e5ea; --border-strong:#c3cbd4;
-  --amber-50:#fdf6e7; --amber-600:#8a6112; --red-50:#fdf1f0; --red-600:#a33028;
-  --font-sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
-  --font-mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
-  --shadow-xs:0 1px 2px rgba(16,23,32,.05);
-  --shadow-sm:0 1px 3px rgba(16,23,32,.07),0 1px 2px rgba(16,23,32,.04);
-  --shadow-md:0 4px 12px rgba(16,23,32,.07),0 1px 3px rgba(16,23,32,.05);
-  --radius-sm:6px; --radius:10px; --radius-lg:14px; --radius-xl:18px;
-  --ease:cubic-bezier(.22,1,.36,1);
   position:absolute; inset:0; background:var(--bg); color:var(--ink-800);
   font-family:var(--font-sans); font-size:14px; line-height:1.6;
   -webkit-font-smoothing:antialiased;
@@ -706,8 +692,8 @@ const CSS = `
 
 .fdr-entitybar{display:flex; align-items:flex-end; gap:12px; flex:1 1 320px; min-width:260px;}
 .fdr-entitybar--error{align-items:center;}
-.fdr-entitybar__err{flex:1; font-size:12.5px; color:var(--red-600);}
-.fdr-banner{padding:8px 24px; background:var(--amber-50); color:var(--amber-600);
+.fdr-entitybar__err{flex:1; font-size:12.5px; color:var(--err-600);}
+.fdr-banner{padding:8px 24px; background:var(--warn-100); color:var(--warn-600);
   font-size:12.5px; border-top:1px solid var(--border);}
 
 .fdr-field{display:flex; flex-direction:column; gap:5px; flex:1 1 240px; min-width:200px;}
@@ -743,9 +729,10 @@ const CSS = `
 .fdr-turn--user{justify-content:flex-end;}
 .fdr-bubble{max-width:100%; padding:14px 18px; background:var(--surface);
   border:1px solid var(--border); border-radius:var(--radius-lg); box-shadow:var(--shadow-xs);}
+.fdr-turn:not(.fdr-turn--user) .fdr-bubble{border-top:3px solid var(--navy-700);}
 .fdr-bubble--user{max-width:78%; background:var(--navy-700); color:var(--white); border-color:transparent;}
-.fdr-bubble--note{background:var(--amber-50); border-color:#f0e2bf;}
-.fdr-bubble--error{background:var(--red-50); border-color:#f2d3d0;}
+.fdr-bubble--note{background:var(--warn-100); border-color:var(--gold-600);}
+.fdr-bubble--error{background:var(--err-100); border-color:var(--err-600);}
 .fdr-bubble--pending{display:flex; flex-direction:column; gap:3px; color:var(--ink-500); font-size:12.5px;}
 /* Stage lines fade back as they are superseded, so the newest reads as current
    without the bubble needing to move or re-order. */
@@ -775,7 +762,7 @@ const CSS = `
   max-height:76px; overflow:hidden;}
 
 .fdr-kind{display:inline-block; margin-bottom:8px; padding:2px 8px; border-radius:100px;
-  background:var(--ink-100); color:var(--ink-600); font-size:10.5px; font-weight:650;
+  background:var(--gold-100); color:var(--gold-700); font-size:10.5px; font-weight:650;
   letter-spacing:.05em; text-transform:uppercase;}
 
 .fdr-md > :first-child{margin-top:0;}
@@ -789,6 +776,8 @@ const CSS = `
 .fdr-md em{color:var(--ink-600);}
 .fdr-md table{border-collapse:collapse; width:100%; margin:0 0 10px; font-size:13px;}
 .fdr-md th,.fdr-md td{border:1px solid var(--border); padding:6px 9px; text-align:left;}
+.fdr-md thead th{background:var(--paper-2); border-bottom:2px solid var(--navy-700);}
+.fdr-md td:not(:first-child){font-family:var(--font-mono); font-variant-numeric:tabular-nums; text-align:right;}
 
 /* Provenance */
 .fdr-prov{margin-top:12px; border-top:1px solid var(--border); padding-top:9px;}

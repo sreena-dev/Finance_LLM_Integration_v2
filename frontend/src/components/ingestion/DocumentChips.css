@@ -1,108 +1,54 @@
-.chips {
+.chips { display: flex; flex-direction: column; gap: 8px; }
+
+.docchip {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-}
-
-.chips__row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.chips__note {
-  font-size: 11px;
-  color: var(--ink-400);
-}
-
-.chip {
-  display: inline-flex;
-  align-items: stretch;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  gap: 8px;
+  padding: 11px 14px;
   background: var(--surface);
-  overflow: hidden;
-  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
 }
 
-.chip:hover { border-color: var(--border-strong); }
-.chip.is-open { border-color: var(--navy-600); background: var(--navy-50); }
-
-/* Grade shows as a left edge rather than a fill: the chip has to stay readable
-   next to the composer, and a saturated pill there competes with the send
-   button for attention. */
-.chip.is-ok   { box-shadow: inset 3px 0 0 var(--ok-600); }
-.chip.is-warn { box-shadow: inset 3px 0 0 var(--warn-600); }
-.chip.is-bad  { box-shadow: inset 3px 0 0 var(--err-600); }
-
-.chip__main {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 10px 4px 12px;
-  border: 0;
-  background: transparent;
-  color: var(--ink-800);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.chip__label {
-  max-width: 190px;
+.docchip__head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.docchip__icon { flex: none; color: var(--navy-600); align-self: center; }
+.docchip__file {
+  flex: none;
+  max-width: 50%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
 }
-
-.chip__badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 999px;
-  background: var(--warn-100);
-  color: var(--warn-600);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
+.docchip__meta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--ink-3);
 }
-
-.chip__badge.is-muted { background: var(--ink-100); color: var(--ink-600); }
-
-.chip__view {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 6px 0 4px;
+.docchip__del {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
   border: 0;
-  border-left: 1px solid var(--border);
-  background: transparent;
-  color: var(--ink-400);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-3);
   cursor: pointer;
-  transition: color 0.15s var(--ease), background 0.15s var(--ease);
 }
+.docchip__del:hover { color: var(--err-600); background: var(--err-100); }
 
-.chip__view:hover { color: var(--navy-600); background: var(--navy-50); }
+.docchip__pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.docchip__actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
-.chip__del {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 8px 0 4px;
-  border: 0;
-  border-left: 1px solid var(--border);
-  background: transparent;
-  color: var(--ink-400);
-  cursor: pointer;
-  transition: color 0.15s var(--ease), background 0.15s var(--ease);
-}
-
-.chip__del:hover { color: var(--err-600); background: var(--err-100); }
-
-/* The full report is reference material. It scrolls in its own box so opening
-   it never pushes the composer off screen — the failure the old panel had. */
-.chips__detail {
-  max-height: 40vh;
-  overflow-y: auto;
+@media (max-width: 720px) {
+  .docchip__head { flex-wrap: wrap; }
+  .docchip__file { max-width: 100%; }
 }

@@ -4,29 +4,26 @@ import QualityReport from './QualityReport';
 import './DocumentChips.css';
 
 /**
- * The documents attached to this conversation, as one compact row.
+ * The documents attached to this conversation: one card each, with the numbers
+ * worth seeing at a glance.
  *
- * Replaces a full-width dropzone that sat permanently between the thread and
- * the composer. That panel was always on screen whether or not anything had
- * been uploaded, ate vertical space in the conversation area, and pushed the
- * input down the page — the attach control belongs in the composer, and what
- * belongs here is only the result.
- *
- * A chip carries the two things worth seeing at a glance: which year the
- * document turned out to be, and whether any figures were withheld. The full
- * quality report — page grades, unreadable cells, failed footings, which
- * lookups cannot work — opens on click, because it is reference material rather
- * than something to keep on screen.
+ * A card carries which entity and year the document turned out to be, its scan
+ * quality, and the counters that are reasons NOT to trust a silence in an answer:
+ * figures withheld, figures recovered but unconfirmed, totals that did not foot,
+ * and figures a person entered. The full quality report opens as a drawer,
+ * because it is reference material rather than something to keep on screen.
  */
 
 const GRADE_TONE = {
-  excellent: 'is-ok',
-  good: 'is-ok',
-  fair: 'is-warn',
-  poor: 'is-bad',
+  excellent: 'pill--ok',
+  good: 'pill--ok',
+  fair: 'pill--warn',
+  poor: 'pill--err',
 };
 
-export default function DocumentChips({ docs, onDelete, onView }) {
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+export default function DocumentChips({ docs, onDelete, onView, retentionDays = 30 }) {
   const [openId, setOpenId] = useState(null);
   if (!docs || docs.length === 0) return null;
 
@@ -34,88 +31,78 @@ export default function DocumentChips({ docs, onDelete, onView }) {
 
   return (
     <div className="chips">
-      <div className="chips__row">
-        {docs.map((doc) => {
-          const withheld = (doc.quality?.unreadable_cells || []).length;
-          const unavailable = (doc.coverage?.unavailable || []).length;
-          const label = doc.financial_year || doc.filename;
-          const isOpen = doc.doc_id === openId;
+      {docs.map((doc) => {
+        const quality = doc.quality || {};
+        const withheld = (quality.unreadable_cells || []).length;
+        const recovered = doc.recovered_cells || 0;
+        const footing = (quality.failed_footings || []).length;
+        const entered = doc.user_entered_cells || 0;
+        const grade = doc.grade;
 
-          return (
-            <span
-              key={doc.doc_id}
-              className={`chip ${GRADE_TONE[doc.grade] || ''} ${isOpen ? 'is-open' : ''}`}
-            >
-              <button
-                type="button"
-                className="chip__main"
-                onClick={() => setOpenId(isOpen ? null : doc.doc_id)}
-                title={`${doc.filename}${doc.company ? ` — ${doc.company}` : ''}`}
-                aria-expanded={isOpen}
-              >
-                <Icon name="doc" size={13} />
-                <span className="chip__label">{label}</span>
-
-                {/* Both counts are reasons NOT to trust a silence in the answer,
-                    so they sit on the chip rather than behind a click. */}
-                {withheld > 0 && (
-                  <span className="chip__badge" title={`${withheld} figure(s) withheld as unreadable`}>
-                    {withheld}
-                  </span>
-                )}
-                {unavailable > 0 && (
-                  <span
-                    className="chip__badge is-muted"
-                    title={`${unavailable} lookup(s) cannot work on this document`}
-                  >
-                    !
-                  </span>
-                )}
-              </button>
-
-              {/* Separate from the chip's own click, which toggles the inline
-                  quality report above -- this opens the fuller document pane
-                  instead, and the two are deliberately different actions on
-                  the same chip rather than one click doing double duty. */}
-              {onView && (
-                <button
-                  type="button"
-                  className="chip__view"
-                  onClick={() => onView(doc)}
-                  title="View the processed pages"
-                  aria-label={`View ${doc.filename}`}
-                >
-                  <Icon name="eye" size={12} />
-                </button>
-              )}
-
+        return (
+          <article key={doc.doc_id} className="docchip">
+            <header className="docchip__head">
+              <Icon name="doc" size={15} className="docchip__icon" />
+              <span className="docchip__file" title={doc.filename}>{doc.filename}</span>
+              <span className="docchip__meta">
+                {[doc.company, doc.financial_year && `FY ${doc.financial_year}`,
+                  doc.pages && plural(doc.pages, 'page', 'pages'),
+                  doc.tables != null && plural(doc.tables, 'table', 'tables')]
+                  .filter(Boolean).join(' · ')}
+              </span>
               {onDelete && (
-                <button
-                  type="button"
-                  className="chip__del"
-                  onClick={() => {
-                    if (isOpen) setOpenId(null);
-                    onDelete(doc.doc_id);
-                  }}
-                  title="Remove this document from the conversation"
-                  aria-label={`Remove ${doc.filename}`}
-                >
-                  <Icon name="trash" size={12} />
+                <button type="button" className="docchip__del" aria-label={`Remove ${doc.filename}`}
+                        title="Remove this document from the conversation"
+                        onClick={() => { if (openId === doc.doc_id) setOpenId(null); onDelete(doc.doc_id); }}>
+                  <Icon name="trash" size={13} />
                 </button>
               )}
-            </span>
-          );
-        })}
+            </header>
 
-        <span className="chips__note">
-          held in memory for this conversation only
-        </span>
-      </div>
+            <div className="docchip__pills">
+              <span className={`pill ${GRADE_TONE[grade] || 'pill--mute'}`}>
+                Scan quality: {grade || 'unknown'}
+                {doc.low_grade && doc.low_grade !== grade && <> · weakest {doc.low_grade}</>}
+              </span>
+              {doc.tables === 0 && <span className="pill pill--mute">0 tables — text only</span>}
+              {withheld > 0 && (
+                <span className="pill pill--err">
+                  <Icon name="alert" size={12} /> {plural(withheld, 'figure', 'figures')} withheld
+                </span>
+              )}
+              {recovered > 0 && <span className="pill pill--warn">{recovered} recovered</span>}
+              {footing > 0 && (
+                <span className="pill pill--warn">
+                  {plural(footing, 'total', 'totals')} did not foot
+                </span>
+              )}
+              {entered > 0 && <span className="pill pill--gold">{entered} entered by you</span>}
+            </div>
+
+            <div className="docchip__actions">
+              {onView && (
+                <button type="button" className="btn btn--ghost btn--sm" onClick={() => onView(doc)}>
+                  <Icon name="eye" size={13} /> Open pages
+                </button>
+              )}
+              <button type="button" className="btn btn--ghost btn--sm"
+                      aria-expanded={openId === doc.doc_id}
+                      onClick={() => setOpenId(openId === doc.doc_id ? null : doc.doc_id)}>
+                Quality report
+              </button>
+            </div>
+          </article>
+        );
+      })}
 
       {open && (
-        <div className="chips__detail">
-          <QualityReport doc={open} />
-        </div>
+        <QualityReport
+          doc={open}
+          retentionDays={retentionDays}
+          onClose={() => setOpenId(null)}
+          onOpenPages={onView ? () => { setOpenId(null); onView(open); } : undefined}
+          onEnter={onView ? (cell) => { setOpenId(null); onView(open, cell); } : undefined}
+        />
       )}
     </div>
   );

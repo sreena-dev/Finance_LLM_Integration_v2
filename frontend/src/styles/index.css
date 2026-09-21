@@ -1,68 +1,113 @@
 /* ==========================================================================
    Artha.AI — design tokens and base styles.
    Light theme only, by product decision: audit reviewers work alongside
-   printed statements, so the UI is deliberately paper-like.
+   printed statements, so the UI is deliberately paper-like. Values follow
+   "Artha.AI Frontend Design" (board 08, Foundations). The older token names
+   (navy-*, ink-*, ok/warn/err-*, gold-*, radius*, shadow-*) are kept and
+   re-pointed at the new palette so every existing component re-themes without
+   being edited; the design's own names (paper, line, ink, ink-2, ink-3) are
+   added beside them.
    ========================================================================== */
 
 :root {
-  /* Brand */
-  --navy-900: #0f2136;
-  --navy-800: #16324f;
-  --navy-700: #1e3a5f;
-  --navy-600: #2c5282;
-  --navy-100: #e3ecf6;
-  --navy-50:  #f2f7fc;
+  /* Paper and lines */
+  --paper:   #faf8f3;   /* page ground, warm off-white */
+  --paper-2: #f3f0e7;   /* rails, table headers, strips */
+  --line:    #e5e0d3;   /* hairlines */
+  --line-2:  #d3ccbb;   /* control borders */
 
-  --gold-700: #8a6508;
-  --gold-600: #b8860b;
-  --gold-100: #f6ecd2;
+  /* Ink. --ink-3 is the lightest allowed for small text (>= 4.5:1 on paper). */
+  --ink:   #1b2333;
+  --ink-2: #465063;
+  --ink-3: #5f6883;
 
-  /* Neutrals */
-  --ink-900: #101720;
-  --ink-800: #1d2733;
-  --ink-700: #33404f;
-  --ink-600: #52616f;
-  --ink-500: #6f7d8c;
-  --ink-400: #97a3b0;
-  --ink-300: #c3cbd4;
-  --ink-200: #e0e5ea;
-  --ink-100: #eef1f4;
-  --ink-50:  #f7f9fb;
+  /* Brand — navy for headings, primary actions and focus */
+  --navy-900: #0b1836;
+  --navy-800: #0f2049;
+  --navy-700: #14285a;   /* the design's "navy" */
+  --navy-600: #1f3a7a;
+  --navy-100: #e9edf7;   /* tint: user bubbles, info notices */
+  --navy-50:  #f3f5fb;
+
+  /* Gold — secondary accent; reserved for figures a person entered */
+  --gold-700: #6f500f;
+  --gold-600: #b8892b;
+  --gold-100: #f8f0dc;
+
+  /* Neutrals (legacy scale, re-pointed at the warm palette) */
+  --ink-900: #1b2333;
+  --ink-800: #232c3f;
+  --ink-700: #465063;
+  --ink-600: #556079;
+  --ink-500: #5f6883;
+  --ink-400: #69708a;
+  --ink-300: #d3ccbb;
+  --ink-200: #e5e0d3;
+  --ink-100: #f3f0e7;
+  --ink-50:  #f8f6ef;
   --white:   #ffffff;
 
   /* Semantic */
-  --ok-600: #1f7a4d;
-  --ok-100: #e2f4ea;
-  --warn-600: #9a6b06;
-  --warn-100: #fdf1d8;
-  --err-600: #b3261e;
-  --err-100: #fbe6e4;
+  --ok-600: #1e7a4c;
+  --ok-100: #e3f3ea;
+  --warn-600: #8f5200;
+  --warn-100: #fcf1da;
+  --err-600: #b42318;
+  --err-100: #fbe9e7;
+
+  /* Tiny accents only (a dot, a hairline). Never a flag banner. */
+  --saffron: #e07b2a;
+  --india-green: #1f7a3f;
 
   /* Surfaces */
-  --bg: #f4f6f9;
+  --bg: var(--paper);
   --surface: var(--white);
-  --border: var(--ink-200);
-  --border-strong: var(--ink-300);
+  --border: var(--line);
+  --border-strong: var(--line-2);
 
   /* Type */
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
-  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
-  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+  --font-sans: "Noto Sans", "Noto Sans Devanagari", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-serif: "Source Serif 4", "Noto Serif Devanagari", "Iowan Old Style", Georgia, serif;
+  --font-mono: "IBM Plex Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
 
   /* Elevation — low and soft; this is a document tool, not a dashboard */
-  --shadow-xs: 0 1px 2px rgba(16, 23, 32, 0.05);
-  --shadow-sm: 0 1px 3px rgba(16, 23, 32, 0.07), 0 1px 2px rgba(16, 23, 32, 0.04);
-  --shadow-md: 0 4px 12px rgba(16, 23, 32, 0.07), 0 1px 3px rgba(16, 23, 32, 0.05);
-  --shadow-lg: 0 12px 32px rgba(16, 23, 32, 0.10), 0 2px 8px rgba(16, 23, 32, 0.05);
+  --shadow-xs: 0 1px 2px rgba(27, 35, 51, 0.06);
+  --shadow-sm: 0 1px 2px rgba(27, 35, 51, 0.06);
+  --shadow-md: 0 4px 14px rgba(27, 35, 51, 0.08);
+  --shadow-lg: 0 12px 32px rgba(27, 35, 51, 0.16);
 
+  /* Shape: 6 inputs and cells, 8 buttons, 10 cards */
   --radius-sm: 6px;
-  --radius: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 18px;
+  --radius: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
 
-  --sidebar-w: 268px;
-  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Space scale */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* Layout */
+  --sidebar-w: 232px;
+  --rail-w: 64px;
+  --pane-w: 42%;
+  --reading-w: 820px;
+
+  /* Motion */
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-settle: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-slide: cubic-bezier(0.3, 0.7, 0.2, 1);
+
+  /* Interaction target: 36-40 on desktop, 44 on coarse pointers */
+  --target: 38px;
+}
+
+@media (pointer: coarse) {
+  :root { --target: 44px; }
 }
 
 * { box-sizing: border-box; }
@@ -71,14 +116,19 @@ html, body, #root { height: 100%; }
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--ink-800);
+  background-color: var(--paper);
+  /* A 24px dot grid at 5%, behind everything: the "paper" feel. */
+  background-image: radial-gradient(rgba(27, 35, 51, 0.05) 1px, transparent 1.2px);
+  background-size: 24px 24px;
+  color: var(--ink);
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
+
+h1, h2, h3 { font-family: var(--font-serif); color: var(--navy-700); }
 
 button, input, select, textarea { font: inherit; color: inherit; }
 
@@ -113,6 +163,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 /* ── Shared primitives ──────────────────────────────────────────────────── */
 
+/* Status pills are the only status vocabulary: neutral, navy, ok, warn, err.
+   Gold is reserved for a figure a person entered. */
 .pill {
   display: inline-flex;
   align-items: center;
@@ -127,8 +179,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .pill--ok   { background: var(--ok-100);   color: var(--ok-600); }
 .pill--warn { background: var(--warn-100); color: var(--warn-600); }
 .pill--err  { background: var(--err-100);  color: var(--err-600); }
-.pill--mute { background: var(--ink-100);  color: var(--ink-600); }
+.pill--mute { background: var(--ink-100);  color: var(--ink-600); border: 1px solid var(--line); }
 .pill--navy { background: var(--navy-100); color: var(--navy-700); }
+.pill--gold { background: var(--gold-100); color: var(--gold-700); }
 
 .dot { width: 6px; height: 6px; border-radius: 99px; background: currentColor; flex: none; }
 
@@ -137,7 +190,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 9px 18px;
+  min-height: var(--target);
+  padding: 8px 18px;
   border: 1px solid transparent;
   border-radius: var(--radius);
   font-size: 13.5px;
@@ -150,21 +204,27 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:disabled { cursor: not-allowed; opacity: 0.55; }
 
+/* Primary: a faint gradient, and it lifts 1px on hover. */
 .btn--primary {
-  background: var(--navy-700);
+  background: linear-gradient(180deg, var(--navy-600), var(--navy-700));
   color: var(--white);
   box-shadow: var(--shadow-sm);
 }
-.btn--primary:hover:not(:disabled) { background: var(--navy-800); box-shadow: var(--shadow-md); }
+.btn--primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--navy-700), var(--navy-800));
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
 
 .btn--ghost {
   background: var(--surface);
-  border-color: var(--border);
+  border-color: var(--line-2);
   color: var(--ink-700);
 }
-.btn--ghost:hover:not(:disabled) { background: var(--ink-50); border-color: var(--border-strong); }
+.btn--ghost:hover:not(:disabled) { background: var(--paper-2); border-color: var(--ink-400); }
 
-.btn--sm { padding: 5px 11px; font-size: 12.5px; border-radius: var(--radius-sm); }
+.btn--sm { min-height: 32px; padding: 5px 11px; font-size: 12.5px; border-radius: var(--radius-sm); }
+@media (pointer: coarse) { .btn--sm { min-height: 44px; } }
 
 .card {
   background: var(--surface);
@@ -172,6 +232,59 @@ button, input, select, textarea { font: inherit; color: inherit; }
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
 }
+
+/* Section label: small caps with a 16px gold tick before it. */
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 var(--sp-2);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.section-label::before {
+  content: "";
+  width: 16px;
+  height: 2px;
+  background: var(--gold-600);
+  flex: none;
+}
+
+/* Figures: mono, tabular, right-aligned in tables. */
+.num, .fig {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The four states of a figure. Each carries a colour AND a text label
+   (colour is never the only signal). Plain verified figures use no class. */
+.fig {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.fig__label {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0 4px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  line-height: 1.5;
+}
+.fig--unreadable { background: var(--err-100);  color: var(--err-600); }
+.fig--recovered  { background: var(--warn-100); color: var(--warn-600); }
+.fig--you        { background: var(--gold-100); color: var(--gold-700); }
+.fig--withheld   { background: var(--err-100);  color: var(--err-600); }
 
 .spin { animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

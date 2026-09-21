@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Icon from '../common/Icon';
 import Markdown from '../common/Markdown';
 import { fsDocumentPages, fsEditCell, fsPageImage, fsPageText } from '../../api/client';
+import { FIGURE_LABELS, parseFigureCell } from '../../lib/figures';
+import { groupIndian } from '../../lib/indian';
 import './DocumentPane.css';
 
 /**
@@ -9,19 +11,23 @@ import './DocumentPane.css';
  *
  * `CitationViewer` shows a single table's cropped scan region, reached from a
  * citation. This is the wider version: the whole document, reached from a
- * document chip, so a reader can page through what OCR actually saw rather
- * than checking one figure at a time. The scanned page image is the default
- * view; a toggle switches the same page to what was extracted from it
- * (narrative chunks and verified tables), so the reader can compare the two.
+ * document card, so a reader can page through what OCR actually saw rather than
+ * checking one figure at a time. The scanned page image is the default view; a
+ * toggle switches the same page to what was extracted from it (narrative chunks
+ * and verified tables), so the reader can compare the two.
  *
- * Docked as a persistent right-hand pane rather than a modal — App.jsx wraps
- * this and `ChatView` in a flex row, so it sits beside the conversation
- * instead of covering it. Exit animation is deliberately absent, same
- * reasoning `CitationViewer` already documents: App.jsx's `.main__pane` has no
- * `AnimatePresence` around it (a nested one deadlocked previously), and this
- * pane lives inside that same wrapper.
+ * Docked as a persistent right-hand pane rather than a modal -- App.jsx wraps
+ * this and `ChatView` in a flex row, so it sits beside the conversation instead
+ * of covering it (and becomes a full-width overlay under 900px). Exit animation
+ * is deliberately absent: App.jsx's `.main__pane` has no `AnimatePresence`
+ * around it (a nested one deadlocked previously), and this pane lives inside
+ * that same wrapper.
+ *
+ * `focus` is a cell to open straight away in the editor -- `{ page_no,
+ * table_id, row_index, col_index }`, from the quality drawer's Enter / Review
+ * buttons.
  */
-export default function DocumentPane({ mode, conversationId, doc, onClose }) {
+export default function DocumentPane({ mode, conversationId, doc, focus = null, onClose }) {
   const [pageNos, setPageNos] = useState([]);
   const [pageNo, setPageNo] = useState(null);
   const [manifestError, setManifestError] = useState(null);
@@ -51,40 +57,56 @@ export default function DocumentPane({ mode, conversationId, doc, onClose }) {
     return () => { cancelled = true; };
   }, [mode, conversationId, docId]);
 
+  // A focus target jumps to its page in the Text view, where the editor lives.
+  useEffect(() => {
+    if (!focus || pageNos.length === 0) return;
+    const target = pageNos.includes(focus.page_no) ? focus.page_no : null;
+    if (target != null) {
+      setPageNo(target);
+      setViewMode('text');
+    }
+  }, [focus, pageNos]);
+
   const index = pageNos.indexOf(pageNo);
   const goPrev = useCallback(() => { if (index > 0) setPageNo(pageNos[index - 1]); }, [index, pageNos]);
   const goNext = useCallback(() => {
     if (index >= 0 && index < pageNos.length - 1) setPageNo(pageNos[index + 1]);
   }, [index, pageNos]);
 
+  // "Next is page 63 (62 was blank and skipped)": say so when numbers jump.
+  const next = index >= 0 ? pageNos[index + 1] : null;
+  const skipped = next != null && pageNo != null ? next - pageNo - 1 : 0;
+
+  const withheld = (doc?.quality?.unreadable_cells || []).filter((c) => c.recovered_text == null).length;
+
   return (
     <div className="docpane">
       <header className="docpane__head">
-        <Icon name="doc" size={15} />
-        <span className="docpane__title" title={doc?.filename}>{doc?.filename || 'Document'}</span>
-        <div className="docpane__toggle" role="tablist" aria-label="View">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={viewMode === 'image'}
-            className={viewMode === 'image' ? 'is-active' : ''}
-            onClick={() => setViewMode('image')}
-          >
-            Image
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={viewMode === 'text'}
-            className={viewMode === 'text' ? 'is-active' : ''}
-            onClick={() => setViewMode('text')}
-          >
-            Text
-          </button>
+        <div className="docpane__headtop">
+          <Icon name="doc" size={15} />
+          <div className="docpane__titles">
+            <span className="docpane__title" title={doc?.filename}>{doc?.filename || 'Document'}</span>
+            <span className="docpane__sub">
+              {[doc?.company, doc?.financial_year && `FY ${doc.financial_year}`].filter(Boolean).join(' · ')}
+            </span>
+          </div>
+          <button type="button" className="docpane__close" onClick={onClose} aria-label="Close">×</button>
         </div>
-        <button type="button" className="docpane__close" onClick={onClose} aria-label="Close">
-          ×
-        </button>
+        <div className="docpane__headrow">
+          <div className="docpane__toggle" role="tablist" aria-label="View">
+            <button type="button" role="tab" aria-selected={viewMode === 'image'}
+                    className={viewMode === 'image' ? 'is-active' : ''}
+                    onClick={() => setViewMode('image')}>Image</button>
+            <button type="button" role="tab" aria-selected={viewMode === 'text'}
+                    className={viewMode === 'text' ? 'is-active' : ''}
+                    onClick={() => setViewMode('text')}>Text</button>
+          </div>
+          <div className="docpane__pills">
+            {withheld > 0 && <span className="pill pill--err">{withheld} unreadable</span>}
+            {(doc?.recovered_cells || 0) > 0 && <span className="pill pill--warn">{doc.recovered_cells} recovered</span>}
+            <span className="pill pill--gold">{doc?.user_entered_cells || 0} entered by you</span>
+          </div>
+        </div>
       </header>
 
       <div className="docpane__body">
@@ -95,25 +117,34 @@ export default function DocumentPane({ mode, conversationId, doc, onClose }) {
         {!manifestError && pageNo != null && (
           viewMode === 'image'
             ? <PageImage mode={mode} conversationId={conversationId} docId={docId} pageNo={pageNo} />
-            : <PageText mode={mode} conversationId={conversationId} docId={docId} pageNo={pageNo} />
+            : (
+              <PageText
+                mode={mode} conversationId={conversationId} docId={docId} pageNo={pageNo}
+                focus={focus && focus.page_no === pageNo ? focus : null}
+                onSwitchToImage={() => setViewMode('image')}
+              />
+            )
         )}
       </div>
 
       {pageNos.length > 0 && (
         <footer className="docpane__nav">
-          <button type="button" onClick={goPrev} disabled={index <= 0} aria-label="Previous page">
-            <Icon name="chevron" size={14} className="docpane__nav-prev" />
+          <button type="button" className="btn btn--ghost btn--sm" onClick={goPrev} disabled={index <= 0}
+                  aria-label="Previous page">
+            <Icon name="chevron" size={14} className="docpane__nav-prev" /> Previous
           </button>
           <span className="docpane__nav-label">
-            Page {pageNo} · {index + 1} of {pageNos.length}
+            <strong>Page {pageNo}, {index + 1} of {pageNos.length}</strong>
+            {next != null && (
+              <small>
+                Next is page {next}
+                {skipped > 0 && ` (${skipped === 1 ? `${pageNo + 1} was` : `${skipped} pages were`} blank and skipped)`}
+              </small>
+            )}
           </span>
-          <button
-            type="button"
-            onClick={goNext}
-            disabled={index < 0 || index >= pageNos.length - 1}
-            aria-label="Next page"
-          >
-            <Icon name="chevron" size={14} className="docpane__nav-next" />
+          <button type="button" className="btn btn--ghost btn--sm" onClick={goNext}
+                  disabled={index < 0 || index >= pageNos.length - 1} aria-label="Next page">
+            Next <Icon name="chevron" size={14} className="docpane__nav-next" />
           </button>
         </footer>
       )}
@@ -155,7 +186,7 @@ function PageImage({ mode, conversationId, docId, pageNo }) {
 }
 
 /** The reconstructed narrative and verified tables for one page. */
-function PageText({ mode, conversationId, docId, pageNo }) {
+function PageText({ mode, conversationId, docId, pageNo, focus, onSwitchToImage }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   // Bumped after a saved edit to force the effect below to refetch. A local
@@ -182,7 +213,17 @@ function PageText({ mode, conversationId, docId, pageNo }) {
 
   const { narrative = [], tables = [] } = data;
   if (narrative.length === 0 && tables.length === 0) {
-    return <p className="docpane__empty">Nothing was extracted from this page.</p>;
+    return (
+      <div className="docpane__note" role="status">
+        <Icon name="info" size={16} />
+        <span>
+          No text could be read on this page.{' '}
+          <button type="button" className="docpane__link" onClick={onSwitchToImage}>
+            Switch to Image to view the scan.
+          </button>
+        </span>
+      </div>
+    );
   }
 
   return (
@@ -201,6 +242,7 @@ function PageText({ mode, conversationId, docId, pageNo }) {
             docId={docId}
             pageNo={pageNo}
             table={table}
+            focus={focus}
             onSaved={() => setRefreshKey((k) => k + 1)}
           />
         ) : (
@@ -219,6 +261,10 @@ function splitRow(line) {
   return s.split('|').map((c) => c.trim());
 }
 
+/** Does a finding's table id (short, "t1_1") name this stored table ("up_x_t1_1")? */
+const sameTable = (stored, wanted) =>
+  Boolean(wanted) && (stored === wanted || String(stored).endsWith(`_${wanted}`));
+
 /**
  * One financial table with cells the extraction flagged as `[unreadable
  * ...]` or `[recovered ...]` (or already `[user-entered]`) rendered as
@@ -227,16 +273,22 @@ function splitRow(line) {
  *
  * Only ever rendered for a table `page_text` returned a non-empty `cells`
  * array for -- everything else (the overwhelming majority of tables) stays
- * on the plain `<Markdown>` path, unchanged.
+ * on the plain `<Markdown>` path, unchanged. Extracted figures are shown
+ * exactly as printed; only a figure a person typed is echoed with Indian
+ * grouping.
  */
-export function EditableTable({ mode, conversationId, docId, pageNo, table, onSaved }) {
+export function EditableTable({ mode, conversationId, docId, pageNo, table, focus = null, onSaved }) {
   const lines = (table.table_md || '').split('\n');
   const header = splitRow(lines[0] || '');
   const rows = lines.slice(2).map(splitRow);
   const cellMap = new Map((table.cells || []).map((c) => [`${c.row_index}:${c.col_index}`, c]));
 
-  const [editingKey, setEditingKey] = useState(null); // "row:col" or null
+  const initialKey = focus && sameTable(table.table_id, focus.table_id)
+    && cellMap.has(`${focus.row_index}:${focus.col_index}`)
+    ? `${focus.row_index}:${focus.col_index}` : null;
+  const [editingKey, setEditingKey] = useState(initialKey);
   const [showScan, setShowScan] = useState(false);
+  const [savedKey, setSavedKey] = useState(null);
   const triggerRefs = useRef({});
 
   const closeEditor = useCallback((key) => {
@@ -258,11 +310,12 @@ export function EditableTable({ mode, conversationId, docId, pageNo, table, onSa
           </thead>
           <tbody>
             {rows.map((row, r) => (
-              <tr key={r}>
+              <tr key={r} className={/^\s*(total|totai)\b/i.test(row[0] || '') ? 'md__total' : undefined}>
                 {row.map((text, c) => {
                   const key = `${r}:${c}`;
                   const cell = cellMap.get(key);
-                  if (!cell) return <td key={c}>{text}</td>;
+                  if (!cell) return <td key={c} className={c > 0 && /^[(\-]?[\d,.]+\)?$/.test(text) ? 'md__num' : undefined}>{text}</td>;
+                  const { value } = parseFigureCell(text);
                   const label = `${
                     cell.state === 'unreadable' ? 'Unreadable'
                       : cell.state === 'recovered' ? 'Recovered, unconfirmed'
@@ -270,18 +323,20 @@ export function EditableTable({ mode, conversationId, docId, pageNo, table, onSa
                   } figure, row ${cell.row_label || r + 1}, column ${cell.column || c + 1}. Press to ${
                     cell.state === 'user_entered' ? 'edit or revert' : 'enter'
                   }.`;
+                  const kind = cell.state === 'user_entered' ? 'you' : cell.state;
                   return (
-                    <td key={c}>
+                    <td key={c} className="md__num">
                       <button
                         type="button"
                         ref={(el) => { triggerRefs.current[key] = el; }}
-                        className={`docpane__cellbtn docpane__cellbtn--${cell.state}`}
+                        className={`fig fig--${kind} docpane__cellbtn ${savedKey === key ? 'is-saved' : ''}`}
                         aria-haspopup="dialog"
                         aria-expanded={editingKey === key}
                         aria-label={label}
                         onClick={() => { setEditingKey(key); setShowScan(false); }}
                       >
-                        {text}
+                        <span className="fig__label">{FIGURE_LABELS[kind]}</span>
+                        {value && <span>{kind === 'you' ? groupIndian(value) : value}</span>}
                       </button>
                     </td>
                   );
@@ -293,6 +348,7 @@ export function EditableTable({ mode, conversationId, docId, pageNo, table, onSa
       </div>
       {editing && (
         <CellEditor
+          key={`${editingKey}:${editing.state}`}
           mode={mode}
           conversationId={conversationId}
           docId={docId}
@@ -305,18 +361,49 @@ export function EditableTable({ mode, conversationId, docId, pageNo, table, onSa
           showScan={showScan}
           onToggleScan={() => setShowScan((v) => !v)}
           onClose={() => closeEditor(editingKey)}
-          onSaved={() => { onSaved(); closeEditor(editingKey); }}
+          onSaved={() => {
+            setSavedKey(editingKey);
+            setTimeout(() => setSavedKey(null), 900);
+            onSaved();
+          }}
         />
       )}
     </div>
   );
 }
 
+/** A refusal from the server, in plain words. `typed` is never discarded. */
+function refusalText(err) {
+  switch (err.code) {
+    case 'not_editable':
+      return {
+        title: 'Not editable.',
+        body: 'This figure was read and verified from the scan, so it can’t be changed here. If it looks wrong, say so in the chat.',
+      };
+    case 'cell_changed':
+      return {
+        title: 'Changed by someone else.',
+        body: 'This figure was changed after you opened the page. Reload to see the latest value, then try again.',
+        reload: true,
+      };
+    case 'bad_value':
+      return {
+        title: 'Not an amount.',
+        body: 'Try 12,859 or 1,50,000.50, or (5,000) for a negative. A blank means “enter a figure”.',
+      };
+    case 'bad_coordinates':
+      return { title: 'That cell can’t be found.', body: 'The table changed. Reload the page and try again.', reload: true };
+    default:
+      return { title: 'Could not save.', body: err.message };
+  }
+}
+
 /**
- * The inline editor for one flagged cell: the recovered value and
+ * The inline editor for one flagged cell (board 05): the recovered value and
  * confidence when there is one, a labelled amount input, Save / Confirm /
- * Revert as the cell's state allows, and an optional inset of the scan for
- * this page so the reader doesn't have to leave the Text tab to check it.
+ * Revert as the cell's state allows, the advisory footing result, plain refusals,
+ * and an optional inset of the scan for this page so the reader does not have to
+ * leave the Text tab to check it.
  */
 function CellEditor({
   mode, conversationId, docId, pageNo, tableId, rowIndex, colIndex, cell,
@@ -328,8 +415,9 @@ function CellEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const dialogRef = useRef(null);
+  const inputRef = useRef(null);
 
-  useEffect(() => { dialogRef.current?.focus(); }, []);
+  useEffect(() => { (inputRef.current || dialogRef.current)?.focus(); }, []);
 
   const run = useCallback(async (action, actionValue) => {
     setSaving(true);
@@ -341,14 +429,16 @@ function CellEditor({
       });
       onSaved();
     } catch (e) {
-      setError(e.message);
+      setError(e);
     } finally {
       setSaving(false);
     }
   }, [mode, conversationId, docId, tableId, rowIndex, colIndex, currentCellText, onSaved]);
 
+  const refusal = error ? refusalText(error) : null;
+  const footing = cell.edit?.footing;
+
   return (
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
     <div
       className="docpane__editor"
       role="dialog"
@@ -359,16 +449,18 @@ function CellEditor({
       onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
     >
       <div className="docpane__editor-head">
-        <strong>{cell.row_label || 'Row'}</strong>
-        <span className="docpane__editor-col">{cell.column}</span>
+        <div>
+          <strong>{cell.row_label || 'Row'}</strong>
+          <span className="docpane__editor-col">Column: {cell.column}</span>
+        </div>
         <button type="button" className="docpane__editor-close" onClick={onClose} aria-label="Close editor">×</button>
       </div>
 
       {cell.state === 'recovered' && (
-        <p className="docpane__editor-hint">
-          A second read of the scan shows <strong>{cell.recovered_text}</strong>
+        <p className="docpane__editor-hint is-warn">
+          A second read of the scan shows <strong className="num">{cell.recovered_text}</strong>
           {cell.confidence ? ` (confidence: ${cell.confidence})` : ''}, not confirmed by this
-          column's own arithmetic.
+          column’s arithmetic.
         </p>
       )}
       {cell.state === 'unreadable' && (
@@ -376,50 +468,74 @@ function CellEditor({
       )}
       {cell.state === 'user_entered' && (
         <p className="docpane__editor-hint">
-          Entered by {cell.edit?.by || 'a user'}. Originally {cell.edit?.original_marker
-            ? 'unreadable or recovered' : 'unreadable'} before that.
+          <span className="pill pill--gold">Entered by you</span>{' '}
+          <span className="docpane__editor-orig">
+            Original marker: {cell.edit?.original_marker?.startsWith('[recovered') ? 'recovered' : 'unreadable'}
+          </span>
         </p>
-      )}
-      {cell.edit?.footing?.verdict === 'does_not_tie' && (
-        <p className="docpane__editor-warn">
-          Not confirmed by this column's arithmetic (simple check): printed total{' '}
-          {cell.edit.footing.printed}, components sum to {cell.edit.footing.computed}.
-        </p>
-      )}
-      {cell.edit?.footing?.verdict === 'ties' && (
-        <p className="docpane__editor-ok">This column's total ties with this figure included.</p>
       )}
 
       <label className="docpane__editor-field">
-        <span>Figure from the scan</span>
-        <input
-          type="text"
-          inputMode="decimal"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          disabled={saving}
-          placeholder="e.g. 12,859 or (5,000)"
-        />
+        <span>Amount in ₹</span>
+        <span className="docpane__editor-input">
+          <span aria-hidden="true">₹</span>
+          <input
+            ref={inputRef}
+            type="text"
+            inputMode="decimal"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            disabled={saving}
+            placeholder="e.g. 1,50,000.50 or (5,000)"
+            aria-invalid={Boolean(refusal)}
+          />
+        </span>
+        <small>Leave blank if you can’t read it. A nil balance is entered as 0.</small>
       </label>
 
-      {error && <p className="docpane__editor-error" role="alert">{error}</p>}
+      {footing?.verdict === 'ties' && (
+        <p className="docpane__editor-ok" role="status">
+          <Icon name="check" size={14} /> This column’s total ties with your figure included.
+        </p>
+      )}
+      {footing?.verdict === 'does_not_tie' && (
+        <p className="docpane__editor-warn" role="status">
+          <Icon name="alert" size={14} />
+          <span>
+            Not confirmed by this column’s arithmetic (simple check). Your figure is kept and
+            labelled as entered by you.
+          </span>
+        </p>
+      )}
+
+      {refusal && (
+        <div className="docpane__editor-error" role="alert">
+          <p><strong>{refusal.title}</strong> {refusal.body}</p>
+          {refusal.reload && (
+            <button type="button" className="btn btn--ghost btn--sm" onClick={onSaved}>
+              <Icon name="refresh" size={13} /> Reload page
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="docpane__editor-actions">
-        <button type="button" disabled={saving || !value.trim()} onClick={() => run('set', value)}>
-          {cell.state === 'user_entered' ? 'Save change' : 'Save'}
+        <button type="button" className="btn btn--primary btn--sm" disabled={saving || !value.trim()}
+                onClick={() => run('set', value)}>
+          Save
         </button>
         {cell.state === 'recovered' && (
-          <button type="button" disabled={saving} onClick={() => run('confirm')}>
+          <button type="button" className="btn btn--ghost btn--sm" disabled={saving} onClick={() => run('confirm')}>
             Confirm recovered value
           </button>
         )}
         {cell.state === 'user_entered' && (
-          <button type="button" className="docpane__editor-danger" disabled={saving} onClick={() => run('revert')}>
+          <button type="button" className="btn btn--ghost btn--sm" disabled={saving} onClick={() => run('revert')}>
             Revert
           </button>
         )}
         <button type="button" className="docpane__editor-ghost" onClick={onToggleScan}>
-          {showScan ? 'Hide scan for this page' : 'Show scan for this page'}
+          <Icon name="search" size={13} /> {showScan ? 'Hide scan for this page' : 'Show scan for this page'}
         </button>
       </div>
 
