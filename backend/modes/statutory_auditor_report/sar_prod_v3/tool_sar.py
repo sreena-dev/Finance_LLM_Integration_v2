@@ -369,12 +369,47 @@ class FetchTools:
 
                 # statement_scope: intentionally not filtered on — see docstring.
 
+                # Priority ordering: rows that matched a curated heading/
+                # regulation route (e.g. "%emphasis of matter%") must outrank
+                # rows that only matched the broad, recall-oriented tsquery
+                # OR-expression. Without this, ORDER BY page_pdf_start ASC +
+                # LIMIT silently drops the real heading matches whenever
+                # generic tsquery hits from earlier pages (the word "matter"
+                # alone appears dozens of times before the Independent
+                # Auditors' Report even starts) fill the LIMIT first.
+                priority_clauses = []
+                priority_params: list[Any] = []
+                if regulation_patterns:
+                    priority_clauses.append(
+                        " OR ".join(
+                            ["(section ILIKE %s OR title ILIKE %s OR section_breadcrumb::text ILIKE %s)"]
+                            * len(regulation_patterns)
+                        )
+                    )
+                    for p in regulation_patterns:
+                        priority_params.extend([p, p, p])
+                if heading_patterns:
+                    priority_clauses.append(
+                        " OR ".join(
+                            ["(section ILIKE %s OR title ILIKE %s OR section_breadcrumb::text ILIKE %s)"]
+                            * len(heading_patterns)
+                        )
+                    )
+                    for p in heading_patterns:
+                        priority_params.extend([p, p, p])
+
+                final_order_by = order_by
+                if priority_clauses and order_by == "page_pdf_start ASC":
+                    priority_expr = " OR ".join(f"({c})" for c in priority_clauses)
+                    final_order_by = f"(CASE WHEN ({priority_expr}) THEN 0 ELSE 1 END), page_pdf_start ASC"
+                    params = params + priority_params
+
                 where = " AND ".join(conditions)
                 sql = f"""
                     SELECT content, section, title, page_pdf_start, chunk_id, toc_section
                     FROM text_chunks
                     WHERE {where}
-                    ORDER BY {order_by}
+                    ORDER BY {final_order_by}
                     LIMIT {limit}
                 """
                 cur.execute(sql, params)
@@ -423,7 +458,15 @@ class FetchTools:
                 exclude_regulation_patterns=["%CARO%", "%143(3A)%"],
                 statement_scope=scope,
                 toc_patterns=["%auditor%"],
-                limit=80,
+                # A report with both Consolidated and Standalone opinions
+                # repeats every one of the heading_patterns above once per
+                # opinion, so match counts routinely exceed 100 (e.g. 180 for
+                # a real filing). Combined with ORDER BY page_pdf_start ASC —
+                # where NULLS sort last, and a large share of this schema's
+                # chunks have no page number at all — a tight LIMIT here
+                # silently drops the second (usually Standalone) opinion's
+                # text, including its mandatory EoM/KAM closing sentences.
+                limit=250,
             )
 
             if not rows:
@@ -1117,8 +1160,13 @@ class CheckTools:
                 evidence="", risk_rating="Information request only",
             )
         patterns = [
-            r"our\s+opinion\s+(?:on\s+the\s+(?:standalone|consolidated)\s+)?financial\s+statements\s+is\s+not\s+modified",
-            r"not\s+modified\s+in\s+respect\s+of\s+the\s+above\s+matters?",
+            # "statements?" and "(the )?above" — real filings routinely say
+            # "Financial Statement" (singular) and "in respect of above
+            # matters" (no "the"); IRCTC FY24-25 does both, and the earlier
+            # strict versions of these two clauses reported it as a SA 706
+            # departure even though the sentence was present verbatim.
+            r"our\s+opinion\s+(?:on\s+the\s+(?:standalone|consolidated)\s+)?financial\s+statements?\s+is\s+not\s+modified",
+            r"not\s+modified\s+in\s+respect\s+of\s+(?:the\s+)?above\s+matters?",
             r"opinion\s+is\s+not\s+modified\s+in\s+respect",
         ]
         for pattern in patterns:
@@ -1147,6 +1195,54 @@ class CheckTools:
             # FINDING under the lineage rule in observation.py rather than
             # being downgraded to an AUDIT_POINTER for lack of a source trace.
             evidence=(eom_text[:500] + " …") if len(eom_text) > 500 else eom_text,
+            risk_rating="High",
+        )
+
+    @staticmethod
+    def check_kam_auditor_response(kam_items: list[dict]) -> CheckResult:
+        """
+        Checks the SA 701 structural requirement that every Key Audit Matter
+        is paired with a description of how the audit addressed it.
+
+        Unlike check_eom_closing_sentence, this runs against the extractor's
+        structured `key_audit_matters.items[]` (each with a `how_addressed`
+        field — see PROMPT.md) rather than raw text: SA 701's requirement is
+        per-matter, not one closing sentence for the whole section, so there
+        is no single fixed sentence a regex could anchor to the way SA 706.8
+        gives EoM. KAM presence/applicability itself is a separate question,
+        already handled by applicability.resolve_kam_applicability
+        (APPL-KAM-01) — this check only runs once KAM is known to be present.
+        """
+        if not kam_items:
+            return CheckResult(
+                check_id="CHK-KAM-01", tag="AUDIT_POINTER",
+                component="Key Audit Matters — Auditor's Response (SA 701)", passed=False,
+                observation="Key Audit Matters section was marked present but no matters were extracted.",
+                evidence="", risk_rating="Information request only",
+            )
+
+        missing = [
+            (item.get("title") or f"item {i + 1}").strip() or f"item {i + 1}"
+            for i, item in enumerate(kam_items)
+            if not (item.get("how_addressed") or "").strip()
+        ]
+        if not missing:
+            titles = "; ".join((item.get("title") or "").strip() for item in kam_items if item.get("title"))
+            return CheckResult(
+                check_id="CHK-KAM-01", tag="FINDING",
+                component="Key Audit Matters — Auditor's Response (SA 701)", passed=True,
+                observation="Every key audit matter is paired with a description of how the audit addressed it, per SA 701.",
+                evidence=titles or f"{len(kam_items)} key audit matter(s) verified.",
+            )
+        return CheckResult(
+            check_id="CHK-KAM-01", tag="FINDING",
+            component="Key Audit Matters — Auditor's Response (SA 701)", passed=False,
+            observation=(
+                f"{len(missing)} of {len(kam_items)} key audit matter(s) have no 'how our audit "
+                f"addressed the matter' description extracted: {', '.join(missing)}. SA 701 requires "
+                f"each key audit matter to be paired with a description of the auditor's response."
+            ),
+            evidence=", ".join(missing),
             risk_rating="High",
         )
 

@@ -264,6 +264,12 @@ def _semantic_text_search(doc_ids: List[str], query: str, pool: int) -> List[Dic
         conn.close()
 
 
+def _matches_heading(text: str, patterns: List[str]) -> bool:
+    """True if `text` satisfies any of the SQL ILIKE '%phrase%' patterns."""
+    t = (text or "").lower()
+    return any(p.strip("%").lower() in t for p in patterns)
+
+
 def _keyword_text_search(doc_ids: List[str], query: str, pool: int) -> List[Dict]:
     """Heading + full-text fallback via FetchTools._fetch_text_chunks (per doc)."""
     heading_pats = _heading_patterns(query)
@@ -285,13 +291,22 @@ def _keyword_text_search(doc_ids: List[str], query: str, pool: int) -> List[Dict
             content, section, title, page, chunk_id, toc = row
             if not (content or "").strip():
                 continue
+            # A row that hit a curated heading route (e.g. "%emphasis of
+            # matter%") is a precise structural match for a named section —
+            # score it above a typical semantic hit so it isn't squeezed out
+            # of the top-K by unrelated-but-similar-sounding embedding
+            # matches. Rows that only satisfied the generic tsquery fallback
+            # stay low-confidence.
+            is_heading_hit = bool(heading_pats) and _matches_heading(
+                f"{section} {title} {toc}", heading_pats
+            )
             out.append(
                 {
                     "section": section or title or toc or "Unknown",
                     "page": page or 0,
                     "kind": "text",
                     "content": content or "",
-                    "score": 0.5,  # unranked; below any real cosine hit
+                    "score": 0.8 if is_heading_hit else 0.5,
                     "chunk_id": chunk_id,
                 }
             )

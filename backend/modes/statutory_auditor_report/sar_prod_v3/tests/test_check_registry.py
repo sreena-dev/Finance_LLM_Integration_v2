@@ -33,7 +33,7 @@ def test_no_unregistered_check_ids_in_live_modules():
     not editing check_registry.py's static entries and hoping nobody adds a
     check without also registering it."""
     emitted_ids = list(CheckTools._MANDATORY_SECTIONS.keys()) + [
-        "CHK-UDIN-01", "CHK-EOM-01", "CHK-DATE-01",
+        "CHK-UDIN-01", "CHK-EOM-01", "CHK-KAM-01", "CHK-DATE-01",
         "CHK-COH-01", "CHK-COH-02", "CHK-COH-03",
         # Gap-closure Phase 2 (Gap #4 / Gap #3):
         "APPL-CARO-01", "APPL-IFC-01", "APPL-KAM-01",

@@ -92,6 +92,11 @@ _CLASSIFICATION: dict[str, ClassificationMeta] = {
         "sa_framework": _sa("Other", "Reporting Issue", coherence="No"),
         "recommended_action": ["Verify against the signed report whether the mandatory closing sentence is genuinely absent."],
     },
+    "CHK-KAM-01": {  # SA 701 "how our audit addressed" per-matter requirement
+        "consistency_type": "OTHER",
+        "sa_framework": _sa("SA 701", "Reporting Issue", coherence="No"),
+        "recommended_action": ["Verify against the signed report whether the auditor's-response description is genuinely absent for the listed matter(s)."],
+    },
     "CHK-DATE-01": {  # report date vs FS approval date
         "consistency_type": "OTHER",
         "sa_framework": _sa("Other", "Reporting Issue", coherence="No"),

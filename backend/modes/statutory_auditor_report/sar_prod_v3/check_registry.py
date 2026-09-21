@@ -73,6 +73,13 @@ _STATIC_ENTRIES: dict[str, CheckMeta] = {
         applicability_condition="Run only when the report contains an Emphasis of Matter section.",
         severity_default="FINDING",
     ),
+    "CHK-KAM-01": CheckMeta(
+        module="08_eom_other_matter_engine",
+        description="SA 701 requirement that every key audit matter is paired with a description of how the audit addressed it.",
+        source_basis="Source spec §17-adjacent (Emphasis of Matter engine covers this section); SA 701",
+        applicability_condition="Run only when the report contains a Key Audit Matters section (KAM presence/applicability itself is APPL-KAM-01).",
+        severity_default="FINDING",
+    ),
     "CHK-DATE-01": CheckMeta(
         module="18_formal_validation_engine",
         description=(

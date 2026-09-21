@@ -82,6 +82,34 @@ def test_eom_present_without_closing_sentence_raises_high_finding():
     assert eom_obs[0].risk_rating == "High"
 
 
+def test_kam_absent_is_not_applicable_not_a_finding():
+    """KAM applicability itself is APPL-KAM-01's job (resolve_kam_applicability),
+    not this check's — an absent KAM section must not raise CHK-KAM-01."""
+    res = run_formal_checks(_merged(key_audit_matters={"present": False}))
+    assert res["summary"]["kam_auditor_response"] is None
+    assert not any(o.check_id == "CHK-KAM-01" for o in res["observations"])
+
+
+def test_kam_present_all_addressed_passes_and_raises_nothing():
+    res = run_formal_checks(_merged(key_audit_matters={
+        "present": True,
+        "items": [{"title": "Revenue recognition", "how_addressed": "We tested a sample..."}],
+    }))
+    assert res["summary"]["kam_auditor_response"]["passed"] is True
+    assert not any(o.check_id == "CHK-KAM-01" for o in res["observations"])
+
+
+def test_kam_present_missing_how_addressed_raises_high_finding():
+    res = run_formal_checks(_merged(key_audit_matters={
+        "present": True,
+        "items": [{"title": "Revenue recognition", "how_addressed": ""}],
+    }))
+    kam_obs = [o for o in res["observations"] if o.check_id == "CHK-KAM-01"]
+    assert len(kam_obs) == 1
+    assert kam_obs[0].tag == "FINDING"
+    assert kam_obs[0].risk_rating == "High"
+
+
 def test_report_date_before_approval_raises_high_finding():
     res = run_formal_checks(_merged(formal_checks={
         "auditors": [{"udin": VALID_UDIN}],

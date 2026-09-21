@@ -102,6 +102,48 @@ def test_eom_closing_sentence_empty_input_is_audit_pointer():
     assert r.passed is False
 
 
+def test_eom_closing_sentence_accepts_singular_statement_and_missing_the():
+    """Real filings routinely say "Financial Statement" (singular) and "in
+    respect of above matters" (no "the") — IRCTC FY24-25 does both. The
+    stricter original patterns treated this as a SA 706 departure even
+    though the sentence was present verbatim."""
+    text = "Our opinion on the Standalone Financial Statement is not modified in respect of above matters."
+    r = CheckTools.check_eom_closing_sentence(text)
+    assert r.passed is True
+
+
+# ---------------------------------------------------------------------------
+# check_kam_auditor_response — SA 701 per-matter "how addressed" requirement
+# ---------------------------------------------------------------------------
+
+def test_kam_all_items_have_how_addressed_passes():
+    items = [
+        {"title": "Revenue recognition", "how_addressed": "We tested a sample of contracts..."},
+        {"title": "Litigation provisions", "how_addressed": "We obtained legal confirmations..."},
+    ]
+    r = CheckTools.check_kam_auditor_response(items)
+    assert r.passed is True
+    assert r.tag == "FINDING"
+
+
+def test_kam_item_missing_how_addressed_raises_high_finding():
+    items = [
+        {"title": "Revenue recognition", "how_addressed": "We tested a sample of contracts..."},
+        {"title": "Litigation provisions", "how_addressed": ""},
+    ]
+    r = CheckTools.check_kam_auditor_response(items)
+    assert r.passed is False
+    assert r.tag == "FINDING"
+    assert r.risk_rating == "High"
+    assert "Litigation provisions" in r.observation
+
+
+def test_kam_no_items_is_audit_pointer():
+    r = CheckTools.check_kam_auditor_response([])
+    assert r.tag == "AUDIT_POINTER"
+    assert r.passed is False
+
+
 # ---------------------------------------------------------------------------
 # compute_report_date_gap — unchanged behaviour after the _parse refactor
 # ---------------------------------------------------------------------------

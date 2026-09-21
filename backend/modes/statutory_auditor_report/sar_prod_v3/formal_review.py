@@ -12,6 +12,11 @@ sentence, and report-date-before-approval-date were being judged by the
 writer LLM in prose instead of by the deterministic checks the wiki
 specifies for exactly this purpose (source spec §29, §30, §35.1).
 
+`check_kam_auditor_response` (SA 701's per-matter "how our audit addressed
+this key audit matter" requirement) was added later, the same way, once the
+main-text fetch bug that had been hiding real EoM/KAM content from these
+checks was fixed — see GAP_CLOSURE_LOG.md.
+
 This module is the pure-Python glue: it reads the merged extractor JSON,
 calls the right CheckTools methods, and derives the two package-level
 signals the wiki also specifies but the pipeline never computed —
@@ -93,6 +98,24 @@ def _eom_closing_sentence_check(main_json: dict) -> "Any | None":
     return CheckTools.check_eom_closing_sentence(eom_text)
 
 
+def _kam_auditor_response_check(main_json: dict) -> "Any | None":
+    """Runs CheckTools.check_kam_auditor_response — but only when the
+    extractor found a Key Audit Matters section at all. KAM presence itself
+    is not this check's concern: applicability.resolve_kam_applicability
+    (APPL-KAM-01) already covers "no KAM identified" without asserting a
+    finding, since KAM is only mandatory for listed entities and listed
+    status isn't established from this package (source spec §19.1). Running
+    this check on an absent KAM section would raise a redundant/incorrect
+    observation on top of that.
+    """
+    from sar_prod_v3.tool_sar import CheckTools
+
+    kam = main_json.get("key_audit_matters") or {}
+    if not kam.get("present"):
+        return None
+    return CheckTools.check_kam_auditor_response(kam.get("items") or [])
+
+
 def _report_date_sequence_check(formal_checks: dict) -> "Any | None":
     """Runs CheckTools.check_report_date_sequence — only when both dates
     were extracted. Skipped (not AUDIT_POINTER'd) rather than run against
@@ -118,7 +141,8 @@ def run_formal_checks(merged_json: dict) -> dict:
           "summary": {                            # every check's pass/fail, for the memo's
               "udin": {...},                       # 1.3 Opinion/Formal Summary table — see
               "eom_closing_sentence": {...} | None, # agent.build_writer_user_message's new
-              "report_date_sequence": {...} | None, # FORMAL CHECKS SUMMARY block.
+              "kam_auditor_response": {...} | None, # FORMAL CHECKS SUMMARY block.
+              "report_date_sequence": {...} | None,
           },
         }
     """
@@ -126,6 +150,7 @@ def run_formal_checks(merged_json: dict) -> dict:
 
     udin_results = _udin_checks(formal_checks)
     eom_result = _eom_closing_sentence_check(merged_json)
+    kam_result = _kam_auditor_response_check(merged_json)
     date_result = _report_date_sequence_check(formal_checks)
 
     observations: list[Observation] = []
@@ -147,6 +172,13 @@ def run_formal_checks(merged_json: dict) -> dict:
             observations.append(from_check_result(eom_result))
     else:
         summary["eom_closing_sentence"] = None
+
+    if kam_result is not None:
+        summary["kam_auditor_response"] = {"passed": kam_result.passed, "observation": kam_result.observation}
+        if not kam_result.passed:
+            observations.append(from_check_result(kam_result))
+    else:
+        summary["kam_auditor_response"] = None
 
     if date_result is not None:
         summary["report_date_sequence"] = {"passed": date_result.passed, "observation": date_result.observation}
