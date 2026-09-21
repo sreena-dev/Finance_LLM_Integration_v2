@@ -1,16 +1,31 @@
 """Durable artifact plane (MinIO, S3 API via boto3).
 
 Mirrors backend/valkey_client.py's shape: one lazily-built client, small typed
-helpers, graceful degradation. MinIO is a SIDE-CHANNEL durability layer only --
-tools still read/write local paths exclusively (see
-backend/tools/pipeline_tool.py's module docstring on the artifact-only
-communication invariant); nothing here changes what a tool receives as its
-input `*_file` arguments or what it returns in `response["artifacts"]`.
+helpers, graceful degradation.
 
-MINIO_ENABLED defaults to false (unlike Valkey, which defaults to true) --
-this is a genuinely new capability the codebase never had, and a clean local
-checkout should keep working exactly as it does today (local-filesystem-only)
-until an operator explicitly opts in, per the resolved rollout decision.
+Tool-to-tool handoff is UNCHANGED by this module: tools still read/write local
+paths exclusively (see backend/tools/pipeline_tool.py's module docstring on the
+artifact-only communication invariant); nothing here changes what a tool
+receives as its input `*_file` arguments or what it returns in
+`response["artifacts"]` -- that stays local-disk-only, on purpose (rewriting
+every report/canonical-TB writer to talk to MinIO directly would be a much
+larger, riskier change to the pipeline's core contract).
+
+What MinIO IS primary for: generated reports served back to the user via
+GET-equivalent /audit/workbook. router.py's _fetch_report_from_object_store()
+treats local disk there as a fast-path cache, not the source of truth -- when
+it misses (a different backend replica generated the report than the one
+serving this download, or local scratch was reclaimed), it rehydrates from
+MinIO via download_artifact() below. That's the concrete meaning of "primary"
+here: the report is durably retrievable regardless of which replica/restart
+handles the download, not just best-effort backed up.
+
+MINIO_ENABLED defaults to false in code (unlike Valkey, which defaults to
+true) -- a clean local checkout with no MinIO provisioned keeps working
+exactly as before (local-disk-only, /audit/workbook 404s only if the exact
+replica that generated a report doesn't still have it locally). An operator
+who wants reports to survive across replicas/restarts sets TB_MINIO_ENABLED=true
+with real credentials; nothing else changes.
 """
 
 import hashlib
@@ -130,11 +145,14 @@ def upload_artifact(local_path: str, session_id: str, tool_name: str) -> Artifac
 
 
 def download_artifact(storage_uri: str, dest_path: str) -> bool:
-    """For a future restore/rehydrate flow (e.g. Phase 3's cleanup script
-    confirming a durable copy before deleting local scratch, or restoring a
-    session's artifacts after local disk was reclaimed). Not called by any
-    tool today. Returns False (does not raise) on any failure or if MinIO is
-    disabled -- callers must check the return value, not assume success."""
+    """Rehydrates a durable MinIO copy onto local disk. Called by
+    router.py's _fetch_report_from_object_store() when /audit/workbook's
+    local-disk fast path misses (a different replica generated the report,
+    or local scratch was reclaimed) -- that's what makes MinIO the PRIMARY,
+    replica-independent store for generated reports rather than just a
+    backup copy nothing ever reads back. Returns False (does not raise) on
+    any failure or if MinIO is disabled -- callers must check the return
+    value, not assume success."""
     client = _get_client()
     if client is None or not storage_uri.startswith("s3://"):
         return False

@@ -64,7 +64,11 @@ class Settings:
     DB_USER: str = os.getenv("TB_DB_USER", "")
     DB_PASSWORD: str = os.getenv("TB_DB_PASSWORD", "")
     DB_POOL_MIN: int = int(os.getenv("TB_DB_POOL_MIN", "1"))
-    DB_POOL_MAX: int = int(os.getenv("TB_DB_POOL_MAX", "5"))
+    # 5 was sized for single-developer local testing; now that every request is a real
+    # authenticated user (not just one dev machine), a long /audit run alone makes dozens
+    # of sequential db_cursor() calls, so a handful of concurrent users mid-audit could
+    # exhaust a pool this small.
+    DB_POOL_MAX: int = int(os.getenv("TB_DB_POOL_MAX", "20"))
 
     # Query-time (candidate retrieval) and compile-time (taxonomy node) embedding
     # endpoint for the native classification engine (pipeline/tools/taxonomy_repository.py).

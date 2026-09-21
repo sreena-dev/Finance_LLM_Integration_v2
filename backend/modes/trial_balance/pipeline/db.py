@@ -68,7 +68,14 @@ def _get_pool():
         from modes.trial_balance.pipeline.tools import PipelineDBError
 
         try:
-            _pool = psycopg2.pool.SimpleConnectionPool(
+            # ThreadedConnectionPool, not SimpleConnectionPool: nearly every route in
+            # router.py is a plain `def`, which FastAPI runs in a threadpool executor, so
+            # concurrent requests from different authenticated users already call
+            # getconn()/putconn() from multiple OS threads simultaneously.
+            # SimpleConnectionPool's own docstring says it "can't be shared across
+            # different threads" -- this was silently unsafe before multi-user traffic
+            # was a real scenario.
+            _pool = psycopg2.pool.ThreadedConnectionPool(
                 settings.DB_POOL_MIN,
                 settings.DB_POOL_MAX,
                 host=settings.DB_HOST,
@@ -298,12 +305,13 @@ def _upsert_live_document_exec(cur, doc: dict) -> None:
             (entity_id, entity_name, cin, company_name, fy_period_start, fy_period_end,
              tb_doc_id, tb_doc_name, statement_type, financial_year, has_grouping,
              grouping_doc_id, grouping_doc_name, document_version, modification_dump,
-             custom_field_1, custom_field_2, custom_field_3)
+             custom_field_1, custom_field_2, custom_field_3, user_id)
         VALUES (%(entity_id)s, %(entity_name)s, %(cin)s, %(company_name)s,
                 %(fy_period_start)s, %(fy_period_end)s, %(tb_doc_id)s, %(tb_doc_name)s,
                 %(statement_type)s, %(financial_year)s, %(has_grouping)s,
                 %(grouping_doc_id)s, %(grouping_doc_name)s, %(document_version)s,
-                %(modification_dump)s, %(custom_field_1)s, %(custom_field_2)s, %(custom_field_3)s)
+                %(modification_dump)s, %(custom_field_1)s, %(custom_field_2)s, %(custom_field_3)s,
+                %(user_id)s)
         """,
         doc,
     )
@@ -381,16 +389,20 @@ def upsert_live_document_and_lines(doc: dict, rows: list) -> tuple:
 
 def create_session(mode: str, source: str, tb_doc_id: Optional[str] = None,
                     tb_doc_id_prior: Optional[str] = None, entity_id: Optional[str] = None,
-                    financial_year: Optional[str] = None) -> str:
+                    financial_year: Optional[str] = None, user_id: Optional[str] = None) -> str:
+    """user_id is the authenticated caller's id (router.py threads it in from
+    Depends(require_user)) -- get_session()/find_latest_session()/list_sessions()
+    still return rows regardless of owner; router.py is where the ownership
+    check against the CURRENT caller happens, once per route, not here."""
     session_id = str(uuid.uuid4())
     with db_cursor() as cur:
         cur.execute(
             """
             INSERT INTO pipeline_sessions
-                (session_id, mode, tb_doc_id, tb_doc_id_prior, source, status, entity_id, financial_year)
-            VALUES (%s, %s, %s, %s, %s, 'RUNNING', %s, %s)
+                (session_id, mode, tb_doc_id, tb_doc_id_prior, source, status, entity_id, financial_year, user_id)
+            VALUES (%s, %s, %s, %s, %s, 'RUNNING', %s, %s, %s)
             """,
-            (session_id, mode, tb_doc_id, tb_doc_id_prior, source, entity_id, financial_year),
+            (session_id, mode, tb_doc_id, tb_doc_id_prior, source, entity_id, financial_year, user_id),
         )
     return session_id
 
@@ -415,11 +427,17 @@ def get_session(session_id: str) -> Optional[dict]:
 
 
 def find_latest_session(tb_doc_id: str, tb_doc_id_prior: Optional[str] = None,
-                         status: Optional[str] = "SUCCESS") -> Optional[dict]:
+                         status: Optional[str] = "SUCCESS", user_id: Optional[str] = None) -> Optional[dict]:
     """Most recent session for a doc_id (+ optional prior-year doc_id for
     COMPARISON runs) -- used by /audit/workbook to locate which session's
     output_dir holds the report for a given doc_id, since the frontend
-    requests downloads by doc_id, not session_id."""
+    requests downloads by doc_id, not session_id.
+
+    `user_id`, when given, filters to sessions THAT caller created. Without it,
+    this would return the globally-latest session for a doc_id regardless of who
+    ran it -- fine for a shared MAIN document, wrong for /audit/workbook's own
+    per-run report download, where the report is the caller's own analysis
+    output, not shared data, even when the underlying doc_id is shared MAIN."""
     query = "SELECT * FROM pipeline_sessions WHERE tb_doc_id = %s AND deleted_at IS NULL"
     params = [tb_doc_id]
     if tb_doc_id_prior:
@@ -430,6 +448,9 @@ def find_latest_session(tb_doc_id: str, tb_doc_id_prior: Optional[str] = None,
     if status:
         query += " AND status = %s"
         params.append(status)
+    if user_id:
+        query += " AND user_id = %s"
+        params.append(user_id)
     query += " ORDER BY created_at DESC LIMIT 1"
     with db_cursor() as cur:
         cur.execute(query, params)

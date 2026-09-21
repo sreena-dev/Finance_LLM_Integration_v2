@@ -22,14 +22,15 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
+from app.auth.deps import CurrentUser, require_user
 from modes.trial_balance.pipeline.agent import ToolNotAvailableError, call_tool, get_agent, llm_reachable
 from modes.trial_balance.pipeline.agent_memory import invoke_scoped
 from modes.trial_balance.pipeline.config import settings
-from modes.trial_balance.pipeline.db import add_findings, create_session, find_latest_session, learn_priority_company, update_session_status
+from modes.trial_balance.pipeline.db import add_findings, create_session, fetch_live_document, find_latest_session, learn_priority_company, update_session_status
 from modes.trial_balance.pipeline.tools import PipelineDBError, PipelineFileError, resolve_output_dir, verify_packs
 from modes.trial_balance.pipeline.valkey_client import preview_store_get, preview_store_set, preview_store_update
 
@@ -72,6 +73,22 @@ def _tool_error_response(exc: Exception):
             "error_id": error_id,
         },
     )
+
+
+def _verify_document_access(tb_doc_id: Optional[str], user: CurrentUser) -> None:
+    """MAIN documents are shared across every authenticated user (see list_documents'
+    docstring); LIVE documents are private to whoever created them. Raises 404
+    (never 403 -- don't confirm another user's data exists) if tb_doc_id resolves
+    to a LIVE document someone else owns, OR to a pre-isolation LIVE row with no
+    recorded owner (an orphan, invisible to everyone rather than reassigned to
+    whoever asks first). A tb_doc_id that exists only in MAIN, or in neither
+    table, passes through unchanged -- MAIN's shared visibility, or a natural
+    "not found" from whatever tool call runs next."""
+    if not tb_doc_id:
+        return
+    live_doc = fetch_live_document(tb_doc_id)
+    if live_doc and live_doc.get("user_id") != user.user_id:
+        raise HTTPException(status_code=404, detail="Document not found.")
 
 
 # ── Request models ───────────────────────────────────────────────────────────
@@ -204,7 +221,7 @@ def preview(token: str):
 
 
 @router.post("/upload-mapped")
-def upload_mapped(request: UploadMappedRequest):
+def upload_mapped(request: UploadMappedRequest, user: CurrentUser = Depends(require_user)):
     entry = preview_store_get(request.token)
     if not entry:
         raise HTTPException(status_code=404, detail="Unknown or expired preview token.")
@@ -238,7 +255,7 @@ def upload_mapped(request: UploadMappedRequest):
     if request.persist_to_live:
         output_dir = str(_UPLOAD_ROOT / request.token)
     else:
-        query_session_id = create_session(mode="CHAT_QUERY", source="chat_upload")
+        query_session_id = create_session(mode="CHAT_QUERY", source="chat_upload", user_id=user.user_id)
         output_dir = str(resolve_output_dir(f"sessions/{query_session_id}"))
 
     try:
@@ -253,6 +270,7 @@ def upload_mapped(request: UploadMappedRequest):
             financial_year=request.financial_year,
             standard=request.standard,
             persist_to_live=request.persist_to_live,
+            user_id=user.user_id,
         )
     except (ToolNotAvailableError, PipelineFileError, PipelineDBError) as exc:
         if query_session_id:
@@ -330,7 +348,15 @@ def list_priority_companies():
 # ── Documents (MAIN, read-only) ─────────────────────────────────────────────
 
 @router.get("/documents")
-def list_documents(entity_id: Optional[str] = None, financial_year: Optional[str] = None):
+def list_documents(
+    entity_id: Optional[str] = None, financial_year: Optional[str] = None,
+    user: CurrentUser = Depends(require_user),
+):
+    """Lists MAIN documents -- deliberately shared across every authenticated user,
+    not scoped by caller. MAIN is populated by a separate promotion process this
+    codebase doesn't own and never records an uploader, so it's treated as the
+    firm's shared, already-finalized reference corpus rather than per-user data
+    (unlike LIVE documents below, which TB's own code creates and does scope)."""
     try:
         result = call_tool("list_db_documents", entity_id=entity_id, financial_year=financial_year)
     except ToolNotAvailableError as exc:
@@ -339,7 +365,8 @@ def list_documents(entity_id: Optional[str] = None, financial_year: Optional[str
 
 
 @router.get("/documents/{doc_id}")
-def get_document(doc_id: str):
+def get_document(doc_id: str, user: CurrentUser = Depends(require_user)):
+    """Reads from MAIN (load_tb_from_db) -- shared, see list_documents' docstring."""
     try:
         result = call_tool("load_tb_from_db", tb_doc_id=doc_id)
     except ToolNotAvailableError as exc:
@@ -363,7 +390,13 @@ def get_document(doc_id: str):
 
 
 @router.delete("/documents/{doc_id}")
-def delete_document(doc_id: str):
+def delete_document(doc_id: str, user: CurrentUser = Depends(require_user)):
+    """delete_db_document only ever touches LIVE tables (never MAIN, never deletes
+    it -- see pipeline/db.py's module docstring), so this is exactly the kind of
+    TB-own-data write full isolation applies to."""
+    _verify_document_access(doc_id, user)
+    if not fetch_live_document(doc_id):
+        raise HTTPException(status_code=404, detail="Document not found.")
     try:
         result = call_tool("delete_db_document", tb_doc_id=doc_id)
     except ToolNotAvailableError as exc:
@@ -379,13 +412,24 @@ _LLM_UNAVAILABLE_ANSWER = (
 )
 
 
+def _user_scoped_memory_key(user_id: str, raw_session_id: str) -> str:
+    """agentchat:{session_id} in valkey_client.py was keyed only by this raw,
+    client-supplied-or-echoed string -- unverified against any authenticated
+    identity, so a caller who learned/guessed another session's id could
+    resume or overwrite that session's conversation memory. Prefixing with the
+    CALLER's own authenticated user_id (never client-supplied) makes a
+    collision land in a different, inaccessible Valkey key instead."""
+    return f"{user_id}:{raw_session_id}"
+
+
 @router.post("/ask")
-def ask(request: AskRequest):
+def ask(request: AskRequest, user: CurrentUser = Depends(require_user)):
     """A question about a specific uploaded/analyzed Trial Balance (doc_id)."""
+    _verify_document_access(request.doc_id, user)
     # Same DB-write guard as /audit: a Postgres hiccup here must degrade gracefully
     # rather than escape as an unhandled 500.
     try:
-        session_id = create_session(mode="CHAT_QUERY", source="ask", tb_doc_id=request.doc_id)
+        session_id = create_session(mode="CHAT_QUERY", source="ask", tb_doc_id=request.doc_id, user_id=user.user_id)
     except Exception as e:
         return _tool_error_response(e)
 
@@ -403,8 +447,10 @@ def ask(request: AskRequest):
         # conversation-memory key when the caller supplies one; the freshly
         # created accounting session_id otherwise (single-turn, no continuity
         # across calls). Either way this is now isolated per key -- never the
-        # agent's old shared, cross-tenant default memory (see agent_memory.py).
-        response = invoke_scoped(get_agent(), prompt, session_id=request.session_id or session_id)
+        # agent's old shared, cross-tenant default memory (see agent_memory.py) --
+        # and now also never guessable/reusable across two different users.
+        memory_key = _user_scoped_memory_key(user.user_id, request.session_id or session_id)
+        response = invoke_scoped(get_agent(), prompt, session_id=memory_key)
         update_session_status(session_id, "SUCCESS")
         return {"answer": response, "session_id": session_id, "available": True}
     except Exception as e:
@@ -413,10 +459,10 @@ def ask(request: AskRequest):
 
 
 @router.post("/ask-general")
-def ask_general(request: AskGeneralRequest):
+def ask_general(request: AskGeneralRequest, user: CurrentUser = Depends(require_user)):
     """A question with no Trial Balance attached — answered from reference corpora."""
     try:
-        session_id = create_session(mode="CHAT_QUERY", source="ask-general")
+        session_id = create_session(mode="CHAT_QUERY", source="ask-general", user_id=user.user_id)
     except Exception as e:
         return _tool_error_response(e)
 
@@ -429,7 +475,8 @@ def ask_general(request: AskGeneralRequest):
         }
 
     try:
-        response = invoke_scoped(get_agent(), request.question, session_id=request.session_id or session_id)
+        memory_key = _user_scoped_memory_key(user.user_id, request.session_id or session_id)
+        response = invoke_scoped(get_agent(), request.question, session_id=memory_key)
         update_session_status(session_id, "SUCCESS")
         return {
             "answer": response, "session_id": session_id,
@@ -1037,9 +1084,11 @@ def _finalize_audit_result(mode: str, run_dir: Path, entity_hint: Optional[str] 
 
 
 @router.post("/audit")
-def audit(request: AuditRequest):
+def audit(request: AuditRequest, user: CurrentUser = Depends(require_user)):
     """Routes to the SINGLE_TB chain when doc_id_prior is absent, or the
     COMPARISON chain when both doc_id and doc_id_prior are given."""
+    _verify_document_access(request.doc_id, user)
+    _verify_document_access(request.doc_id_prior, user)
     mode = "COMPARISON" if request.doc_id_prior else "SINGLE_TB"
     # create_session() is a live DB write and the Postgres host has been observed to go
     # briefly unreachable. Outside the try below it produced a bare unhandled 500, unlike
@@ -1053,6 +1102,7 @@ def audit(request: AuditRequest):
             tb_doc_id=request.doc_id,
             tb_doc_id_prior=request.doc_id_prior,
             entity_id=request.entity,
+            user_id=user.user_id,
         )
     except Exception as e:
         return _tool_error_response(e)
@@ -1160,7 +1210,8 @@ async def audit_upload_grouping(
 # ── Validation ───────────────────────────────────────────────────────────────
 
 @router.post("/validate")
-def validate(request: ValidateRequest):
+def validate(request: ValidateRequest, user: CurrentUser = Depends(require_user)):
+    _verify_document_access(request.doc_id, user)
     try:
         result = call_tool("load_tb_from_db", tb_doc_id=request.doc_id)
         if result.get("execution_status") != "SUCCESS":
@@ -1215,15 +1266,51 @@ def _tb_filename_suffix(run_dir: Path, mode: str) -> str:
     return f"_{safe}" if safe else ""
 
 
+def _fetch_report_from_object_store(session_id: str, file_path: Path) -> bool:
+    """MinIO is the primary, replica-independent copy of a generated report --
+    local disk (under TB_OUTPUT_DIR) is a fast-path cache, not the source of
+    truth, since a report generated by one backend replica during /audit isn't
+    guaranteed to be visible to a different replica serving this download later
+    (or after local scratch was reclaimed). Looks up this exact file's
+    storage_uri (recorded at upload time by pipeline_tool.py's
+    _upload_and_record_artifact_files) and rehydrates it onto local disk at the
+    SAME path a fresh /audit run would have written it to, so this and every
+    later request for the same report hit the local fast-path again. Returns
+    False (never raises) if MinIO is disabled, the upload never happened, or
+    the fetch itself fails -- the caller treats that as "report not found",
+    same as before this existed."""
+    from modes.trial_balance.pipeline.db import list_artifact_files_for_session
+    from modes.trial_balance.pipeline.object_store import download_artifact
+
+    try:
+        files = list_artifact_files_for_session(session_id)
+    except PipelineDBError:
+        logger.warning("[audit_workbook] could not list artifact files for session %s", session_id)
+        return False
+
+    target = str(file_path)
+    match = next((f for f in files if f.get("artifact_path") == target and f.get("storage_uri")), None)
+    if not match:
+        return False
+
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    return download_artifact(match["storage_uri"], target)
+
+
 @router.post("/audit/workbook")
-def audit_workbook(request: AuditWorkbookRequest):
+def audit_workbook(request: AuditWorkbookRequest, user: CurrentUser = Depends(require_user)):
     """Binary download of the generated report for a completed /audit run.
     The frontend requests this by doc_id (not session_id), so this looks up
     the most recent successful session for that doc_id/doc_id_prior pair and
     recomputes its run_dir the exact same way /audit itself does -- no extra
-    pipeline_sessions column needed."""
+    pipeline_sessions column needed.
+
+    Scoped to sessions THE CALLER created (find_latest_session's user_id filter)
+    -- a report is the output of one user's own audit run, private to them, even
+    when the underlying doc_id is a shared MAIN document another user could also
+    run their own audit against."""
     mode = "COMPARISON" if request.doc_id_prior else "SINGLE_TB"
-    session = find_latest_session(request.doc_id, request.doc_id_prior)
+    session = find_latest_session(request.doc_id, request.doc_id_prior, user_id=user.user_id)
     if not session:
         raise HTTPException(
             status_code=404,
@@ -1240,7 +1327,7 @@ def audit_workbook(request: AuditWorkbookRequest):
         raise HTTPException(status_code=400, detail=f"No report available for mode={mode!r} format={fmt!r}.")
 
     file_path = report_dir / base_filename
-    if not file_path.exists():
+    if not file_path.exists() and not _fetch_report_from_object_store(session["session_id"], file_path):
         raise HTTPException(
             status_code=404,
             detail=f"Report not found for session {session['session_id']} (expected {file_path}).",

@@ -77,7 +77,7 @@ def _normalized_rows_to_canonical_dicts(tb_doc_id: str, rows: list, custom_field
 
 def _ingest_one_parsed_document(
     parsed, standard, llm_client, accept_data_quality_risk, out_dir, custom_fields=None,
-    intake_warnings=None, metadata_overrides=None, persist_to_live=True,
+    intake_warnings=None, metadata_overrides=None, persist_to_live=True, user_id=None,
 ) -> dict:
     """Classifies and writes ONE ParsedInput (one fiscal year) to LIVE
     staging. Shared by the single-document and multi-year (Scenario D)
@@ -147,6 +147,7 @@ def _ingest_one_parsed_document(
         "grouping_doc_name": metadata.grouping_doc_name,
         "document_version": 1,
         "modification_dump": None,
+        "user_id": user_id,
     }
 
     replaced_existing_document = None
@@ -220,6 +221,7 @@ def ingest_tb_to_live(
     cin: str = None,
     financial_year: str = None,
     persist_to_live: bool = True,
+    user_id: str = None,
 ) -> dict:
     """Ingest one or two client-submitted TB workbook(s) into LIVE staging
     (live_document_table/live_tb_table) and produce canonical_tb.parquet
@@ -272,7 +274,13 @@ def ingest_tb_to_live(
     MAPPED. A document needing a human data-quality confirmation returns
     pipeline_status "CONFIRMATION_REQUIRED" rather than writing anything
     to LIVE; pass accept_data_quality_risk=True to proceed anyway once a
-    human has reviewed the reason."""
+    human has reviewed the reason.
+
+    `user_id` (the authenticated caller's id, threaded in by router.py from
+    Depends(require_user)) is recorded on the LIVE document row it creates --
+    that's what GET/DELETE /documents/{doc_id} check ownership against. None
+    is accepted (not required) since this tool is also callable deterministically
+    without an HTTP request in front of it; router.py always supplies it."""
     input_files = [Path(tb_grouping_template_path)]
     if grouping_file_path:
         input_files.append(Path(grouping_file_path))
@@ -345,6 +353,7 @@ def ingest_tb_to_live(
             intake_warnings=intake_warnings,
             metadata_overrides=metadata_overrides,
             persist_to_live=persist_to_live,
+            user_id=user_id,
         )
         for parsed in parsed_inputs
     ]

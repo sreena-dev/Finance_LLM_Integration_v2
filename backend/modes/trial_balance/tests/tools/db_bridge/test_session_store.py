@@ -105,6 +105,49 @@ class TestFindLatestSession:
             _cleanup(sid)
 
 
+class TestUserScoping:
+    """create_session's user_id param and find_latest_session's user_id filter --
+    the two db.py-level pieces router.py's per-user isolation (Depends(require_user))
+    relies on. See router.py's docstrings for _verify_document_access/audit_workbook."""
+
+    def test_create_session_stores_user_id(self, db_available):
+        if not db_available:
+            pytest.skip("No reachable Postgres DB for this test run.")
+        sid = create_session(mode="SINGLE_TB", source="pytest", tb_doc_id="PYTEST_OWNED_DOC", user_id="11111111-1111-1111-1111-111111111111")
+        try:
+            row = get_session(sid)
+            assert row["user_id"] == "11111111-1111-1111-1111-111111111111"
+        finally:
+            _cleanup(sid)
+
+    def test_create_session_without_user_id_leaves_it_null(self, live_session):
+        row = get_session(live_session)
+        assert row["user_id"] is None
+
+    def test_find_latest_session_user_id_filter_excludes_other_users(self, db_available):
+        if not db_available:
+            pytest.skip("No reachable Postgres DB for this test run.")
+        sid = create_session(
+            mode="SINGLE_TB", source="pytest", tb_doc_id="PYTEST_OWNERSHIP_DOC",
+            user_id="22222222-2222-2222-2222-222222222222",
+        )
+        try:
+            update_session_status(sid, "SUCCESS")
+            # The owner finds it.
+            found = find_latest_session("PYTEST_OWNERSHIP_DOC", user_id="22222222-2222-2222-2222-222222222222")
+            assert found is not None and found["session_id"] == sid
+            # A different user does not -- this is what stops /audit/workbook from
+            # handing back another user's report for a shared MAIN doc_id.
+            found_other = find_latest_session("PYTEST_OWNERSHIP_DOC", user_id="33333333-3333-3333-3333-333333333333")
+            assert found_other is None
+            # Unfiltered (no user_id) still finds it -- used by contexts that
+            # deliberately don't scope by caller.
+            found_unfiltered = find_latest_session("PYTEST_OWNERSHIP_DOC")
+            assert found_unfiltered is not None and found_unfiltered["session_id"] == sid
+        finally:
+            _cleanup(sid)
+
+
 class TestListSessions:
     def test_a_freshly_created_session_appears_in_the_listing(self, live_session):
         rows = list_sessions(limit=200)

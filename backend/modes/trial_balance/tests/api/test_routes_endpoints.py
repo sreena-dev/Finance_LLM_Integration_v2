@@ -24,14 +24,21 @@ pytest.importorskip(
            "backend.agent, which needs it.",
 )
 
+from app.auth.deps import CurrentUser, require_user
 from modes.trial_balance.pipeline.agent import ToolNotAvailableError
 from modes.trial_balance.router import router
+
+# Every route handler now declares Depends(require_user) -- these tests are about
+# routing/response-shape, not auth itself (see tests/api/test_user_isolation.py for
+# that), so the client fixture overrides it with one fixed fake user by default.
+FAKE_USER = CurrentUser(user_id="00000000-0000-0000-0000-000000000001", username="pytest", email="pytest@example.com")
 
 
 @pytest.fixture
 def client():
     app = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[require_user] = lambda: FAKE_USER
     return TestClient(app)
 
 
@@ -256,12 +263,31 @@ class TestDocumentGet:
 class TestDocumentDelete:
     def test_deletes_and_returns_the_tool_result(self, client):
         fake = {"execution_status": "SUCCESS"}
-        with patch("modes.trial_balance.router.call_tool", return_value=fake) as m:
+        owned_doc = {"tb_doc_id": "D1", "user_id": FAKE_USER.user_id}
+        with patch("modes.trial_balance.router.fetch_live_document", return_value=owned_doc), \
+             patch("modes.trial_balance.router.call_tool", return_value=fake) as m:
             resp = client.delete("/api/trial-balance/documents/D1")
         assert resp.status_code == 200
         assert resp.json() == fake
         assert m.call_args.args[0] == "delete_db_document"
         assert m.call_args.kwargs["tb_doc_id"] == "D1"
+
+    def test_unowned_document_returns_404_without_deleting(self, client):
+        """Full per-user isolation: a LIVE document owned by someone else (or with
+        no recorded owner at all -- a pre-isolation orphan) must 404, never delete."""
+        other_users_doc = {"tb_doc_id": "D1", "user_id": "99999999-9999-9999-9999-999999999999"}
+        with patch("modes.trial_balance.router.fetch_live_document", return_value=other_users_doc), \
+             patch("modes.trial_balance.router.call_tool") as m:
+            resp = client.delete("/api/trial-balance/documents/D1")
+        assert resp.status_code == 404
+        m.assert_not_called()
+
+    def test_nonexistent_document_returns_404(self, client):
+        with patch("modes.trial_balance.router.fetch_live_document", return_value=None), \
+             patch("modes.trial_balance.router.call_tool") as m:
+            resp = client.delete("/api/trial-balance/documents/UNKNOWN")
+        assert resp.status_code == 404
+        m.assert_not_called()
 
 
 class TestAsk:
@@ -473,3 +499,65 @@ class TestAuditWorkbook:
         assert resp.headers["content-type"].startswith(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
+
+class TestAuditWorkbookObjectStoreFallback:
+    """MinIO is the PRIMARY store for reports (see object_store.py's module
+    docstring) -- when local disk misses (this replica didn't generate the
+    report, or scratch was reclaimed), /audit/workbook rehydrates from MinIO
+    via _fetch_report_from_object_store() rather than 404ing immediately.
+    list_artifact_files_for_session/download_artifact are local-imported
+    inside that helper, so they're patched at their defining modules, not at
+    modes.trial_balance.router."""
+
+    def test_missing_local_file_is_rehydrated_from_object_store(self, client, tmp_path):
+        report_path = tmp_path / "TB_Audit.xlsx"
+        assert not report_path.exists()
+        artifact_row = {"artifact_path": str(report_path), "storage_uri": "s3://tb-artifacts/sessions/sess-x/build_excel_report/TB_Audit.xlsx"}
+
+        def _fake_download(storage_uri, dest_path):
+            assert storage_uri == artifact_row["storage_uri"]
+            assert dest_path == str(report_path)
+            Path(dest_path).write_bytes(b"rehydrated-from-minio")
+            return True
+
+        with patch("modes.trial_balance.router.find_latest_session", return_value={"session_id": "sess-x"}), \
+             patch("modes.trial_balance.router.resolve_output_dir", return_value=tmp_path), \
+             patch("modes.trial_balance.pipeline.db.list_artifact_files_for_session", return_value=[artifact_row]), \
+             patch("modes.trial_balance.pipeline.object_store.download_artifact", side_effect=_fake_download) as m_download:
+            resp = client.post("/api/trial-balance/audit/workbook", json={"doc_id": "D1", "format": "xlsx"})
+        assert resp.status_code == 200
+        assert resp.content == b"rehydrated-from-minio"
+        m_download.assert_called_once()
+
+    def test_no_matching_object_store_record_still_404s(self, client, tmp_path):
+        """No MinIO upload ever happened for this report (disabled, or the
+        upload itself failed) -- degrades to exactly the pre-MinIO 404, not an
+        error."""
+        with patch("modes.trial_balance.router.find_latest_session", return_value={"session_id": "sess-x"}), \
+             patch("modes.trial_balance.router.resolve_output_dir", return_value=tmp_path), \
+             patch("modes.trial_balance.pipeline.db.list_artifact_files_for_session", return_value=[]):
+            resp = client.post("/api/trial-balance/audit/workbook", json={"doc_id": "D1", "format": "xlsx"})
+        assert resp.status_code == 404
+
+    def test_object_store_download_failure_still_404s_not_500(self, client, tmp_path):
+        report_path = tmp_path / "TB_Audit.xlsx"
+        artifact_row = {"artifact_path": str(report_path), "storage_uri": "s3://tb-artifacts/sessions/sess-x/build_excel_report/TB_Audit.xlsx"}
+        with patch("modes.trial_balance.router.find_latest_session", return_value={"session_id": "sess-x"}), \
+             patch("modes.trial_balance.router.resolve_output_dir", return_value=tmp_path), \
+             patch("modes.trial_balance.pipeline.db.list_artifact_files_for_session", return_value=[artifact_row]), \
+             patch("modes.trial_balance.pipeline.object_store.download_artifact", return_value=False):
+            resp = client.post("/api/trial-balance/audit/workbook", json={"doc_id": "D1", "format": "xlsx"})
+        assert resp.status_code == 404
+
+    def test_existing_local_file_is_served_without_touching_object_store(self, client, tmp_path):
+        """The fast path: local disk already has it, so the MinIO round-trip
+        never happens at all."""
+        (tmp_path / "TB_Audit.xlsx").write_bytes(b"local-fast-path-bytes")
+        with patch("modes.trial_balance.router.find_latest_session", return_value={"session_id": "sess-x"}), \
+             patch("modes.trial_balance.router.resolve_output_dir", return_value=tmp_path), \
+             patch("modes.trial_balance.pipeline.db.list_artifact_files_for_session") as m_list:
+            resp = client.post("/api/trial-balance/audit/workbook", json={"doc_id": "D1", "format": "xlsx"})
+        assert resp.status_code == 200
+        assert resp.content == b"local-fast-path-bytes"
+        m_list.assert_not_called()

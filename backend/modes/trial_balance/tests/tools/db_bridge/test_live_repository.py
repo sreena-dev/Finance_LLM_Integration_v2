@@ -94,6 +94,37 @@ class TestUpsertLiveDocument:
         row = _fetch_live_document(doc_id)
         assert row["custom_field_1"] == "cf1-value"
 
+    def test_user_id_defaults_to_null_when_not_supplied(self, doc_id):
+        upsert_live_document(_doc_row(doc_id))
+        row = _fetch_live_document(doc_id)
+        assert row["user_id"] is None
+
+    def test_user_id_passes_through_when_supplied(self, doc_id):
+        upsert_live_document(_doc_row(doc_id, user_id="44444444-4444-4444-4444-444444444444"))
+        row = _fetch_live_document(doc_id)
+        assert row["user_id"] == "44444444-4444-4444-4444-444444444444"
+
+
+class TestFetchLiveDocument:
+    """fetch_live_document() (backend/db.py's own function, not this file's local
+    _fetch_live_document duplicate) is what router.py's _verify_document_access /
+    delete_document use to check ownership -- worth its own direct coverage."""
+
+    def test_returns_the_row_including_user_id(self, doc_id):
+        from modes.trial_balance.pipeline.db import fetch_live_document
+
+        upsert_live_document(_doc_row(doc_id, user_id="55555555-5555-5555-5555-555555555555"))
+        row = fetch_live_document(doc_id)
+        assert row is not None
+        assert row["user_id"] == "55555555-5555-5555-5555-555555555555"
+
+    def test_returns_none_for_an_unknown_doc_id(self, db_available):
+        if not db_available:
+            pytest.skip("No reachable Postgres DB for this test run.")
+        from modes.trial_balance.pipeline.db import fetch_live_document
+
+        assert fetch_live_document("PYTEST_NO_SUCH_DOC") is None
+
 
 class TestInsertLiveLinesBatch:
     def test_writes_the_supplied_rows(self, doc_id):

@@ -40,6 +40,29 @@ def test_different_sessions_never_bleed_into_each_other():
     assert len(rehydrated_a.chat.messages) == 2
 
 
+def test_two_users_with_the_same_raw_session_id_never_share_memory():
+    """router.py's _user_scoped_memory_key() is the fix for a narrower, auth-era
+    version of this same bug: request.session_id is client-supplied and never
+    verified against the caller's identity, so two different logged-in users
+    could pick (or guess/reuse) the identical raw session_id string. Without the
+    user_id prefix this would collide on the exact key _session_memory uses --
+    this pins that a raw collision no longer bleeds across users."""
+    from modes.trial_balance.router import _user_scoped_memory_key
+
+    raw_session_id = "shared-guessable-id"
+    key_user_a = _user_scoped_memory_key("user-A", raw_session_id)
+    key_user_b = _user_scoped_memory_key("user-B", raw_session_id)
+    assert key_user_a != key_user_b
+
+    memory_a = _session_memory(key_user_a, "system prompt text")
+    memory_a.chat.add_user_message("User A's question")
+    memory_a.chat.add_agent_message("User A's answer")
+    memory_a.chat_manager.save_chat(key_user_a)
+
+    memory_b = _session_memory(key_user_b, "system prompt text")
+    assert len(memory_b.chat.messages) == 0  # user B sees no trace of user A's turn
+
+
 def test_corrupt_or_missing_prior_state_falls_back_to_fresh_chat(monkeypatch):
     """A load failure (bad JSON, unexpected shape) must degrade to a fresh
     empty chat for this call, never raise and never block the request."""
