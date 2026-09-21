@@ -437,6 +437,21 @@ class FetchTools:
           - Primary: heading ILIKE '%auditor%' or '%independent%' or '%statutory%'
           - Exclusion: regulation_reference NOT ILIKE '%CARO%' and NOT ILIKE '%143(3A)%'
           - Fallback: tsvector search for 'auditor & opinion'
+
+        BUG FIX (found against real ingested data, same class of bug already
+        fixed in fetch_caro_text/fetch_ifc_text above): this used to also
+        pass `toc_patterns=["%auditor%"]` as a hard AND-filter. Confirmed on
+        IRCTC_2024_2025: real Rule 11 / Section 143(3) / "Report on Other
+        Legal and Regulatory Requirements" chunks carry `toc_section` values
+        like "Delivering on our promise with agile execution" or
+        "INDEPENDENT ASSURANCE STATEMENT" — whatever front-matter chapter
+        ingestion happened to attach to that page range — with no "auditor"
+        substring anywhere. The AND-filter silently dropped 109 of 118
+        genuinely matching rows for this one document, which is exactly why
+        Rule 11 / Section 143(3) were showing as "not found" in generated
+        reports despite being present in the source filing. Dropped here for
+        the same reason it was already dropped from fetch_caro_text and
+        fetch_ifc_text.
         """
         try:
             rows = cls._fetch_text_chunks(
@@ -457,7 +472,6 @@ class FetchTools:
                 ],
                 exclude_regulation_patterns=["%CARO%", "%143(3A)%"],
                 statement_scope=scope,
-                toc_patterns=["%auditor%"],
                 # A report with both Consolidated and Standalone opinions
                 # repeats every one of the heading_patterns above once per
                 # opinion, so match counts routinely exceed 100 (e.g. 180 for
@@ -545,6 +559,17 @@ class FetchTools:
         correct match. The new regulation_patterns above are already
         specific enough that this extra restriction was doing more harm
         (real false negatives) than good.
+
+        THIRD BUG (found on IRCTC_2024_2025): not every filer uses a letter
+        at all — IRCTC's own CARO annexure is headed literally "Annexure 1"
+        (a numeral), referenced from the main report as '... we give in the
+        "Annexure 1" a statement on the matters specified in paragraphs 3
+        and 4 of the Order ...'. None of the "Annexure A" patterns above
+        match a numeral, so this fell through to the fallback tier, whose
+        `tsquery="caro & clause"` also found nothing — the annexure's own
+        text never uses the literal word "CARO" (only "the Order", per the
+        defined term), so the AND-tsquery couldn't match it either. Added
+        "Annexure 1" variants below for this convention.
         """
         try:
             rows = cls._fetch_text_chunks(
@@ -552,6 +577,7 @@ class FetchTools:
                 regulation_patterns=[
                     "%CARO%", "%Companies Auditor%Report%Order%",
                     "%annexure - a%", "%annexure-a%", "%annexure a %", "%annexure 'a'%",
+                    "%annexure 1%", "%annexure - 1%", "%annexure-1%", "%annexure '1'%",
                 ],
                 limit=60,
             )
@@ -1045,7 +1071,15 @@ class CheckTools:
             "missing_obs": "Rule 11 sub-clauses were not identified. Companies (Audit and Auditors) Rules 2014 Rule 11 requires reporting on pending litigations, foreseeable losses, audit trail, and IEPF transfers.",
         },
         "PRE-06": {
-            "pattern": r"(?i)CARO|companies\s+\(auditor[''s]\s+report\)\s+order",
+            # Was `auditor['\'s]\s+report` — a character class matches exactly
+            # one character, so this required "auditor" to be followed by
+            # EITHER a bare apostrophe OR a bare "s", never both. Real text
+            # ("Auditor's Report") has both in sequence, so this alternative
+            # could never match — confirmed against real filings, where the
+            # annexure never uses the literal word "CARO" either (only "the
+            # Order", the term as defined in the report itself), so PRE-06
+            # was flagging a real, present CARO annexure as missing.
+            "pattern": r"(?i)CARO|companies\s+\(auditor['’]?s\s+report\)\s+order",
             "component": "CARO 2020 Annexure",
             "tag": "AUDIT_POINTER",
             "missing_obs": "CARO 2020 Annexure was not identified. CARO 2020 is mandatory for companies meeting the prescribed thresholds.",
