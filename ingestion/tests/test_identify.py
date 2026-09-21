@@ -312,3 +312,44 @@ def test_a_note_heading_is_not_the_statement_it_mentions():
     assert classify_statement_from_page(
         "## Startup Odisha\nIncome & Expenditure Account for the year ended 31st March 2023"
     ) == "profit_loss"
+
+
+# ---------------------------------------------------------------------------
+# A 120-page annual report mentions old financial years far more often than the
+# current one (tax disputes, dividend history). Real case: "SFS BS FY 24-25.pdf"
+# was labelled 2017-18 with high confidence.
+# ---------------------------------------------------------------------------
+
+def test_old_years_in_notes_do_not_outvote_the_reporting_year():
+    from app.identify import detect_financial_year
+
+    pages = [
+        "## Balance Sheet as at 31st March, 2025\n| Particulars | 31 March 2025 | 31 March 2024 |",
+        "| Income tax Act, 1961 | Income Tax | FY 2017-18 | Pending |\n"
+        "| Income tax Act, 1961 | Income Tax | FY 2017-18 | Pending |\n"
+        "| Income tax Act, 1961 | Interest | FY 2017-18 | Pending |",
+        "Disputes were raised for financial year 2017-18 and financial year 2017-18 again.\n"
+        "The final dividend paid during the financial year 2017-18 was declared earlier.",
+    ]
+    fy, confidence, _ = detect_financial_year(pages)
+    assert fy == "2024-25"
+    assert confidence in ("high", "medium")
+
+
+def test_prose_only_mentions_never_give_high_confidence():
+    from app.identify import detect_financial_year
+
+    fy, confidence, evidence = detect_financial_year(
+        ["Dividends were paid in financial year 2017-18.", "See financial year 2018-19 for details."]
+    )
+    assert fy == "2018-19" and confidence == "low"
+    assert "no dated statement heading" in evidence[0]
+
+
+def test_an_income_and_expenditure_heading_with_a_year_still_counts():
+    from app.identify import detect_financial_year
+
+    fy, confidence, _ = detect_financial_year(
+        ["## Income & Expenditure Account for FY 2023-24 From 1st April, 2023 to 31st March,2024"]
+    )
+    assert fy == "2023-24" and confidence in ("high", "medium")

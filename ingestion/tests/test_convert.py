@@ -44,3 +44,45 @@ def test_the_actual_bug_this_exists_to_fix():
     raw_from_docling = "Income &amp; Expenditure Account for the year ended 31st March 2023"
     assert classify_statement(raw_from_docling) is None
     assert classify_statement(_clean(raw_from_docling)) == "profit_loss"
+
+
+# ---------------------------------------------------------------------------
+# A cut-short conversion must name the pages it lost. Real case: a 120-page
+# annual report hit docling's 600 s limit; pages 80-120 came back empty and the
+# user saw 43 identical "document timeout exceeded" notices and no page numbers.
+# ---------------------------------------------------------------------------
+
+def test_identical_errors_collapse_to_one_line_with_a_count():
+    from app.convert import _collapse_errors
+
+    assert _collapse_errors(["document timeout exceeded"] * 3 + ["other"]) == [
+        "document timeout exceeded (x3)", "other"]
+
+
+def test_page_ranges_are_compact():
+    from app.convert import _page_ranges
+
+    assert _page_ranges([80, 81, 82, 90, 100, 101]) == "80-82, 90, 100-101"
+
+
+def test_pages_with_no_content_are_named_by_their_original_number():
+    from types import SimpleNamespace as NS
+    from app.convert import _unconverted_pages
+
+    def item(page):
+        return NS(prov=[NS(page_no=page)])
+
+    document = NS(texts=[item(1), item(2)], tables=[item(2)], pages={1: 0, 2: 0, 3: 0, 4: 0})
+    qualities = [NS(page_no=p, is_blank=False) for p in (1, 2, 5, 6)]  # pages 3,4 dropped upstream
+    note = _unconverted_pages(document, qualities)
+    assert "2 page(s)" in note and "5-6" in note
+    assert _unconverted_pages(NS(texts=[item(i) for i in range(1, 5)], tables=[], pages={}), qualities) is None
+
+
+def test_a_blank_page_is_not_reported_as_unconverted():
+    from types import SimpleNamespace as NS
+    from app.convert import _unconverted_pages
+
+    document = NS(texts=[NS(prov=[NS(page_no=1)])], tables=[], pages={1: 0, 2: 0})
+    qualities = [NS(page_no=1, is_blank=False), NS(page_no=2, is_blank=True)]
+    assert _unconverted_pages(document, qualities) is None

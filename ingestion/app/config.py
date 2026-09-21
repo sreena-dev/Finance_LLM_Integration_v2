@@ -110,7 +110,13 @@ class Config:
     ARTIFACTS_PATH = os.getenv("INGEST_DOCLING_ARTIFACTS") or None
     OCR_LANG = [s for s in (os.getenv("INGEST_OCR_LANG", "english").split(",")) if s]
     TABLEFORMER_ACCURATE = _bool("INGEST_TABLEFORMER_ACCURATE", True)
-    DOCUMENT_TIMEOUT = _float("INGEST_DOCUMENT_TIMEOUT", 600.0)
+    # Seconds docling may spend on ONE document. It cannot be scaled per call
+    # (the converter, and the models behind it, are built once per process and
+    # keyed on these options), so it has to cover the biggest file expected:
+    # measured ~8 s/page with full-page OCR, and a 120-page annual report took
+    # more than the old 600 s -- pages 80-120 came back empty. Whatever is still
+    # unfinished at the limit is now named in the notes rather than dropped.
+    DOCUMENT_TIMEOUT = _float("INGEST_DOCUMENT_TIMEOUT", 1800.0)
 
     # Where the layout and TableFormer models run: auto | cpu | cuda | cuda:N.
     #

@@ -326,7 +326,9 @@ def convert(images: list["np.ndarray"], qualities: list[PageQuality]) -> Convert
     stream = DocumentStream(name="upload.pdf", stream=io.BytesIO(pdf_bytes))
     result = converter.convert(stream, raises_on_error=False)
 
-    errors = [str(getattr(e, "error_message", e)) for e in (getattr(result, "errors", None) or [])]
+    errors = _collapse_errors(
+        [str(getattr(e, "error_message", e)) for e in (getattr(result, "errors", None) or [])]
+    )
 
     # A partial conversion still returns a document, and that document is
     # missing pages. Reporting it as a clean result would let the model treat an
@@ -350,6 +352,9 @@ def convert(images: list["np.ndarray"], qualities: list[PageQuality]) -> Convert
     _absorb_confidence(result, qualities)
 
     document = result.document
+    missing = _unconverted_pages(document, qualities)
+    if missing:
+        errors.append(missing)
     converted = Converted(markdown=_clean(document.export_to_markdown()), errors=errors)
 
     for page_no, page_doc in _iter_pages(document):
@@ -371,6 +376,67 @@ def convert(images: list["np.ndarray"], qualities: list[PageQuality]) -> Convert
         converted.tables.extend(extra)
         converted.notes.extend(notes)
     return converted
+
+
+def _collapse_errors(errors: list[str]) -> list[str]:
+    """One line per distinct message, with its count.
+
+    Docling reports a timeout once per unit of work it abandoned: 43 identical
+    "document timeout exceeded" lines on one 120-page filing, each shown to the
+    user as its own notice. Order of first appearance is kept.
+    """
+    counts: dict[str, int] = {}
+    for message in errors:
+        counts[message] = counts.get(message, 0) + 1
+    return [m if n == 1 else f"{m} (x{n})" for m, n in counts.items()]
+
+
+def _page_ranges(numbers: list[int]) -> str:
+    out, start, prev = [], None, None
+    for n in sorted(numbers):
+        if start is None:
+            start = prev = n
+        elif n == prev + 1:
+            prev = n
+        else:
+            out.append((start, prev))
+            start = prev = n
+    if start is not None:
+        out.append((start, prev))
+    return ", ".join(str(a) if a == b else f"{a}-{b}" for a, b in out)
+
+
+def _unconverted_pages(document, qualities) -> str | None:
+    """Name the pages docling handed back with nothing at all on them.
+
+    A partial conversion (timeout, a crashed page) otherwise shows only as
+    generic docling errors, and every table and note on the missing pages is
+    silently absent. Positional, like `_absorb_confidence`: docling's n-th page
+    is qualities[n-1], and only the original page number means anything to the
+    reader.
+    """
+    if not qualities:
+        return None
+    seen: set[int] = set()
+    for item in list(getattr(document, "texts", None) or []) + list(getattr(document, "tables", None) or []):
+        for prov in getattr(item, "prov", None) or []:
+            page_no = getattr(prov, "page_no", None)
+            if page_no:
+                seen.add(int(page_no))
+    pages = getattr(document, "pages", None) or {}
+    base = min((int(p) for p in pages), default=1)
+    empty = [
+        qualities[i].page_no for i in range(len(qualities))
+        if (i + base) not in seen and not qualities[i].is_blank
+    ]
+    if not empty:
+        return None
+    return (
+        f"{len(empty)} page(s) produced nothing and were NOT converted (page(s) "
+        f"{_page_ranges(empty)}). The document was cut short or those pages failed; "
+        "tables, notes and figures on them are absent from this extraction, which is "
+        "not evidence that the filing omitted them. Re-upload those pages on their own."
+    )
 
 
 def _absorb_confidence(result, qualities: list[PageQuality]) -> None:

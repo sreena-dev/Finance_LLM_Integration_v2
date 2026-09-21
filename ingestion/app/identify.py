@@ -51,6 +51,12 @@ _DATE_SHORT = re.compile(r"\b(\d{1,2})[-/.]\s*([A-Za-z]{3,9}|\d{1,2})[-/.]\s*(\d
 # "F.Y. 2022-23" / "FY 2022-2023" / "financial year 2022-23"
 _FY_EXPLICIT = re.compile(r"(?:f\.?\s*y\.?|financial\s+year)\s*[:\-]?\s*(\d{4})\s*[-/]\s*(\d{2,4})", re.I)
 
+_ACCOUNT_LINE = re.compile(
+    r"(income\s*(?:&|and)\s*expenditure|receipts\s+and\s+payments|statement\s+of\s+"
+    r"(?:income|financial\s+position|comprehensive))",
+    re.I,
+)
+
 _TITLE_LINE = re.compile(
     r"(balance\s+sheet|statement\s+of\s+profit\s+and\s+loss|profit\s+and\s+loss|"
     r"cash\s+flow|changes\s+in\s+equity)",
@@ -112,6 +118,7 @@ def detect_financial_year(pages_text: list[str]) -> tuple[str | None, str, list[
     """
     titled: Counter[str] = Counter()
     loose: Counter[str] = Counter()
+    mentions: Counter[str] = Counter()
     evidence: list[str] = []
 
     for text in pages_text:
@@ -120,12 +127,24 @@ def detect_financial_year(pages_text: list[str]) -> tuple[str | None, str, list[
             if not stripped or len(stripped) > 300:
                 continue
 
+            # "FY 2014-15" is only evidence of the REPORTING year when it heads a
+            # statement or account. Anywhere else it is an ordinary mention: a
+            # tax-dispute row, a dividend sentence, a five-year summary. Counted
+            # as evidence, those out-voted the real year on a 120-page annual
+            # report (FY 2024-25 was labelled 2017-18, "high" confidence,
+            # because old years are mentioned more often than the current one).
+            is_table_row = stripped.startswith("|")
+            names_a_statement = bool(_TITLE_LINE.search(stripped) or _ACCOUNT_LINE.search(stripped))
             for m in _FY_EXPLICIT.finditer(stripped):
                 start = _normalise_year(m.group(1))
-                if start:
-                    fy = f"{start}-{str((start + 1) % 100).zfill(2)}"
+                if not start:
+                    continue
+                fy = f"{start}-{str((start + 1) % 100).zfill(2)}"
+                if not is_table_row and names_a_statement:
                     titled[fy] += 3
                     evidence.append(f'explicit: "{stripped[:120]}"')
+                elif not is_table_row:
+                    mentions[fy] += 1
 
             dates = _dates_in(stripped)
             if not dates:
@@ -154,7 +173,22 @@ def detect_financial_year(pages_text: list[str]) -> tuple[str | None, str, list[
         confidence = "high" if best[1] >= 4 else "medium"
         if runners and titled[max(runners, key=lambda f: titled[f])] >= best[1]:
             confidence = "low"
+        # Every printed statement date names ONE year, and a comparative column
+        # adds the year before it -- so a year LATER than the winner that is
+        # also named as a reporting date means the winner may be a prior year.
+        later = [fy for fy in titled if fy > best[0]]
+        if later and confidence == "high":
+            confidence = "medium"
+            evidence.append(f"a later reporting year ({max(later)}) also appears on a statement heading")
         return best[0], confidence, evidence[:8]
+
+    if not loose and mentions:
+        # Nothing but prose mentions. The latest is the best guess, and it is
+        # only a guess: say so.
+        best = max(mentions)
+        return best, "low", [
+            f"no dated statement heading found; the latest financial year mentioned in the text was {best}"
+        ]
 
     if loose:
         # No statement title carried a date -- fall back to the latest reporting
