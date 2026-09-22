@@ -53,7 +53,12 @@ function Finding({ f }) {
  * the markdown report (see backend/api/routes.py::_finalize_audit_result).
  */
 export default function AuditCard({ mode, msg }) {
-  const { result: envelope, doc, priorDoc, pdfIds } = msg;
+  // fullTb isn't composed by anything today (the /validate-backed "Full
+  // trial balance" ledger view this came from was dropped by an earlier
+  // TB-v2 resync, same regression class as the chat-answer card) -- always
+  // undefined for now, which integrityOf's own `if (!fullTb) return null`
+  // guard already handles cleanly.
+  const { result: envelope, fullTb, doc, priorDoc, pdfIds } = msg;
   const result = envelope.result || {};
   const [downloading, setDownloading] = useState(false);
   const [dlError, setDlError] = useState(null);
