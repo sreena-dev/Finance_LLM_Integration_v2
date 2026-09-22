@@ -5,9 +5,17 @@ import './Composer.css';
 
 const MAX_HEIGHT = 190;
 
-export default function Composer({ onSubmit, disabled, placeholder }) {
+export default function Composer({
+  onSubmit, disabled, placeholder,
+  onFiles, attachAccept = '.pdf', attachBusy = false, attachTitle, attachUnavailable, draft,
+}) {
   const [value, setValue] = useState('');
   const ref = useRef(null);
+  const fileRef = useRef(null);
+  const canAttach = typeof onFiles === 'function';
+
+  // A failed turn hands its question back, so nothing typed is ever lost.
+  useEffect(() => { if (draft) setValue(draft); }, [draft]);
 
   // Grow with the content, then scroll internally past MAX_HEIGHT.
   useEffect(() => {
@@ -36,6 +44,43 @@ export default function Composer({ onSubmit, disabled, placeholder }) {
   return (
     <div className="composer">
       <div className={`composer__box ${disabled ? 'is-disabled' : ''}`}>
+        {/* Attach sits INSIDE the input, where every chat tool puts it, rather
+            than in a panel above. The panel version occupied the conversation
+            area permanently and pushed the composer down the screen. */}
+        {!canAttach && attachUnavailable && (
+          <button type="button" className="composer__attach" disabled
+                  title={attachUnavailable} aria-label={`Attach is unavailable. ${attachUnavailable}`}>
+            <Icon name="plus" size={17} />
+          </button>
+        )}
+        {canAttach && (
+          <>
+            <button
+              type="button"
+              className="composer__attach"
+              onClick={() => fileRef.current?.click()}
+              disabled={attachBusy}
+              title={attachTitle || 'Attach a financial statement (PDF)'}
+              aria-label={attachTitle || 'Attach a financial statement'}
+            >
+              <Icon name={attachBusy ? 'refresh' : 'plus'} size={17} />
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              className="composer__file"
+              accept={attachAccept}
+              multiple
+              onChange={(e) => {
+                const files = Array.from(e.target.files || []);
+                if (files.length) onFiles(files);
+                // Reset so re-picking the same filename fires onChange again.
+                e.target.value = '';
+              }}
+            />
+          </>
+        )}
+
         <textarea
           ref={ref}
           className="composer__input"
@@ -64,7 +109,13 @@ export default function Composer({ onSubmit, disabled, placeholder }) {
 
       <p className="composer__hint">
         <kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line
+        {canAttach && ' · Drop PDFs anywhere in the conversation'}
       </p>
+      {!canAttach && attachUnavailable && (
+        <p className="composer__hint composer__hint--warn">
+          Uploads are switched off: {attachUnavailable} You can still ask about the general corpus.
+        </p>
+      )}
     </div>
   );
 }

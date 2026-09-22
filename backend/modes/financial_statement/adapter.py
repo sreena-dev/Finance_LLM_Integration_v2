@@ -59,6 +59,7 @@ def _load() -> object:
             _require_yukta()
             _normalise_embedding_url()
             _install_entity_resolution()
+            _install_upload_bridge()
             _install_reranker_fallback()
             _warm_table_config(fs_api)
             _require_reports_db(fs_api)
@@ -118,6 +119,51 @@ def _normalise_embedding_url() -> None:
     if not url.endswith("/v1/embeddings"):
         config.EMBEDDING_BASE_URL = f"{url}/v1/embeddings"
         print(f"[{MODE_ID}] Embedding endpoint normalised to {config.EMBEDDING_BASE_URL}")
+
+
+def _install_upload_bridge() -> None:
+    """Let the existing company tools read uploaded documents.
+
+    Runs AFTER _install_entity_resolution() and deliberately so: the bridge
+    wraps whatever `_resolve_document` is currently bound, so the entity
+    ladder stays in the chain for corpus documents rather than being replaced
+    by it. Reversing the order would leave the ladder wrapping the bridge, and
+    an uploaded document would never be reached.
+
+    A contract failure here is fatal to the mode for the same reason it is in
+    entity resolution: shipping with a silently uninstalled bridge means every
+    upload converts, reports success, and then answers "no data for that
+    company".
+    """
+    import tools_fs  # type: ignore
+
+    from .upload import bridge
+
+    bridge.install(
+        tools_fs.ComplianceTools,
+        tools_fs.UnitResolver,
+        tools_fs.DocumentResolver,
+        tools_fs.SourceRef,
+        tool_registry=tools_fs.ToolRegistry,
+        # The narrative readers. Passed as a mapping so the bridge needs no
+        # import of the vendored pipeline and this file stays the single place
+        # that knows which classes exist.
+        narrative_targets={
+            "DisclosureSearchTools": tools_fs.DisclosureSearchTools,
+            "AccountingPolicyTools": tools_fs.AccountingPolicyTools,
+            "ReportReferenceTools": tools_fs.ReportReferenceTools,
+            "ExecutiveSummaryTools": tools_fs.ExecutiveSummaryTools,
+            "AuditorReportTools": tools_fs.AuditorReportTools,
+            "GoingConcernTools": tools_fs.GoingConcernTools,
+            "AuditRiskTools": tools_fs.AuditRiskTools,
+            # The multi-year trend's document resolver. Without it, the one
+            # tool that computes cross-year deltas cannot assemble a series
+            # from uploads at all -- and prompt rule 15 forbids the model
+            # computing the deltas itself, so a comparative question about
+            # uploaded filings has no answer path.
+            "TrendAnalysisTools": tools_fs.TrendAnalysisTools,
+        },
+    )
 
 
 def _install_entity_resolution() -> None:
@@ -298,6 +344,37 @@ def _warm_table_config(fs_api) -> None:
 # is produced or which evidence it rests on changes.
 _CAVEAT_OPENER = "confidence was reduced from"
 
+_CONFIDENCE_RE = re.compile(r"\*\*confidence\*\*\s*:\s*(high|medium|low)\b", re.I)
+_REDUCED_RE = re.compile(
+    r">\s*confidence was reduced from\s*\*?(high|medium|low)\*?\s*automatically\s*:\s*(.+)", re.I
+)
+_TOOLS_RE = re.compile(r"\*\*tools\s+used\*\*\s*:\s*(.+)", re.I)
+_UNSOURCED_RE = re.compile(r">\s*\*\*no tool was called for this answer\*\*", re.I)
+
+
+def _extract_checks(answer: str) -> dict:
+    """How the answer was checked, read off the rendered answer BEFORE the UI
+    copy of it is cleaned.
+
+    Confidence, the tools used and the unsourced notice are stripped from the
+    text the reader sees (`_strip_confidence_caveat`, `api_server._clean_section`)
+    -- that display decision stands. They are returned here as separate fields so
+    the interface can offer them in one collapsed "How this was checked" section
+    instead of dropping the information altogether. Nothing here changes what the
+    pipeline computes; it only reads what it already wrote.
+    """
+    text = answer or ""
+    confidence = _CONFIDENCE_RE.search(text)
+    reduced = _REDUCED_RE.search(text)
+    tools = _TOOLS_RE.search(text)
+    return {
+        "confidence": confidence.group(1).capitalize() if confidence else None,
+        "reduced_from": reduced.group(1).capitalize() if reduced else None,
+        "reduced_reason": reduced.group(2).strip() if reduced else None,
+        "tools_used": [t.strip() for t in tools.group(1).split(",") if t.strip()] if tools else [],
+        "unsourced": bool(_UNSOURCED_RE.search(text)),
+    }
+
 
 def _strip_confidence_caveat(text: str) -> str:
     """Drop the auto-generated confidence-reduction blockquote.
@@ -344,7 +421,13 @@ def status() -> tuple[bool, str | None]:
         return False, exc.reason
 
 
-def run_query(query: str, *, history: list[dict] | None = None) -> dict:
+def run_query(
+    query: str,
+    *,
+    history: list[dict] | None = None,
+    user_id: str | None = None,
+    conversation_id: str | None = None,
+) -> dict:
     """Run the full FS RAG pipeline for one query. Blocking — call in a thread.
 
     `history` is the earlier turns of this conversation, read server-side from
@@ -374,12 +457,73 @@ def run_query(query: str, *, history: list[dict] | None = None) -> dict:
 
     effective = rewriter.rewrite(query, history or [])
 
+    # Bind this request to the documents uploaded into THIS conversation. The
+    # bridge's wrappers and the four upload-only tools both read the scope from
+    # a ContextVar, because the tool closures the agent framework calls have no
+    # parameter to thread it through. Set for the duration of the answer and
+    # reset immediately after, so nothing leaks into the next request.
+    from .upload import materiality as materiality_mod
+    from .upload import store as upload_store
+
+    # A Redis outage here is deliberately not treated as a reason to fail the
+    # whole question. `scope_for` failing means we don't yet know whether this
+    # conversation has an upload in scope -- corpus-only questions ("what does
+    # Ind AS 115 require?") have nothing to do with that and must not be taken
+    # down by it. But silently proceeding as if there were no upload would be
+    # actively misleading for a conversation that genuinely has one, so the
+    # failure is carried forward as a visible notice on the answer instead --
+    # the same "say so when something couldn't be verified" pattern
+    # materiality_legend/extraction_caveats already use elsewhere in this
+    # feature, rather than staying silent about it.
+    scope = None
+    upload_store_notice = None
+    if user_id:
+        try:
+            scope = upload_store.scope_for(user_id, conversation_id)
+        except upload_store.UploadStoreError as exc:
+            logger.warning(
+                "uploaded-document store unavailable for this query "
+                "(falling back to corpus-only): %s", exc,
+            )
+            upload_store_notice = (
+                "Whether any documents are attached to this conversation could "
+                "not be checked just now (the upload store was unreachable), so "
+                "this answer reflects only the general corpus."
+            )
+    token = upload_store.set_scope(scope) if scope else None
+    if scope and scope.documents:
+        try:
+            upload_store.STORE.touch(user_id or "", conversation_id or "")
+        except upload_store.UploadStoreError as exc:
+            # A housekeeping call (TTL refresh) failing must not fail an
+            # otherwise-working answer.
+            logger.warning("could not refresh %s's TTL: %s", conversation_id, exc)
+        effective = _name_the_upload(effective, scope)
+
     started = time.perf_counter()
-    result = fs_api._orchestrator.answer(
-        effective,
-        conn=fs_api._get_conn(),
-        conn_reports=fs_api._get_reports_conn(),
-    )
+    threshold = None
+    try:
+        result = fs_api._orchestrator.answer(
+            effective,
+            conn=fs_api._get_conn(),
+            conn_reports=fs_api._get_reports_conn(),
+        )
+
+        # Computed HERE, inside the scope, not after it.
+        #
+        # `_provisional_materiality` reads the document's figures through the
+        # same bridged tools the agent uses, and the bridge decides what to serve
+        # from the ContextVar. Run after `reset_scope` it saw no upload, fell
+        # through to Postgres, found nothing, and every answer came back with no
+        # legend at all -- while every unit test passed, because they set the
+        # scope by hand and never exercised this ordering.
+        if scope and scope.documents:
+            threshold = materiality_mod.REGISTRY.get(user_id or "", conversation_id or "")
+            if threshold is None:
+                threshold = _provisional_materiality(fs_api, scope)
+    finally:
+        if token is not None:
+            upload_store.reset_scope(token)
 
     if "error" in result:
         raise ModeUnavailableError(
@@ -387,7 +531,21 @@ def run_query(query: str, *, history: list[dict] | None = None) -> dict:
             f"Pipeline error at stage '{result['error']}': {result.get('message', '')}",
         )
 
+    checks = _extract_checks(result.get("answer", ""))
     structured = fs_api._parse_structured_answer(result.get("answer", ""))
+
+    # The materiality legend travels with the answer rather than being left for
+    # the model to remember. The requirement is that any flag or risk rating
+    # states the threshold it was derived against, and a legend the renderer
+    # always has is a stronger guarantee than a sentence the model is asked to
+    # write. Present only when documents were in scope: a corpus answer keeps
+    # exactly the payload shape it had before this feature.
+    legend = None
+    if threshold is not None:
+        legend = {
+            "markdown": materiality_mod.legend(threshold),
+            **threshold.as_dict(),
+        }
 
     return {
         "mode": MODE_ID,
@@ -404,4 +562,98 @@ def run_query(query: str, *, history: list[dict] | None = None) -> dict:
         "elapsed_seconds": result.get(
             "total_elapsed_seconds", round(time.perf_counter() - started, 2)
         ),
+        "materiality_legend": legend,
+        "uploaded_documents": [d.summary() for d in scope.documents] if scope else [],
+        "upload_store_notice": upload_store_notice,
+        "checks": checks,
     }
+
+
+
+def _name_the_upload(question: str, scope) -> str:
+    """Make an uploaded document the implicit subject of an unqualified question.
+
+    Every company tool takes a company and a financial year, and prompt rule 16a
+    tells the model to pass them exactly as the user wrote them. When a document
+    has been uploaded the user does not write them at all -- they ask "what are
+    the total assets?" about the file in front of them, the way they would of
+    Claude or ChatGPT. Measured against the live model, that question came back
+    as "I cannot answer because you haven't specified a company or a financial
+    year", with the document sitting in scope the whole time.
+
+    So the subject is supplied here, deterministically, rather than hoped for
+    from the model. This is the same seam the follow-up rewriter already uses:
+    the user's own words are still what the UI echoes and what is stored, and
+    only the text handed to the agent is made explicit.
+
+    Left alone when the question already names a company, so asking about a
+    different entity still reaches the corpus.
+    """
+    documents = getattr(scope, "documents", None) or []
+    if not documents or not question:
+        return question
+
+    lowered = question.lower()
+
+    # Already explicit about some entity: do not steer it towards the upload.
+    for document in documents:
+        name = (document.company or "").strip().lower()
+        if name and (name in lowered or lowered in name):
+            return question
+    # A question that names a year is usually naming a filing too.
+    if any(str(y) in question for y in range(1990, 2100, 1)) and "upload" not in lowered:
+        # Only skip when it ALSO names something entity-like; a bare year with
+        # an uploaded document still refers to that document.
+        pass
+
+    described = []
+    for document in documents[:4]:
+        company = document.company or "the uploaded entity"
+        year = document.financial_year or "year not stated in the document"
+        described.append(f"{company} ({year}), file {document.filename}")
+
+    context = (
+        "[Context: the user has uploaded "
+        + ("this document" if len(described) == 1 else f"{len(described)} documents")
+        + " into this conversation: " + "; ".join(described) + ". "
+        "The question below is about "
+        + ("it" if len(described) == 1 else "them")
+        + " unless it names a different company. Pass that company name and "
+        "financial year to the company tools; do not ask the user to supply "
+        "them, and do not answer that no company was specified.]\n\n"
+    )
+    return context + question
+
+def _provisional_materiality(fs_api, scope):
+    """A provisional band from the first uploaded document that yields figures.
+
+    Computed from the statements rather than assumed, and labelled provisional
+    so the legend can say so. Failure is not an error: with no extractable
+    benchmark the legend states that no threshold is in force, which is the
+    honest outcome and better than a number nobody can justify.
+    """
+    from .upload import materiality as materiality_mod
+
+    try:
+        import tools_fs  # type: ignore
+    except Exception:
+        return None
+
+    conn_reports = fs_api._get_reports_conn()
+    for document in scope.documents:
+        try:
+            figures = tools_fs.RatioExtractionEngine.extract_all_figures(
+                document.doc_id, conn_reports
+            )
+        except Exception:
+            continue
+        if not figures:
+            continue
+        try:
+            units = tools_fs.UnitResolver.resolve(document.doc_id, conn_reports)
+        except Exception:
+            units = {}
+        band = materiality_mod.provisional_from_figures(figures, units.get("label"))
+        if band.amount is not None:
+            return band
+    return None

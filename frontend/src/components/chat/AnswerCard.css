@@ -154,3 +154,104 @@
   cursor: pointer;
 }
 .chunk__more:hover { color: var(--navy-800); text-decoration: underline; }
+
+/* --- Live upload -------------------------------------------------------- */
+
+/* Which uploaded documents an answer was drawn from. Stated on the answer
+   itself rather than only in the side panel: a reader scrolling back through a
+   thread needs to know whether a figure came from their file or the corpus,
+   and the citation alone does not say. */
+.answer__uploads {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--navy-50);
+  font-size: 11.5px;
+  color: var(--navy-700);
+}
+
+.chunk__scan {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--navy-600);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+
+.chunk__scan:hover {
+  background: var(--navy-50);
+  border-color: var(--navy-600);
+}
+
+/* ── Redesign ──────────────────────────────────────────────────────────── */
+
+/* A 3px navy cap on every answer card; it lands with a 0.8% scale, no bounce. */
+.answer {
+  border-top: 3px solid var(--navy-700);
+  border-radius: var(--radius-lg);
+  animation: answer-settle 0.32s var(--ease-settle);
+}
+@keyframes answer-settle { from { transform: scale(0.992); opacity: 0; } to { transform: none; opacity: 1; } }
+
+.answer__head { background: var(--paper); border-bottom: 1px solid var(--line); }
+.answer__label { color: var(--navy-700); }
+.answer__stat { color: var(--ink-3); font-family: var(--font-mono); }
+
+.answer__readas {
+  margin: 0;
+  padding: 9px 18px 0;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+.answer__readas span { font-weight: 600; color: var(--ink-2); }
+
+/* The lead sentence is the answer: serif, no tinted box. */
+.answer__summary { background: transparent; border-bottom: 0; padding: 14px 18px 0; }
+.answer__summary .md { font-family: var(--font-serif); font-size: 17px; font-weight: 600; line-height: 1.5; color: var(--navy-700); }
+
+.answer__legend {
+  margin: 0 18px 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--warn-100);
+  border: 1px solid #f0dcae;
+  color: var(--warn-600);
+  font-size: 13px;
+}
+
+.answer__uploads {
+  margin: 0 18px 14px;
+  padding: 9px 12px;
+  background: var(--paper-2);
+  border-radius: var(--radius);
+}
+
+.answer__extras { background: var(--paper); border-top: 1px solid var(--line); }
+
+/* How this was checked: collapsed by default, nothing above the fold changes. */
+.answer__checks { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.answer__checks p { margin: 0; }
+.answer__checks-why { color: var(--ink-3); }
+.answer__checks-unsourced {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--warn-100);
+  color: var(--warn-600);
+  border: 1px solid #f0dcae;
+}
+.answer__checks-unsourced svg { flex: none; margin-top: 2px; }
+.answer__tools { font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); }

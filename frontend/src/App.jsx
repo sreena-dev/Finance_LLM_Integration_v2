@@ -5,11 +5,13 @@ import {
   fetchConversation,
   fetchModes,
   listConversations,
+  fsUploadHealth,
   probeMode,
 } from './api/client';
 import Sidebar from './components/Sidebar';
 import ConversationList from './components/chat/ConversationList';
 import ChatView from './components/chat/ChatView';
+import DocumentPane from './components/ingestion/DocumentPane';
 import ReportView from './components/report/ReportView';
 import TrialBalanceView from './components/trial-balance/TrialBalanceView';
 import FdrAnalysis from './components/financial-diagnostic-report/FdrAnalysis';
@@ -55,7 +57,7 @@ function ModeHeader({ mode, health }) {
     : health === undefined
       ? { tone: 'mute', text: 'Checking…' }
       : health.available
-        ? { tone: 'ok', text: 'Pipeline ready' }
+        ? { tone: 'ok', text: 'Available' }
         : { tone: 'err', text: 'Unavailable' };
 
   return (
@@ -70,9 +72,6 @@ function ModeHeader({ mode, health }) {
           <span className="dot" />
           {state.text}
         </span>
-        <code className="head__path" title="This mode's API namespace">
-          {mode.base_path}
-        </code>
       </div>
     </header>
   );
@@ -104,6 +103,31 @@ export default function App() {
   const [tbConversations, setTBConversations] = useState([]);
   const [tbConvoId, setTBConvoId] = useState(null);
   const [tbConvoState, setTBConvoState] = useState({ loading: false, error: null });
+
+  // Which uploaded document (if any) the right-hand pane is showing.
+  // Conversation-scoped, not mode-scoped: a document belongs to one
+  // conversation, so switching conversations closes a stale pane rather than
+  // leaving it open on a document the new conversation doesn't have.
+  const [fsViewDoc, setFsViewDoc] = useState(null);
+  // A cell to open straight away in the pane's editor (from the quality drawer's
+  // Enter / Review buttons): `{ page_no, table_id, row_index, col_index }`.
+  const [fsFocus, setFsFocus] = useState(null);
+  const openDocPane = useCallback((doc, focus = null) => {
+    setFsViewDoc(doc);
+    setFsFocus(focus);
+  }, []);
+  useEffect(() => { setFsViewDoc(null); setFsFocus(null); }, [convoId]);
+
+  // How long the server keeps an upload, for the sidebar note and the report.
+  const [retentionDays, setRetentionDays] = useState(30);
+  const [offline, setOffline] = useState(() => typeof navigator !== 'undefined' && navigator.onLine === false);
+  useEffect(() => {
+    const on = () => setOffline(false);
+    const off = () => setOffline(true);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+  }, []);
 
   // ── Boot: load the mode list, then probe each mode in the background ────
   useEffect(() => {
@@ -207,6 +231,10 @@ export default function App() {
 
   // ── Financial Statements conversations ──────────────────────────────────
   const fsMode = useMemo(() => modes.find((m) => m.id === 'financial-statement') || null, [modes]);
+  useEffect(() => {
+    if (!fsMode) return;
+    fsUploadHealth(fsMode).then((h) => { if (h?.retention_days) setRetentionDays(h.retention_days); });
+  }, [fsMode]);
 
   const refreshConversations = useCallback(async () => {
     if (!fsMode) return;
@@ -319,10 +347,21 @@ export default function App() {
         // handler); a plain chat answer has no payload, or one without it. Spreading
         // m.payload reproduces exactly the { result, doc, priorDoc, pdfIds } shape
         // AuditCard already renders from a live run, so it needs no changes.
+        //
+        // A plain chat turn's `content` is only ever the bare answer text -- /ask
+        // and /ask-general never persist computed/guardrail/sources (only /audit
+        // does, via payload) -- so it's wrapped back into the { result, scope }
+        // shape runChatQuestion's own live push already uses, with tb_doc_id
+        // (present per-message) standing in for "was this doc-scoped or general".
         const rehydrated = (messages || []).map((m, i) => {
           if (m.role === 'user') return { id: `u-${id}-${i}`, kind: 'user', text: m.content };
           if (m.payload && m.payload.result) return { id: `a-${id}-${i}`, kind: 'audit', ...m.payload };
-          return { id: `a-${id}-${i}`, kind: 'answer', text: m.content };
+          return {
+            id: `a-${id}-${i}`,
+            kind: 'answer',
+            result: { answer: m.content },
+            scope: m.tb_doc_id ? 'trial-balance' : 'corpora',
+          };
         });
         setTBStates((prev) => ({
           ...prev,
@@ -406,7 +445,9 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar modes={sidebarModes} activeId={activeId} onSelect={setActiveId} health={health}>
+      <Sidebar modes={sidebarModes} activeId={activeId} onSelect={setActiveId} health={health}
+               rail={activeId === 'financial-statement' && Boolean(fsViewDoc)}
+               retentionDays={activeId === 'financial-statement' ? retentionDays : null}>
         {/* Financial Statements and Trial Balance both persist a conversation
             thread server-side; the other modes do not, so this list only
             mounts for those two, each against its own history. */}
@@ -459,6 +500,14 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
               >
+                {offline && (
+                  <div className="main__notice">
+                    <Notice tone="warn" title="You are offline">
+                      Anything you have typed is kept. Questions will send once the connection is back.
+                    </Notice>
+                  </div>
+                )}
+
                 {/* A mode that is down or unintegrated shows the gateway's
                     own reason string — it names the exact missing setting. */}
                 {health[activeMode.id] && !health[activeMode.id].available && (
@@ -504,14 +553,29 @@ export default function App() {
                   // renders the title/pill/path, so it runs in `embedded` mode.
                   <FdrAnalysis embedded />
                 ) : activeMode.ui === 'chat' ? (
-                  <ChatView
-                    mode={activeMode}
-                    health={health[activeMode.id]}
-                    thread={threads[activeMode.id] || []}
-                    setThread={setThreadFor(activeMode.id)}
-                    conversationId={convoId}
-                    onConversationChange={onConversationChange}
-                  />
+                  <div className="main__split">
+                    <ChatView
+                      mode={activeMode}
+                      health={health[activeMode.id]}
+                      thread={threads[activeMode.id] || []}
+                      setThread={setThreadFor(activeMode.id)}
+                      conversationId={convoId}
+                      onConversationChange={onConversationChange}
+                      onViewDocument={
+                        activeMode.id === 'financial-statement' ? openDocPane : undefined
+                      }
+                    />
+                    {activeMode.id === 'financial-statement' && fsViewDoc && (
+                      <DocumentPane
+                        mode={activeMode}
+                        conversationId={convoId}
+                        doc={fsViewDoc}
+                        focus={fsFocus}
+                        retentionDays={retentionDays}
+                        onClose={() => { setFsViewDoc(null); setFsFocus(null); }}
+                      />
+                    )}
+                  </div>
                 ) : (
                   // ChatView used to be the `else` fallback. It is now an
                   // explicit match, because a future mode with an unrecognised

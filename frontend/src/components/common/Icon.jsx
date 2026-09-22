@@ -26,6 +26,9 @@ const PATHS = {
   user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4.5 20.5a7.5 7.5 0 0 1 15 0',
   logout: 'M15 17l5-5-5-5M20 12H9M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h6',
   plus: 'M12 5v14M5 12h14',
+  // Added for the document pane's "view the processed pages" action on a
+  // document chip. Additive only — every existing key and path is untouched.
+  eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
 };
 
 export default function Icon({ name, size = 20, className = '', strokeWidth = 1.6 }) {

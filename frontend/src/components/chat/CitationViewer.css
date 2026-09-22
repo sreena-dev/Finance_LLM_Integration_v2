@@ -1,0 +1,89 @@
+.cite__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(16, 23, 32, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.cite__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(920px, 100%);
+  max-height: 100%;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.cite__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink-800);
+}
+
+.cite__caption {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cite__close {
+  border: 0;
+  background: none;
+  color: var(--ink-500);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.cite__close:hover { color: var(--ink-900); }
+
+/* The scan is the whole point, so it gets every pixel available and scrolls
+   rather than being shrunk to fit -- a table scaled down to thumbnail size
+   cannot be read, which defeats the purpose of showing it. */
+.cite__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  background: var(--ink-100);
+  text-align: center;
+}
+
+.cite__img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  background: var(--white);
+}
+
+.cite__loading,
+.cite__error {
+  margin: 24px 0;
+  font-size: 12.5px;
+  color: var(--ink-500);
+}
+
+.cite__error { color: var(--err-600); }
+
+.cite__foot {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--ink-500);
+}

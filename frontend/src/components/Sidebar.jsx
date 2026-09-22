@@ -22,35 +22,28 @@ function StatusDot({ status }) {
   return <span className={`side__status side__status--${status}`} title={title} />;
 }
 
-export default function Sidebar({ modes, activeId, onSelect, health, children }) {
+export default function Sidebar({ modes, activeId, onSelect, health, children, rail = false, retentionDays = 30 }) {
   const { user, signOut } = useAuth();
 
   return (
-    <aside className="side">
+    <aside className={`side ${rail ? 'is-rail' : ''}`}>
       <div className="side__brand">
         <div className="side__mark">
-          <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="32" height="32" aria-hidden="true">
             <rect width="32" height="32" rx="8" fill="var(--navy-700)" />
-            <path
-              d="M9 22L15 10L21 22"
-              stroke="#fff"
-              strokeWidth="2.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path d="M11.3 17.5H18.7" stroke="var(--gold-600)" strokeWidth="2.2" strokeLinecap="round" />
+            <path d="M9 11h9M9 16h6M9 21h5" stroke="#fff" strokeWidth="2" strokeLinecap="round" />
+            <path d="M17 20.5l3 3 5.5-7" stroke="var(--gold-600)" strokeWidth="2.4"
+                  strokeLinecap="round" strokeLinejoin="round" fill="none" />
           </svg>
         </div>
         <div className="side__brand-text">
-          <span className="side__name">Artha.AI</span>
-          <span className="side__tag">Audit Intelligence</span>
+          <span className="side__name">Artha<span className="side__name-ai">.AI</span></span>
+          <span className="side__tag">Audit assistance</span>
         </div>
       </div>
 
       <div className="side__scroll">
       <nav className="side__nav" aria-label="Modes">
-        <p className="side__heading">Modes</p>
-
         {modes.map((mode, i) => {
           const isActive = mode.id === activeId;
           const state = !mode.integrated
@@ -82,7 +75,10 @@ export default function Sidebar({ modes, activeId, onSelect, health, children })
 
               <span className="side__item-inner">
                 <Icon name={MODE_ICONS[mode.id] || 'doc'} size={18} className="side__item-icon" />
-                <span className="side__item-label">{mode.short_label}</span>
+                <span className="side__item-label">
+                  {mode.short_label}
+                  {state === 'down' && <span className="side__item-sub">Unavailable</span>}
+                </span>
                 <StatusDot status={state} />
               </span>
             </motion.button>
@@ -96,6 +92,12 @@ export default function Sidebar({ modes, activeId, onSelect, health, children })
         {children}
       </div>
 
+      {retentionDays ? (
+        <p className="side__retention">
+          Uploaded PDFs are kept for {retentionDays} days and removed with their conversation.
+        </p>
+      ) : null}
+
       {/* Signed-in user. Reads context directly instead of taking props: the
           sidebar is app-shell, not a shared surface, so drilling `user` and
           `onSignOut` through App would add two props to no benefit. */}
@@ -108,7 +110,7 @@ export default function Sidebar({ modes, activeId, onSelect, health, children })
             <span className="side__user-name" title={user?.email || ''}>
               {user?.display_name || user?.username || 'Signed in'}
             </span>
-            <span className="side__user-sub">{user?.email || ''}</span>
+            <button type="button" className="side__user-out" onClick={() => signOut()}>Sign out</button>
           </span>
         </div>
         <button

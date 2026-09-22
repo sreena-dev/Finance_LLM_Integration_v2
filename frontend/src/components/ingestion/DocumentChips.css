@@ -1,0 +1,54 @@
+.chips { display: flex; flex-direction: column; gap: 8px; }
+
+.docchip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.docchip__head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.docchip__icon { flex: none; color: var(--navy-600); align-self: center; }
+.docchip__file {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.docchip__meta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.docchip__del {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.docchip__del:hover { color: var(--err-600); background: var(--err-100); }
+
+.docchip__pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.docchip__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+@media (max-width: 720px) {
+  .docchip__head { flex-wrap: wrap; }
+  .docchip__file { max-width: 100%; }
+}

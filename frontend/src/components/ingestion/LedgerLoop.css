@@ -1,0 +1,60 @@
+.loop { display: block; margin: 0 auto; overflow: visible; }
+.loop * { transform-box: fill-box; }
+
+.loop__shadow { fill: var(--line); }
+.loop__paper { fill: #fff; stroke: var(--navy-700); stroke-width: 1.6; }
+.loop__ink { stroke: var(--navy-700); stroke-width: 1.6; stroke-linecap: round; }
+.loop__bold { stroke-width: 3; }
+.loop__rule { stroke: var(--line-2); stroke-width: 2; stroke-linecap: round; }
+.loop__figure { stroke: var(--navy-600); stroke-width: 2.4; stroke-linecap: round; }
+.loop__gold { stroke: var(--gold-600); stroke-width: 1.6; stroke-dasharray: 3 3; }
+.loop__flappaper { fill: var(--paper-2); stroke: var(--navy-700); stroke-width: 1.6; }
+.loop__coinface { fill: var(--gold-600); }
+.loop__rupee { fill: #fff; font: 700 14px var(--font-serif); }
+.loop__rupee--s { font-size: 8px; }
+.loop__pan { fill: var(--gold-100); stroke: var(--navy-700); stroke-width: 1.4; stroke-linejoin: round; }
+.loop__ok { fill: var(--ok-100); stroke: var(--ok-600); stroke-width: 1.6; }
+.loop__okmark { stroke: var(--ok-600); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Four scenes across a 14 s loop; each fades in, holds, fades out. */
+.loop__scene { opacity: 0; animation: 14s ease-in-out infinite; }
+.loop__s1 { animation-name: loop-s1; }
+.loop__s2 { animation-name: loop-s2; }
+.loop__s3 { animation-name: loop-s3; }
+.loop__s4 { animation-name: loop-s4; }
+@keyframes loop-s1 { 0% { opacity: 0; } 4% { opacity: 1; } 24% { opacity: 1; } 27%, 100% { opacity: 0; } }
+@keyframes loop-s2 { 0%, 25% { opacity: 0; } 28% { opacity: 1; } 49% { opacity: 1; } 52%, 100% { opacity: 0; } }
+@keyframes loop-s3 { 0%, 50% { opacity: 0; } 53% { opacity: 1; } 86% { opacity: 1; } 89%, 100% { opacity: 0; } }
+@keyframes loop-s4 { 0%, 87% { opacity: 0; } 90% { opacity: 1; } 98% { opacity: 1; } 100% { opacity: 0; } }
+
+/* Page turn: the flap folds over the spine (scaleX 1 to -1) at ~1.4 s. */
+.loop__flap { transform-origin: 0% 50%; animation: loop-flap 14s ease-in-out infinite; }
+@keyframes loop-flap { 0%, 9% { transform: scaleX(1); } 18% { transform: scaleX(-1); } 100% { transform: scaleX(-1); } }
+
+/* The rupee mark drops in from above and settles with a small overshoot. */
+.loop__coin { animation: loop-coin 14s cubic-bezier(0.34, 1.4, 0.5, 1) infinite; }
+@keyframes loop-coin {
+  0%, 26% { transform: translate(18px, -34px); }
+  32% { transform: translate(18px, 4px); }
+  35%, 100% { transform: translate(18px, 0); }
+}
+
+/* Scales: start tilted, swing the other way (damped), come to rest level. */
+.loop__beam { transform-origin: 50% 0%; animation: loop-beam 14s ease-in-out infinite; }
+@keyframes loop-beam {
+  0%, 51% { transform: rotate(-9deg); }
+  59% { transform: rotate(7deg); }
+  66% { transform: rotate(-3deg); }
+  72%, 100% { transform: rotate(0deg); }
+}
+
+/* The tick's ring pops in. */
+.loop__tick { transform-origin: 50% 50%; animation: loop-tick 14s ease-out infinite; }
+@keyframes loop-tick { 0%, 89% { transform: scale(0.4); } 93% { transform: scale(1.15); } 96%, 100% { transform: scale(1); } }
+
+/* Reduced motion: one still frame, the tick. */
+@media (prefers-reduced-motion: reduce) {
+  .loop__scene, .loop__flap, .loop__coin, .loop__beam, .loop__tick { animation: none !important; }
+  .loop__s1, .loop__s2, .loop__s3 { opacity: 0; }
+  .loop__s4 { opacity: 1; }
+}

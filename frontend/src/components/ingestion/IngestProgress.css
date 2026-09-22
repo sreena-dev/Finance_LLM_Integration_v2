@@ -1,0 +1,133 @@
+.ingest {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.ingest--queued, .ingest.is-error {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  color: var(--ink-2);
+}
+.ingest.is-error { border-color: #f3cdc9; background: var(--err-100); color: var(--err-600); }
+.ingest__errbody { flex: 1; min-width: 0; }
+.ingest__erricon { flex: none; }
+.ingest__x { border: 0; background: none; font-size: 18px; line-height: 1; color: inherit; cursor: pointer; }
+
+/* Compact bar (the default): the chat stays usable above the composer. */
+.ingest__bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: var(--target);
+  padding: 8px 14px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+.ingest__rupee {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--gold-100);
+  color: var(--gold-700);
+  font: 700 13px var(--font-serif);
+}
+.ingest__now {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--ink);
+}
+.ingest__file {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ingest__time { font: 500 12px var(--font-mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.ingest__track {
+  position: relative;
+  flex: 0 0 110px;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--line);
+  overflow: hidden;
+}
+.ingest__fill {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--navy-700);
+  position: relative;
+  overflow: hidden;
+}
+/* The sheen shows the bar is alive; width still follows the real stage. */
+.ingest__fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  transform: translateX(-100%);
+  animation: ingest-sheen 1.8s linear infinite;
+}
+@keyframes ingest-sheen { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .ingest__fill::after { animation: none; display: none; } }
+.ingest__expand { font-size: 12px; font-weight: 600; color: var(--navy-600); }
+
+/* Expanded panel: ledger loop, real stage, timer, tip. */
+.ingest__panel {
+  padding: 18px 20px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--paper);
+  text-align: center;
+}
+.ingest__marks { display: flex; justify-content: center; margin-bottom: 6px; }
+.ingest__marks:empty { display: none; }
+.ingest__step { display: flex; justify-content: center; align-items: center; gap: 10px; margin: 10px 0 4px; }
+.ingest__elapsed { font: 500 12px var(--font-mono); color: var(--ink-3); }
+.ingest__title { margin: 0 0 6px; font-size: 19px; font-family: var(--font-serif); }
+.ingest__msg { margin: 0 auto 10px; max-width: 46ch; font-size: 12.5px; color: var(--ink-3); }
+.ingest__tip {
+  display: inline-block;
+  margin: 0 0 14px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  background: var(--gold-100);
+  color: var(--gold-700);
+  font-size: 12.5px;
+}
+.ingest__steps { list-style: none; margin: 0 auto; padding: 0; max-width: 340px; text-align: left; }
+.ingest__stepitem { display: flex; align-items: center; gap: 10px; padding: 3px 0; font-size: 13px; color: var(--ink-3); }
+.ingest__stepitem.is-active { color: var(--navy-700); font-weight: 600; }
+.ingest__stepitem.is-done { color: var(--ink-2); }
+.ingest__dot {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--line-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  background: var(--surface);
+}
+.ingest__stepitem.is-active .ingest__dot { background: var(--navy-700); border-color: var(--navy-700); color: #fff; }
+.ingest__stepitem.is-done .ingest__dot { background: var(--ok-100); border-color: #c5e6d3; color: var(--ok-600); }

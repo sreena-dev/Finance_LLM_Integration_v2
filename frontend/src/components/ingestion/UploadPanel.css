@@ -1,0 +1,46 @@
+.uploadpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.uploadpanel__queued {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ink-500);
+}
+
+.uploadpanel__docs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Several uploaded years should not push the composer off screen; the panel
+     scrolls internally instead. */
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.uploadpanel__scope {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-500);
+}
+
+/* The panel is now a thin result strip above the composer, not a dropzone.
+   It renders nothing at all when there is nothing to report. */
+.uploadpanel:empty { display: none; }
+
+/* Centred in the reading column, with the same gutters as the thread and the
+   composer; several documents scroll inside the strip instead of pushing the
+   composer off screen. */
+.uploadpanel {
+  width: 100%;
+  max-width: var(--reading-w);
+  margin: 0 auto;
+  padding: 8px 32px 0;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.uploadpanel:empty { display: none; }
+@media (max-width: 900px) { .uploadpanel { padding: 8px 16px 0; } }

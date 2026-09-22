@@ -11,25 +11,27 @@
   justify-content: space-between;
   gap: 20px;
   padding: 18px 32px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  background: var(--paper);
+  border-top: 3px solid var(--navy-700);       /* 3px navy rule on every page header */
+  border-bottom: 1px solid var(--line);
 }
 
 .head__text { min-width: 0; }
 
 .head__title {
   margin: 0 0 3px;
-  font-size: 18px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
-  color: var(--navy-900);
+  font-family: var(--font-serif);
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--navy-700);
 }
 
 .head__sub {
   margin: 0;
   font-size: 13px;
   line-height: 1.55;
-  color: var(--ink-500);
+  color: var(--ink-3);
   max-width: 640px;
 }
 
@@ -54,6 +56,15 @@
 
 .main__notice { flex: none; padding: 16px 32px 0; }
 .main__notice + * { min-height: 0; }
+
+/* Row layout for a chat mode's document pane. Sits inside `.main__pane`
+   (the existing key-based, AnimatePresence-free wrapper — see the comment
+   above it in App.jsx), so it inherits that already-fixed deadlock avoidance
+   rather than needing any of its own. `.chat`'s own sizing (ChatView.css) is
+   untouched; this only makes it share the row with a sibling instead of
+   filling it alone. */
+.main__split { display: flex; flex-direction: row; flex: 1; min-height: 0; }
+.main__split .chat { flex: 1; min-width: 0; }
 
 /* ── Boot / error screens ──────────────────────────────────────────────── */
 

@@ -1,162 +1,127 @@
-/* Sign-in / sign-up.
- *
- * A NEW file rather than an addition to an existing one: ChatView.css is shared
- * with SAR Q&A (ReportView imports it) and index.css is global, so neither is a
- * safe place to put screen-specific rules. Every value below is an existing
- * token — no new colours, no new radii.
- *
- * `.auth__input` is the app's first text-input styling; it is scoped to this
- * screen so it cannot alter the trial-balance mappers' inputs, which have their
- * own look. */
-
 .auth {
-  min-height: 100vh;
+  min-height: 100%;
   display: grid;
-  place-items: center;
-  padding: 32px 20px;
-  background: var(--bg);
+  grid-template-columns: minmax(360px, 42%) 1fr;
+  background: var(--paper);
 }
 
-.auth__card {
-  width: 100%;
-  max-width: 420px;
-  padding: 30px 30px 26px;
-  box-shadow: var(--shadow-md);
+/* ── Form pane ─────────────────────────────────────────────────────────── */
+
+.auth__form-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 28px 44px;
+  border-right: 1px solid var(--line);
 }
 
-.auth__brand {
+.auth__brand { display: flex; align-items: center; gap: 12px; }
+.auth__name { margin: 0; font: 700 22px var(--font-serif); color: var(--navy-700); letter-spacing: -0.01em; }
+.auth__name span { color: var(--gold-600); }
+
+.auth__main { flex: 1; display: flex; flex-direction: column; justify-content: center; max-width: 400px; width: 100%; margin: 0 auto; }
+.auth__eyebrow {
   display: flex;
   align-items: center;
-  gap: 11px;
-  margin-bottom: 22px;
-}
-
-.auth__name {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  color: var(--ink-900);
-}
-
-.auth__tag {
-  margin: 1px 0 0;
+  gap: 8px;
+  margin: 0 0 8px;
   font-size: 11.5px;
-  color: var(--ink-500);
-}
-
-.auth__title {
-  margin: 0 0 5px;
-  font-size: 21px;
-  font-weight: 650;
-  letter-spacing: -0.015em;
-  color: var(--ink-900);
-}
-
-.auth__sub {
-  margin: 0 0 20px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--ink-600);
-}
-
-.auth__notice {
-  margin-bottom: 16px;
-}
-
-.auth__form {
-  display: flex;
-  flex-direction: column;
-  gap: 15px;
-}
-
-.auth__field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-/* Mirrors `.sel__label` in Select.css, which is the only existing field-label
-   pattern in the app. */
-.auth__label {
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--ink-600);
+  color: var(--gold-700);
 }
+.auth__eyebrow::before { content: ""; width: 16px; height: 2px; background: var(--gold-600); }
+.auth__title { margin: 0 0 8px; font-size: 32px; line-height: 1.15; letter-spacing: -0.015em; }
+.auth__sub { margin: 0 0 18px; font-size: 14.5px; color: var(--ink-3); }
+.auth__notice { margin-bottom: 14px; }
 
-.auth__input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 10px 12px;
-  font-family: var(--font-sans);
-  font-size: 14px;
-  color: var(--ink-900);
-  background: var(--surface);
-  border: 1px solid var(--border);
+.auth__tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  margin-bottom: 14px;
+  padding: 2px;
+  border: 1px solid var(--line-2);
   border-radius: var(--radius);
+  background: var(--surface);
+}
+.auth__tabs button {
+  min-height: 34px;
+  padding: 4px 16px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.auth__tabs button.is-active { background: var(--navy-700); color: #fff; }
+
+.auth__form { display: flex; flex-direction: column; gap: 14px; }
+.auth__field { display: flex; flex-direction: column; gap: 6px; }
+.auth__label { font-size: 13px; font-weight: 600; color: var(--ink); }
+.auth__input {
+  min-height: var(--target);
+  padding: 8px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 14.5px;
+  color: var(--ink);
   transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
 }
+.auth__input::placeholder { color: var(--ink-3); }
+.auth__input:focus { outline: none; border-color: var(--navy-600); box-shadow: 0 0 0 3px var(--navy-100); }
+.auth__hint { font-size: 12px; color: var(--ink-3); }
+.auth__submit { width: 100%; margin-top: 4px; min-height: 44px; }
 
-.auth__input::placeholder {
-  color: var(--ink-400);
+.auth__foot { max-width: 400px; width: 100%; margin: 0 auto; }
+.auth__promise { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 6px; font-size: 12.5px; color: var(--ink-2); }
+.auth__promise span { display: inline-flex; align-items: center; gap: 6px; }
+.auth__promise svg { color: var(--ok-600); }
+.auth__disclaimer { margin: 0; font-size: 12px; color: var(--ink-3); }
+
+/* ── Illustration pane ─────────────────────────────────────────────────── */
+
+.auth__art-pane { display: flex; align-items: center; justify-content: center; padding: 40px; overflow: hidden; }
+.auth__art { position: relative; width: min(560px, 100%); display: flex; flex-direction: column; gap: 22px; }
+
+.auth__extract, .auth__scan {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
 }
+.auth__extract-head { display: flex; justify-content: space-between; gap: 10px; padding: 12px 16px; border-bottom: 2px solid var(--navy-700); }
+.auth__extract-head strong { display: block; font-size: 13.5px; }
+.auth__extract-head small { color: var(--ink-3); font-size: 12px; }
+.auth__extract ul { list-style: none; margin: 0; padding: 0; }
+.auth__extract li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 16px; font-size: 13.5px; border-bottom: 1px solid var(--line); }
+.auth__extract li .num { display: inline-flex; align-items: center; gap: 6px; }
+.auth__extract li .num svg { color: var(--ok-600); }
+.auth__extract li.is-total { background: var(--paper-2); font-weight: 700; border-top: 1px solid var(--ink-2); border-bottom: 0; }
+.auth__extract-foot { display: flex; align-items: center; gap: 8px; margin: 0; padding: 9px 16px; font-size: 12.5px; background: var(--warn-100); color: var(--warn-600); border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
 
-.auth__input:hover {
-  border-color: var(--border-strong);
-}
+.auth__scanrow { display: flex; align-items: center; gap: 18px; }
+.auth__scan { width: 66%; margin-left: 4%; flex: none; }
+.auth__cite { background: var(--surface); border: 1px solid var(--line); color: var(--ink-2); box-shadow: var(--shadow-sm); }
+.auth__extract-head .pill { align-self: flex-start; }
+.auth__scan header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-2); border-bottom: 1px solid var(--line); background: var(--paper-2); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.auth__scan-body { padding: 12px 14px; background: #efece2; border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
+.auth__scan-body i { display: block; height: 6px; margin: 6px 0; background: #c9c3b3; border-radius: 3px; width: 62%; }
+.auth__scan-body i.short { width: 34%; }
+.auth__scan-body p { display: flex; align-items: center; gap: 30px; margin: 10px 0; font: 13px var(--font-mono); color: var(--ink-2); }
+.auth__scan-body b { flex: 1; max-width: 80px; height: 20px; border: 2px solid var(--gold-600); border-radius: 4px; background: #b8b0a0; }
 
-/* The global :focus-visible outline is for keyboard traversal; a text field is
-   focused by clicking too, so it gets a persistent ring of its own. */
-.auth__input:focus {
-  outline: none;
-  border-color: var(--navy-600);
-  box-shadow: 0 0 0 3px var(--navy-100);
-}
+.auth__art-float { position: absolute; box-shadow: var(--shadow-sm); background: var(--surface); }
+.auth__art-float--top { top: -14px; right: 0; }
 
-.auth__hint {
-  font-size: 11.5px;
-  line-height: 1.45;
-  color: var(--ink-500);
-}
+.auth__headline h2 { margin: 0 0 8px; font-size: 28px; line-height: 1.2; }
+.auth__headline p { margin: 0; max-width: 46ch; font-size: 14.5px; color: var(--ink-3); }
 
-.auth__submit {
-  width: 100%;
-  justify-content: center;
-  margin-top: 4px;
-  padding-top: 10px;
-  padding-bottom: 10px;
-}
-
-.auth__switch {
-  margin: 18px 0 0;
-  font-size: 13px;
-  text-align: center;
-  color: var(--ink-600);
-}
-
-.auth__link {
-  padding: 0;
-  font: inherit;
-  color: var(--navy-600);
-  background: none;
-  border: 0;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.auth__link:hover {
-  color: var(--navy-800);
-}
-
-@media (max-width: 480px) {
-  .auth {
-    padding: 18px 14px;
-  }
-
-  .auth__card {
-    padding: 24px 20px 20px;
-  }
+@media (max-width: 900px) {
+  .auth { grid-template-columns: 1fr; }
+  .auth__form-pane { min-height: 100vh; padding: 20px 16px; border-right: 0; }
+  .auth__art-pane { display: none; }
 }

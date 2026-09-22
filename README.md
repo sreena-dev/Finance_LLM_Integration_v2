@@ -16,7 +16,7 @@ mode rather than as its own entry (`companion_of` in `app/registry.py`).
 |---|---|---|---|
 | Statutory Auditor's Report | `Fin_Audit_QA` / `Statutory_Auditor_Report` | `report` — two dropdowns → report | **Working** |
 | SAR Q&A | `Fin_Audit_QA` / `Statutory_Auditor_Report` | `report-chat` — entity/FY picker → chat | **Broken — `/ask` returns 503** |
-| Financial Statements | `Fin_Audit_QA` / `Financial_Statement` | `chat` | **Working** |
+| Financial Statements | `Fin_Audit_QA` / `Financial_Statement` | `chat` — corpus Q&A, plus upload a scan → live-ingested chat + editable document pane | **Working** — see *Financial Statements — live document upload* below |
 | Trial Balance | TB-v2 | `trial-balance` — ask, or upload → audit | **Working** |
 | Financial Diagnostic Report | `Fin_Audit_QA` / `Financial_Diagnostic_Report` | `fdr` — setup → workspace (report + Q&A) | **Working** |
 
@@ -40,7 +40,9 @@ Integrated/
 │   │   │   ├── conversations.py server-side chat history, scoped in the SQL
 │   │   │   ├── rewriter.py      folds history + new question into one query
 │   │   │   ├── entity_resolution.py  runtime-rebound DocumentResolver methods
-│   │   │   └── pipeline/        ← Financial_Statement branch, VERBATIM
+│   │   │   ├── pipeline/        ← Financial_Statement branch, VERBATIM
+│   │   │   └── upload/          live-ingested documents: store, bridge, editable cells
+│   │   │                        (see *Financial Statements — live document upload*)
 │   │   ├── statutory_auditor_report/
 │   │   │   ├── adapter.py
 │   │   │   ├── router.py        /api/statutory-auditor-report/*
@@ -57,6 +59,12 @@ Integrated/
 │   ├── scripts/audit_fs_entities.py   read-only entity-resolution audit
 │   ├── requirements.txt
 │   └── .env.example
+├── ingestion/                    scanned PDF -> verified tables (own container, port 12102)
+│   ├── app/                      render -> precheck -> preprocess -> convert -> vlm
+│   │                             second read -> verify -> identify -> emit (see its own README)
+│   ├── tests/accuracy/           human-verified-figure harness against data/
+│   └── README.md                 the pipeline deep-dive; start there for docling/OCR/VLM detail
+├── data/                         local sample corpus (gitignored — see *live document upload*)
 └── frontend/                    React 18 + Vite
     └── src/
         ├── auth/                sign-in screen + token handling
@@ -65,6 +73,7 @@ Integrated/
             ├── chat/            query-driven modes + conversation list
             ├── report/          the auditor's-report form + document
             ├── trial-balance/   one stream: ask, upload, audit + result cards
+            ├── ingestion/       upload flow, document pane, editable cells, quality report
             └── financial-diagnostic-report/
 ```
 
@@ -128,6 +137,18 @@ timezone is IST in both containers, and all configuration comes from the single
 root `.env`. See **[DOCKER.md](DOCKER.md)** for the full picture — port map,
 networking, hardening, and why the gateway runs exactly one worker.
 
+This also brings up the **ingestion service** (`ingest`, port 12102 — docling +
+OCR + the VLM second read, behind `ARTHA_INGEST_URL`) and **Redis** (`redis`,
+port 12105 — the durable store for live-ingested documents, behind
+`ARTHA_REDIS_URL`). `ARTHA_INGEST_URL` unset only disables the upload
+affordance itself. **`ARTHA_REDIS_URL` is a harder dependency than that:**
+`POST /api/financial-statement/query` checks the upload store on every request
+that carries a `conversation_id` — which a returning conversation always does,
+upload or not — so any Redis outage 503s every follow-up turn of Financial
+Statements chat, not only document upload. Only a brand-new conversation's
+first question (no `conversation_id` yet) is unaffected. See *Financial
+Statements — live document upload* below.
+
 ### Or from source
 
 ### 1. Backend
@@ -161,6 +182,25 @@ so the dev server and the Docker stack cannot drift apart. Vite proxies `/api`
 to `127.0.0.1:$ARTHA_BACKEND_PORT`; set `VITE_API_TARGET=http://host:port` to
 point at a gateway running elsewhere.
 
+### 3. Ingestion service + Redis (optional — needed for document upload)
+
+```bash
+cd ingestion
+python -m venv venv
+venv/Scripts/pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+uvicorn app.main:app --port 12102
+```
+
+Plus a Redis instance reachable at `ARTHA_REDIS_URL` (e.g. `redis-server` on
+the default port and `ARTHA_REDIS_URL=redis://localhost:6379/0`). Docling,
+torch and RapidOCR are heavy, first-run weight downloads if
+`INGEST_DOCLING_ARTIFACTS` is not pointed at a local cache — see
+**[ingestion/README.md](ingestion/README.md)** for the three install gotchas
+that cost real time (`docling-slim` vs `docling`, `onnxruntime`, Windows long
+paths) and for the pipeline itself. As with Docker, corpus chat runs without
+this step; a returning conversation's follow-up turns still need Redis
+reachable (see the note above).
+
 ---
 
 ## Configuration
@@ -177,6 +217,8 @@ for the annotated version. The settings that decide whether a mode comes up:
 | `ARTHA_JWT_SECRET` | all — sign-in | `/api/auth/{signup,login}` answer 503 |
 | `GENERATION_BASE_URL` + `GENERATION_API_KEY`, `EMBEDDING_BASE_URL`, `RERANKER_BASE_URL` | SAR, SAR Q&A, Financial Statements | answers fail; catalogs and `validate` still work |
 | `TB_GENERATION_BASE_URL` / `TB_GENERATION_MODEL` | Trial Balance | `ask` / `ask-general` / `audit` fail; upload, preview and `validate` still work |
+| `ARTHA_INGEST_URL` | Financial Statements | document upload reports unavailable; corpus chat unaffected |
+| `ARTHA_REDIS_URL` | Financial Statements | any chat turn carrying a `conversation_id` 503s (see *Running it* above), not only upload |
 
 Note the one that has no LLM dependency at all: the **Financial Diagnostic
 Report needs only `FINANCE_DSN` and `psycopg` v3** — no generation endpoint, no
@@ -216,7 +258,7 @@ both generation endpoints reachable), by exercising the real HTTP surface with
 | `GET /api/modes` without a token | 401 |
 | `POST /api/auth/{signup,login}`, `GET /api/auth/me` | pass; wrong password → 401 |
 | `GET /api/auth/health` | `available: true`, tables `artha_users`, `artha_fs_messages` |
-| Frontend `npm run build` | pass — 690 modules, 530 kB JS |
+| Frontend `npm run build` | pass |
 
 ### Modes
 
@@ -490,3 +532,209 @@ evidence feature and the `/pdfs*` and `/validate/upload` routes are **all gone**
   connection strings, which matched `FINANCE_DSN`/`REFERENCE_DSN` in this
   project's `.env` exactly. The `tb_input_data` table this mode reads/writes
   already existed on that database with real uploaded trial balances in it.
+
+---
+
+## Financial Statements — live document upload
+
+Financial Statements answers from a fixed pre-loaded corpus **and** from a
+financial statement a user uploads on the spot — a scan of a filing that has
+never been through the corpus's own ingestion. The two paths converge on the
+same tool library and the same chat surface; the model does not need a
+different vocabulary to answer about an uploaded document than about the
+corpus.
+
+```
+PDF upload → ingestion service (docling + OCR + VLM second read) → Postgres
+           (system of record) + Redis (2h cache) → bridge.py → the SAME 8,378-
+           line FS tool library the corpus uses, unmodified → chat answer
+```
+
+### The ingestion service
+
+A separate container (`ingestion/`, port 12102, `ARTHA_INGEST_URL`) because it
+carries docling, torch and an OCR engine, and a conversion saturates a CPU for
+minutes — neither belongs in the read-only gateway that also serves chat. See
+**[ingestion/README.md](ingestion/README.md)** for the pipeline itself
+(`render → precheck → preprocess → convert → vlm second read → verify →
+identify → emit`), install gotchas, and the accuracy harness (68
+human-verified figures across 3 real filings — `python -m tests.accuracy.runner
+--mode inproc score-all`, in `ingestion/tests/accuracy/`, reading PDFs out of
+the gitignored `data/` corpus described below).
+
+**The anti-hallucination discipline that makes an upload trustworthy:**
+`verify.py` withholds any cell it cannot establish beyond doubt — replaced in
+the table by an `[unreadable: page N, table T, row "...", col "..."]` marker —
+rather than ever guessing a figure. A second, independent vision-model read of
+the same image may **recover** a value for a human to see
+(`[recovered N; second read, confidence <band>, ...]`), but it is never treated
+as confirmed unless the column's own arithmetic foots it; only then is it
+promoted to a plain, quotable number. Every printed subtotal is independently
+re-derived and checked against its own components. Prompt rule 21
+(`backend/modes/financial_statement/pipeline/prompt.md`) is what stops the
+model quoting, estimating or back-solving a withheld figure.
+
+### Storage: Postgres is the system of record, Redis is the cache
+
+`backend/modes/financial_statement/upload/`:
+
+| File | Role |
+|---|---|
+| `client.py` | HTTP client to the ingestion service; relays its SSE progress |
+| `store.py` | `DocumentStore` — Redis-backed hot path, `ARTHA_FS_UPLOAD_TTL_SECONDS` (2h default) |
+| `pgstore.py` | Postgres mapping — one row per document, one per table/text-chunk/page, `ARTHA_FS_UPLOAD_RETENTION_DAYS` (30 default) |
+| `schema.py` | The four Postgres tables (`python -m modes.financial_statement.upload.schema` to create/inspect) |
+| `bridge.py` | Rebinds ~18 of the FS tool library's own lookup functions so they read an uploaded document instead of issuing corpus SQL — the load-bearing file; the 8,378-line tool library itself is untouched |
+| `quality.py` | Renders the extraction-quality report both the model and the UI read |
+| `coverage.py` | Which questions an uploaded document can actually answer, given what was extracted |
+| `narrative.py`, `embeddings.py` | In-memory equivalents of the corpus's narrative SQL and vector search |
+| `periods.py`, `materiality.py`, `sieve.py`, `diagnostics.py` | Period coverage, materiality legend, empty-result-must-say-why filters |
+| `edits.py` | User-editable cells (below) |
+| `tools.py` | The four tools that exist only for an uploaded document (list/quality/etc.) |
+
+An upload survives a Redis restart or TTL expiry: `pgstore.load_one` reloads
+it and re-warms the cache. Re-uploading the same file (`doc_id` is
+content-addressed, `up_<sha256[:16]>`) replaces the previous extraction rather
+than accumulating a duplicate.
+
+### Editable cells — a human can supply a figure the extraction could not read
+
+Gated behind `ARTHA_FS_UPLOAD_USER_EDITS` (**default off** — it changes the
+trust model for every downstream answer, so an operator opts in
+deliberately). When on, the document pane's Text tab renders a `[unreadable
+...]` or `[recovered ...]` cell as a button; a reader who can see the scan can
+type in (or confirm) the figure the extraction could not establish, through
+`PATCH /documents/{doc_id}/tables/{table_id}/cells`.
+
+- **Server-enforced scope**, not just a UI affordance: only a cell whose
+  *stored* state is `unreadable`, `recovered`, or already `user_entered` (for
+  re-edit or revert) can be changed — a clean or arithmetic-confirmed figure
+  is refused with 409, regardless of what the client claims.
+- **Usable but permanently tagged.** The cell becomes `1,234 [user-entered]`
+  in the table text itself — never a bare number — so any reader (a tool, a
+  citation snippet, the model reading raw table text) sees it was typed by a
+  person, not read from the scan. A sidecar record (`quality["user_edits"]`)
+  carries who, when, the original marker (for an exact revert), and an
+  advisory, never-blocking footing re-check on the edited column.
+- **Disclosed at every layer**: the inline tag, a `DATA QUALITY NOTE` line
+  appended wherever a tool hands the table to the model, the quality report's
+  own "entered by the user" section, and prompt rule 21's additive clause.
+- **Known gap:** a *derived* result (a ratio, a tie-out) computed from a
+  user-entered figure does not automatically disclose that provenance — only
+  the figure itself does, at the point it is read. Full propagation through
+  the tool library is future work, tracked as a deliberate phase 2.
+- A cell edit is a narrow, transactional single-table Postgres update
+  (`pgstore.update_table_cell`, `SELECT ... FOR UPDATE`), not the whole-document
+  `save()` — and never touches the document's retention clock.
+
+### The local sample corpus (`data/`) is not pushed
+
+`data/` holds real scanned financial statements for three named entities,
+used by the accuracy harness and for manual upload testing. It is gitignored
+(along with the ad hoc `data.zip`) — client financial data does not belong in
+a shared or public remote, the same reasoning `backend/modes/sessions/`
+already documents for Trial Balance. A contributor who needs it fetches it out
+of band and places it at the repo root; without it the accuracy harness fails
+open with `FileNotFoundError` rather than silently reporting a false pass.
+
+### Tables docling's layout model never finds
+
+Table *location* is delegated to docling's own layout model
+(`ingestion/app/convert.py`'s `_extract_tables` reads `document.tables`). A
+statement with almost no ruling lines can come back with no table cluster at
+all -- measured on a real filing (Startup Odisha's Statement of Income &
+Expenditure): 55 layout clusters, none a table, every cell its own tiny
+low-confidence text item. OCR read every figure correctly, but each was then
+dropped as a short text block (`emit.py` skips blocks under 25 characters), with
+no marker and no note.
+
+Handled in `ingestion/app/structure_repair.py`, from docling's own text items and
+their positions, and switchable with `INGEST_SYNTHESIZE_MISSED_TABLES`:
+
+- **Rebuild.** Standalone figures outside any table that share a right-aligned
+  column, with a label on most rows, are rebuilt as a table. It goes through the
+  same footing, withholding and vision second read as any detected table, and a
+  note in `quality["notes"]` says it was rebuilt.
+- **Continuation.** Figures printed just below a detected table, in its columns,
+  where its box stopped short (a balance sheet's whole assets side, in the same
+  filing) are rebuilt as more rows under that table's headings.
+- **Refuse, don't guess.** Ambiguous columns, a gap of several lines, too few
+  labelled rows, or an overlap with a real table all fall back to a note naming
+  the page and the number of figures that were read but are in no table.
+
+Separately, `tables.py` now chooses the label column by how many text cells a
+column holds (a spanned first row used to make it pick a blank column) and splits
+a merged "Notes As at ..." header, so lookups by row label and period work.
+
+Regression case: `ingestion/tests/accuracy/cases/od_2021_22_sfs.yaml`. Still
+open: a rebuilt table depends on OCR reading its figures, so a page OCR cannot
+read stays a withheld or missing figure; and the 2023-24 balance sheet's
+"Property, Plant and Equipment" row is found but its cells are empty -- a
+different defect, not covered here.
+
+### Financial year detection and long documents
+
+A 120-page filing for FY 2024-25 was being labelled FY 2017-18, and 43 pages
+failed with "document timeout exceeded". Two separate causes, both in `ingestion/`:
+
+- **Year detection** (`identify.py`) now weights only years that appear in
+  statement or account headings ("for the year ended 31 March 2025", "as at ...")
+  and no longer counts years in notes, dates of events or comparative tables.
+  The result is an ordinary detection with a confidence, not a guess: an unclear
+  document is reported as such.
+- **Timeout** (`convert.py`, `config.py`): `INGEST_DOCUMENT_TIMEOUT` defaults to
+  1800 s. Pages that still do not convert are counted, and the quality report
+  says "N pages were not converted" once, instead of one error per page.
+
+Tests: `ingestion/tests/test_identify.py`, `test_convert.py`.
+
+---
+
+## Frontend redesign
+
+The UI follows the "Artha.AI Frontend Design" boards: a paper-toned light theme
+(navy and muted gold), Source Serif 4 headings, Noto Sans body and IBM Plex Mono
+figures. Fonts are self-hosted through `@fontsource` (run `npm install`), so
+nothing is fetched from a CDN on an air-gapped host. Tokens live in
+`frontend/src/styles/index.css`; old token names remain as aliases.
+
+**Figures are never reformatted.** An extracted cell is shown exactly as the
+filing printed it. Four states, each with a text label and not colour alone:
+plain, *unreadable* (red), *recovered* (amber, `[recovered N; ...]`) and
+*user-entered* (gold). Indian digit grouping is applied only to values a user
+types or that are computed. `lib/figures.js` parses the markers, and
+`components/common/FigureCell.jsx` renders them.
+
+Financial Statements:
+
+- **Sidebar and shell:** collapses to a 64 px rail while the document pane is
+  open; the pane docks at 42 % and becomes an overlay below 900 px. An offline
+  banner appears when the browser loses its connection, and a failed question
+  keeps the draft with a "Try again" button.
+- **Answers:** tagged blocks (FINDING, RISK FLAG, AUDIT POINTER, COVERAGE NOTE),
+  a "read as" line, an "answered against N documents" strip, and a collapsed
+  **How this was checked** section holding confidence (and why it was lowered),
+  tools used and the unsourced warning. The backend adds a `checks` field to the
+  answer (`modes/financial_statement/adapter.py::_extract_checks`, read from the
+  rendered answer; the vendored pipeline is unchanged).
+- **Uploads:** a compact wait bar with an expandable panel (`LedgerLoop`, eight
+  stages driven by real progress events, live timer, reduced-motion safe); document
+  chips with counters; a quality drawer whose **Enter** and **Review** buttons open
+  the exact cell in the pane; retention shown as "kept until <date>", computed from
+  `retention_days` returned by `/upload/health`.
+- **Sign-in:** two-pane layout. There is no "Forgot password" link because the
+  backend has no reset flow.
+- **Brand marks:** the State Emblem and CAG logo are legally restricted, so
+  `frontend/src/config/brand.js` holds two empty, default-off slots. The footer
+  states "Independent audit-assistance tool. Not an official government service."
+
+Other modes are re-themed through the shared tokens. Trial Balance results lead
+with severity tiles and an "Arithmetic checks passed / halted" badge (shown only
+when the validation engine reported it); the Statutory Auditor's Report and
+Financial Diagnostic Report take the serif headings and navy top edges.
+The Diagnostic Report's Report tab is still a stub.
+
+**Not done / not verified:** the unit line above tables ("Amount in ₹ lakh") and a
+corpus filing count have no reliable backend source and are omitted. The redesign
+was verified with the render tests and a browser walk-through against mocked API
+responses; a run against the real backend and ingestion stack is still to do.

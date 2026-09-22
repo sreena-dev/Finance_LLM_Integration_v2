@@ -4,6 +4,7 @@ import {
   tbAsk, tbAskGeneral, tbAudit, tbUpload, tbUploadGrouping, tbUploadMapped,
 } from '../../api/client';
 import Icon from '../common/Icon';
+import Markdown from '../common/Markdown';
 import Notice from '../common/Notice';
 import AuditCard from './AuditCard';
 import TbRunPicker from './TbRunPicker';
@@ -21,6 +22,28 @@ const COMPARISON_AUDIT_STAGES = [
 
 let _seq = 0;
 const nextId = () => `m${++_seq}`;
+
+// Small-talk greetings answer instantly from the client — no reason to spend a
+// tool-calling turn (or a network round trip) on "hi". Matched as a whole
+// message (with light punctuation tolerance) so this never intercepts a real
+// question that merely starts with "hello" mid-sentence. Restored from main
+// (e5213f7) after this file's TB-v2 re-sync silently dropped it.
+const GREETING_RULES = [
+  { re: /^(hi+|hello+|hey+|yo|greetings)$/i, reply: 'Hi! How can I help you?' },
+  { re: /^good\s*morning$/i, reply: 'Good morning! How can I help you?' },
+  { re: /^good\s*afternoon$/i, reply: 'Good afternoon! How can I help you?' },
+  { re: /^good\s*evening$/i, reply: 'Good evening! How can I help you?' },
+  { re: /^good\s*night$/i, reply: 'Good night! Let me know if you need anything before you go.' },
+  { re: /^(how are you\??|how'?s it going\??)$/i, reply: "I'm doing well, thanks for asking! How can I help you?" },
+  { re: /^(thanks|thank you|thx|ty)!?$/i, reply: "You're welcome! Anything else I can help with?" },
+  { re: /^(bye|goodbye|see ya|see you)!?$/i, reply: 'Goodbye! Come back anytime you have a question.' },
+];
+
+function matchGreeting(text) {
+  const normalized = text.trim().replace(/[!.\s]+$/, '');
+  const rule = GREETING_RULES.find(({ re }) => re.test(normalized));
+  return rule ? rule.reply : null;
+}
 
 /**
  * Trial Balance mode — one continuous stream rather than tabbed panels.
@@ -505,12 +528,25 @@ export default function TrialBalanceView({ mode, state, setState, conversationId
    * answers about the document already in this stream, not the composer's
    * separate stage-a-fresh-file flow (see the class doc-comment). Mirrors
    * runAudit's push/loading/replace/busy shape exactly.
+   *
+   * A greeting short-circuits before any network call (see matchGreeting) —
+   * restored from main (e5213f7), which this file's TB-v2 re-sync had
+   * silently dropped. Pushes the FULL response object as `result` (not just
+   * its `.answer` text) so the answer card can also show `computed`/
+   * `guardrail`/`sources` when present, same as before the drop.
    */
   async function runChatQuestion() {
     const question = input.trim();
     if (!question || busy) return;
     push({ kind: 'user', text: question });
     setInput('');
+
+    const greeting = matchGreeting(question);
+    if (greeting) {
+      push({ kind: 'greeting', text: greeting });
+      return;
+    }
+
     const loadingId = push({ kind: 'loading', stages: ['Thinking'] });
     setBusy(true);
     try {
@@ -518,7 +554,7 @@ export default function TrialBalanceView({ mode, state, setState, conversationId
         ? await tbAsk(mode, { docId: currentId, question, conversationId })
         : await tbAskGeneral(mode, { question, conversationId });
       drop(loadingId);
-      push({ kind: 'answer', text: result.answer });
+      push({ kind: 'answer', result, scope: currentId ? 'trial-balance' : 'corpora' });
       if (result.conversation_id && result.conversation_id !== conversationId) {
         onConversationChange(result.conversation_id);
       }
@@ -570,7 +606,7 @@ export default function TrialBalanceView({ mode, state, setState, conversationId
           {(messages || []).length === 0 && (
             <div className="tb__idle">
               <Icon name="sparkle" size={26} className="tb__idle-icon" />
-              <p className="tb__idle-welcome">How can I help you today?</p>
+              <p className="tb__idle-welcome">Hi, how can I help you today?</p>
               <p>
                 Single TB Analysis for one file, or Two TB Comparative Analysis to
                 compare two periods.
@@ -585,8 +621,39 @@ export default function TrialBalanceView({ mode, state, setState, conversationId
             if (m.kind === 'note') {
               return <p key={m.id} className="tb__note">{m.text}</p>;
             }
+            if (m.kind === 'greeting') {
+              return (
+                <div key={m.id} className="tb__assistant">
+                  <Icon name="sparkle" size={14} className="tb__ai-mark" />
+                  {m.text}
+                </div>
+              );
+            }
             if (m.kind === 'answer') {
-              return <div key={m.id} className="tb__answer">{m.text}</div>;
+              return (
+                <article key={m.id} className="card tb__answer">
+                  <div className="tb__answer-head">
+                    <Icon name="sparkle" size={14} className="tb__ai-mark" />
+                    <span className="pill pill--mute">
+                      {m.scope === 'corpora' ? 'Ind AS & annual reports' : 'This trial balance'}
+                    </span>
+                    {m.result.guardrail && (
+                      <span className="pill pill--warn">{m.result.guardrail.replace(/_/g, ' ')}</span>
+                    )}
+                  </div>
+                  <Markdown>{m.result.answer || ''}</Markdown>
+                  {m.result.computed && (
+                    <pre className="tb__computed">{JSON.stringify(m.result.computed, null, 2)}</pre>
+                  )}
+                  {m.result.sources?.length > 0 && (
+                    <div className="tb__sources">
+                      {m.result.sources.map((s, i) => (
+                        <span key={i} className="pill pill--mute">{s.label || s.source}</span>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              );
             }
             if (m.kind === 'error') {
               return (

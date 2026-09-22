@@ -53,4 +53,35 @@ backend/fs_entities.json
 
 FIN_LLM/
 
+# A separately-cloned copy of the docling library's own repo, left sitting in
+# this project's folder (it has its own .git, .claude, .codex dirs). Nothing
+# in this codebase imports from it -- the real dependency is the pip-installed
+# `docling-slim` package in ingestion/requirements.txt. Not this project's to
+# push, and at 500MB+ it doesn't belong in this repo regardless.
+docling/
+
+# An older backup of .env, made before the ingestion feature was added.
+# Same class of file as .env itself above -- real credentials, never committed.
+.env.bak-before-ingest
+
+# Loose files that ended up in this folder but are not this project's:
+# an unrelated project's zipped-up working copy (contains ITS OWN .env with
+# real credentials -- checked before excluding, not guessed), a stray IDE
+# project file left over from the parent workspace, and a large reference PDF
+# that was never deliberately checked in.
+research_agent_tested.zip
+*.iml
+FS_AI_Audit_Final_Detailed_Team_Edition v4.0.pdf
+
+# The local sample corpus the ingestion accuracy harness and manual upload
+# testing read from (`tests/accuracy/cases/*.yaml` point `pdf:` paths into
+# this directory, and `runner.py`'s `DATA` constant resolves them there) —
+# real scanned financial statements for named entities. Same reasoning as
+# `backend/modes/sessions/` above: this is client data, not source, and does
+# not belong in a shared/public remote. A contributor who needs the corpus to
+# run the accuracy harness fetches it out of band and places it here; without
+# it, the harness fails open (`FileNotFoundError` on the missing PDF) rather
+# than silently reporting a false pass.
+data/
+data.zip
 

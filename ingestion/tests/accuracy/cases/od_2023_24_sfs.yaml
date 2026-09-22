@@ -1,0 +1,208 @@
+name: OD-SPSU-SO-032 2023-24 SFS
+pdf: OD-SPSU-SO-032/2023-24/OD-SPSU-SO-032_2023-24_SFS_20260522161923114.pdf
+
+# The document that motivated the Phase 1 OCR fix: 22 pages, ALL carrying a
+# genuine PDF text layer -- and, before that fix, extracted 0 tables, 0
+# chunks, 0 notes. `pages_to_pdf()` rasterises every page before docling ever
+# sees it, so `do_ocr=False` (the old behaviour for an all-digital document)
+# meant there was nothing left to read at all. Ground truth here is read off
+# pages 1-2 of the rendered PDF by eye, the same discipline
+# tests/fixtures/README.md sets out.
+#
+# Deliberately includes figures the pipeline does NOT currently produce
+# correctly. Four rows on the balance sheet are genuinely legible on the page
+# -- Share capital, Refundable Grant, Trade payables, Other current
+# liabilities -- and come back WITHHELD or entirely MISSING today, the latter
+# because a label and its note number/values ended up split across adjacent
+# rows (verified in the raw table_md: "(b) Trade payables | 4 | | |" is blank,
+# and a separately-mislabelled row further down carries note "5" with
+# Other current liabilities' true values under a synthetic label). This is
+# NOT the same defect as the enumerator-merge class already fixed; recording
+# it here is exactly the point of a scoreboard -- it should fail today and
+# start passing once Phase 3's arbitration lands.
+
+expectations:
+
+  # --- Balance Sheet, page 1 ------------------------------------------
+
+  - row_label: Reserves and surplus
+    column_label: 31st March, 2024
+    page: 1
+    value: 10438195.33
+    verified: true
+  - row_label: Reserves and surplus
+    column_label: 31st March, 2023
+    page: 1
+    value: 3881031.72
+    verified: true
+  - row_label: Short-term provisions
+    column_label: 31st March, 2024
+    page: 1
+    value: 52278867.00
+    verified: true
+  - row_label: Short-term provisions
+    column_label: 31st March, 2023
+    page: 1
+    value: 51111345.00
+    verified: true
+  - row_label: Total
+    column_label: 31st March, 2024
+    page: 1
+    value: 648882047.93
+    verified: true
+    note: the liabilities+equity side's closing Total (Division I bare-Total shape)
+  - row_label: Total
+    column_label: 31st March, 2023
+    page: 1
+    value: 433497783.82
+    verified: true
+  # MISSING today, found by the harness itself rather than by design: the
+  # printed label wraps across two lines -- "(a) Property, Plant and
+  # Equipment" then "[and Intangible assets]" -- and docling split it into
+  # two separate table rows, with the note number and BOTH values attached to
+  # the second fragment. `locate()` correctly matches the first row on label
+  # similarity and finds it empty; the row that actually carries the figures
+  # is labelled just "[and Intangible assets]", which does not resemble the
+  # expectation's row_label at all. A distinct defect from the enumerator
+  # merge already fixed -- that class merges SEVERAL items into ONE row; this
+  # is the opposite, ONE item's own label split across TWO.
+  - row_label: Property, Plant and Equipment
+    column_label: 31st March, 2024
+    page: 1
+    value: 6867416.61
+    verified: true
+    note: MISSING today -- label wrapped onto "[and Intangible assets]", see above
+  - row_label: Property, Plant and Equipment
+    column_label: 31st March, 2023
+    page: 1
+    value: 310253.00
+    verified: true
+  - row_label: Cash and cash equivalents
+    column_label: 31st March, 2024
+    page: 1
+    value: 319452732.35
+    verified: true
+  - row_label: Cash and cash equivalents
+    column_label: 31st March, 2023
+    page: 1
+    value: 254694119.72
+    verified: true
+  - row_label: Trade receivables
+    column_label: 31st March, 2024
+    page: 1
+    value: 18903434.64
+    verified: true
+  - row_label: Short-term loans and advances
+    column_label: 31st March, 2024
+    page: 1
+    value: 290956523.94
+    verified: true
+  - row_label: Other current assets
+    column_label: 31st March, 2024
+    page: 1
+    value: 12701940.39
+    verified: true
+  - row_label: TOTAL
+    column_label: 31st March, 2024
+    page: 1
+    value: 648882047.93
+    verified: true
+    note: the assets side's closing TOTAL -- same value as Total above, the
+      balance sheet equation, printed as a SEPARATE bare "TOTAL" row per
+      Division I convention
+
+  # Currently WITHHELD or MISSING -- real, legible figures the pipeline does
+  # not yet recover. See the module note above.
+  - row_label: Share capital
+    column_label: 31st March, 2024
+    page: 1
+    value: 1500000.00
+    verified: true
+    note: withheld today (readers_disagree) despite being cleanly printed
+  - row_label: Share capital
+    column_label: 31st March, 2023
+    page: 1
+    value: 1500000.00
+    verified: true
+  - row_label: Refundable Grant
+    column_label: 31st March, 2024
+    page: 1
+    value: 298100248.00
+    verified: true
+    note: withheld today (readers_disagree)
+  - row_label: Refundable Grant
+    column_label: 31st March, 2023
+    page: 1
+    value: 150034815.00
+    verified: true
+  - row_label: Trade payables
+    column_label: 31st March, 2024
+    page: 1
+    value: 18600.00
+    verified: true
+    note: MISSING today -- the row prints with blank cells, no marker even
+  - row_label: Trade payables
+    column_label: 31st March, 2023
+    page: 1
+    value: 34011.00
+    verified: true
+  - row_label: Other current liabilities
+    column_label: 31st March, 2024
+    page: 1
+    value: 286546137.60
+    verified: true
+    note: MISSING today -- label and note/values landed on different rows
+  - row_label: Other current liabilities
+    column_label: 31st March, 2023
+    page: 1
+    value: 226936581.10
+    verified: true
+
+  # --- Income & Expenditure Account, page 2 ---------------------------
+
+  - row_label: Revenue from operations
+    column_label: 31st March, 2024
+    page: 2
+    value: 238103436.71
+    verified: true
+  - row_label: Revenue from operations
+    column_label: 31st March, 2023
+    page: 2
+    value: 159804608.63
+    verified: true
+  - row_label: Employee benefits expense
+    column_label: 31st March, 2024
+    page: 2
+    value: 21063434.00
+    verified: true
+  - row_label: Finance costs
+    column_label: 31st March, 2024
+    page: 2
+    value: 6793.77
+    verified: true
+  - row_label: Grant Expenses
+    column_label: 31st March, 2024
+    page: 2
+    value: 63185613.00
+    verified: true
+  - row_label: Other expenses
+    column_label: 31st March, 2024
+    page: 2
+    value: 153847595.94
+    verified: true
+  - row_label: Total expenses
+    column_label: 31st March, 2024
+    page: 2
+    value: 238103436.71
+    verified: true
+    note: genuinely equals Total Income for this year -- Surplus/(Deficit)
+      prints as a dash (nil), not a withheld/missing figure
+  - row_label: Basic
+    column_label: 31st March, 2023
+    page: 2
+    value: 23.97
+    verified: true
+    note: the FY2022-23 EPS carried as this filing's comparative column; the
+      SAME figure that landed one row low (under Diluted) in a different
+      filing -- here it resolves correctly, so this pins the good case rather
+      than the bug

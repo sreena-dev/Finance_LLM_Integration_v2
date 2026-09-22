@@ -13,6 +13,8 @@
 #
 #   12100  frontend  (nginx, serves the SPA and proxies /api)
 #   12101  backend   (FastAPI gateway)
+#   12102  ingest    (scanned financial statements -> verified tables)
+#   12105  redis     (durable store for the FS mode's uploaded documents)
 #   12106  phoenix   UI            — `tracing` profile only
 #   12107  phoenix   OTLP ingest   — `tracing` profile only
 # ---------------------------------------------------------------------------
@@ -67,6 +69,14 @@ services:
 
     ports:
       - "${ARTHA_BIND_HOST:-0.0.0.0}:${ARTHA_BACKEND_PORT:-12101}:${ARTHA_BACKEND_PORT:-12101}"
+
+    # The Financial Statement mode's upload store is Redis-backed (see the
+    # redis service below) — wait for it to actually answer PING, not merely
+    # to have started, so the first upload after a fresh `compose up` doesn't
+    # race a not-yet-ready Redis.
+    depends_on:
+      redis:
+        condition: service_healthy
 
     # This app's own code writes almost nothing to disk — uploads stream into
     # Postgres and the audit workbook is assembled in an in-memory buffer — so
@@ -128,6 +138,180 @@ services:
     # connection error, which is a confusing way to learn the host is missing.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  # =========================================================================
+  # Ingestion — scanned financial statements -> verified tables
+  #
+  # A separate image from the gateway because it carries docling, torch and an
+  # OCR engine (multi-GB) and because a conversion is a minutes-long,
+  # CPU-saturating job. Run inside the gateway it would compete with chat for
+  # the same four cores, and its dependencies write to disk while the gateway's
+  # rootfs is read-only.
+  #
+  # Only the Financial Statement mode talks to it, over ARTHA_INGEST_URL.
+  # Nothing here is reachable from the browser: it has no authentication of its
+  # own and must not be published beyond the bridge.
+  # =========================================================================
+  ingest:
+    <<: *common
+    build:
+      context: ./ingestion
+      dockerfile: Dockerfile
+      args:
+        PYTHON_VERSION: ${ARTHA_PYTHON_VERSION:-3.11}
+        INGEST_PORT: ${ARTHA_INGEST_PORT:-12102}
+        TZ: ${TZ:-Asia/Kolkata}
+    image: artha-ai/ingest:${ARTHA_VERSION:-1.0.0}
+    container_name: artha-ingest
+
+    env_file:
+      - .env
+
+    environment:
+      TZ: ${TZ:-Asia/Kolkata}
+      INGEST_PORT: ${ARTHA_INGEST_PORT:-12102}
+      INGEST_LOG_LEVEL: ${ARTHA_LOG_LEVEL:-info}
+      # The VLM second read reuses the gateway's own generation endpoint rather
+      # than declaring a second name for the same server — see ingestion/app/
+      # config.py. LLM_BASE_URL and LLM_MODEL_NAME come from .env above.
+      INGEST_VLM_ENABLED: ${ARTHA_INGEST_VLM_ENABLED:-true}
+      INGEST_MAX_CONCURRENT_JOBS: ${ARTHA_INGEST_MAX_JOBS:-2}
+
+    # Published on the bridge so the gateway can reach it via
+    # host.docker.internal, the same pattern the frontend already uses to reach
+    # the gateway (see the networking note at the foot of this file). Firewall
+    # the port rather than narrowing the bind address.
+    ports:
+      - "${ARTHA_BIND_HOST:-0.0.0.0}:${ARTHA_INGEST_PORT:-12102}:${ARTHA_INGEST_PORT:-12102}"
+
+    # Same posture as the gateway: nothing this service writes is meant to
+    # outlive a request. Uploaded bytes are held in memory for the duration of
+    # one job and dropped when it ends — they are never written to disk and
+    # never reach a database, which is the requirement this feature was built
+    # against.
+    read_only: true
+
+    tmpfs:
+      # Model caches. Every one of torch, huggingface_hub and OpenCV reaches for
+      # a cache directory on import; on a read-only rootfs that surfaces as a
+      # permission error deep inside a model load rather than as a clear
+      # startup failure. The Dockerfile points HF_HOME/TORCH_HOME/XDG_CACHE_HOME
+      # here. Sized for scratch only — the real weights are baked into /models.
+      - /tmp:size=${ARTHA_INGEST_TMPFS_SIZE:-2g},mode=1777,uid=10001,gid=10001
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # A conversion in flight should be allowed to finish rather than be killed
+    # halfway: the job registry is in memory, so a hard stop loses the work with
+    # no way to resume it.
+    stop_grace_period: 120s
+
+    deploy:
+      resources:
+        limits:
+          # Layout and TableFormer are the CPU cost, and both scale with cores.
+          # The memory ceiling is sized for MAX_CONCURRENT_JOBS=2: one 35-page
+          # A4 document at 300 DPI greyscale is ~250MB of page images alone,
+          # before torch.
+          cpus: ${ARTHA_INGEST_CPU_LIMIT:-4.0}
+          memory: ${ARTHA_INGEST_MEM_LIMIT:-6g}
+        reservations:
+          memory: ${ARTHA_INGEST_MEM_RESERVATION:-2g}
+
+    network_mode: bridge
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # =========================================================================
+  # Redis — durable store for uploaded-document content
+  #
+  # Replaces the gateway's old in-process dict for `modes/financial_statement
+  # /upload/store.py`. Two things changed from that design, both deliberate:
+  # documents now survive a gateway restart (the old promise was only "for the
+  # life of this process"), and they now survive a Redis restart too, via AOF
+  # below — this is not a throwaway cache, it is the durable half of "gone when
+  # the conversation is deleted, not gone whenever we feel like restarting".
+  #
+  # Only the Financial Statement mode's upload feature talks to this. Nothing
+  # else in the stack is Redis-backed; do not point another mode's storage at
+  # it without giving it its own key prefix (ARTHA_REDIS_KEY_PREFIX below).
+  # =========================================================================
+  redis:
+    <<: *common
+    image: redis:7.4-alpine
+    container_name: artha-redis
+
+    # Run as the image's own redis user (uid 999, gid 1000) from the start,
+    # rather than as root with cap_drop dropping down at runtime. The stock
+    # entrypoint does that drop itself via setpriv when started as root, which
+    # needs CAP_SETUID/CAP_SETGID -- capabilities `cap_drop: ALL` below
+    # deliberately removes, and Redis has no need for them at all once it
+    # never runs as root to begin with. Without this the container
+    # crash-loops on "setpriv: setresuid failed: Operation not permitted".
+    user: "999:1000"
+
+    # No custom Dockerfile — this is the stock image, so (unlike backend/
+    # ingest/frontend, whose health comes from a Dockerfile HEALTHCHECK) the
+    # check has to live here instead.
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory ${ARTHA_REDIS_MAXMEMORY:-3gb}
+      --maxmemory-policy noeviction
+      --requirepass ${ARTHA_REDIS_PASSWORD:?ARTHA_REDIS_PASSWORD must be set}
+
+    # Published on the bridge and reached via host.docker.internal, the same
+    # pattern `ingest` already uses — see the networking note at the foot of
+    # this file. This instance holds real uploaded financial-statement
+    # content for up to ARTHA_FS_UPLOAD_TTL_SECONDS or until a conversation is
+    # deleted, so --requirepass above is basic hygiene for sitting on a
+    # published port, matching the JWT-gated posture the rest of this stack
+    # already has.
+    ports:
+      - "${ARTHA_BIND_HOST:-0.0.0.0}:${ARTHA_REDIS_PORT:-12105}:6379"
+
+    # The AOF file is the one thing here worth surviving a restart — same
+    # reasoning as phoenix-data below. A tmpfs would satisfy "survives a
+    # gateway restart" but not "survives a Redis crash", which is the actual
+    # durability requirement this service exists to meet.
+    volumes:
+      - redis-data:/data
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    stop_grace_period: 30s
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${ARTHA_REDIS_PASSWORD}", "--no-auth-warning", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+    deploy:
+      resources:
+        limits:
+          cpus: ${ARTHA_REDIS_CPU_LIMIT:-1.0}
+          # Docker's memory limit is a hard ceiling; --maxmemory above is
+          # Redis's own, lower, so Redis rejects writes (noeviction) well
+          # before the OOM killer would ever act on this container.
+          memory: ${ARTHA_REDIS_MEM_LIMIT:-3584m}
+        reservations:
+          memory: ${ARTHA_REDIS_MEM_RESERVATION:-512m}
+
+    network_mode: bridge
 
   # =========================================================================
   # Frontend — static SPA + the /api reverse proxy
@@ -278,3 +462,6 @@ volumes:
     name: artha-data
   phoenix-data:
     name: artha-phoenix-data
+  # Redis's AOF file. See the redis service's volumes block.
+  redis-data:
+    name: artha-redis-data

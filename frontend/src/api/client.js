@@ -21,13 +21,14 @@ async function request(path, options = {}) {
       headers: { ...(options.headers || {}), ...authHeaders() },
     });
   } catch {
-    // No port quoted here on purpose: the gateway's port comes from .env
-    // (ARTHA_BACKEND_PORT), so a hard-coded number in this message would go
-    // stale and send people looking at the wrong service.
-    throw new Error(
+    // Said for a reader, not an operator: no port, no docker command. (The
+    // operator hint is in the console; the gateway's port comes from .env, so a
+    // number quoted here would go stale.)
+    console.warn(
       'Could not reach the backend. Start the stack with `docker compose up -d`, ' +
         'or run the gateway directly: uvicorn app.main:app --port $ARTHA_BACKEND_PORT'
     );
+    throw new Error('Can’t reach Artha.AI. Check your connection and try again.');
   }
 
   if (!res.ok) {
@@ -71,6 +72,10 @@ async function request(path, options = {}) {
     err.status = res.status;
     throw err;
   }
+  // A 204 (DELETE, most notably) has no body at all — res.json() on an empty
+  // body throws "Unexpected end of JSON input", which every caller then
+  // reported as a failed request even though it succeeded.
+  if (res.status === 204) return null;
   return res.json();
 }
 
@@ -363,5 +368,265 @@ export function tbValidate(mode, { docId, docIdPrior, ...params }) {
     doc_id: docId,
     doc_id_prior: docIdPrior || null,
     ...params,
+  });
+}
+
+
+/* ---------------------------------------------------------------------------
+ * Financial Statement: live upload
+ *
+ * Conversion of a scanned filing takes minutes, so the upload POST returns a
+ * job id and progress arrives over SSE. `readSSE` below is the frame parser
+ * lifted out of components/financial-diagnostic-report/api.js — the same
+ * buffering it does, generalised to read the `event:` name line as well as the
+ * data, because these frames are named rather than self-describing.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Read a named-event SSE stream to completion.
+ *
+ * Frames are separated by a blank line and may be split across network chunks,
+ * so the buffer is drained frame-by-frame rather than parsed per chunk — a
+ * per-chunk parser silently drops any event that straddles a boundary, which on
+ * a slow connection is most of them.
+ *
+ * @param {Response} res    a streaming fetch response
+ * @param {object} handlers `{ [eventName]: (payload) => void }`
+ */
+export async function readSSE(res, handlers = {}) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let split;
+    while ((split = buffer.indexOf('\n\n')) !== -1) {
+      const frame = buffer.slice(0, split);
+      buffer = buffer.slice(split + 2);
+
+      let name = 'message';
+      let data = null;
+      for (const line of frame.split('\n')) {
+        if (line.startsWith(':')) continue;          // ": keep-alive"
+        if (line.startsWith('event:')) name = line.slice(6).trim();
+        else if (line.startsWith('data:')) {
+          try {
+            data = JSON.parse(line.slice(5).trim());
+          } catch {
+            data = null;
+          }
+        }
+      }
+      if (data !== null) handlers[name]?.(data);
+    }
+  }
+}
+
+/** Is the ingestion service configured and reachable? Never throws. */
+export async function fsUploadHealth(mode) {
+  try {
+    return await request(`${mode.base_path}/upload/health`);
+  } catch (e) {
+    return { available: false, reason: e.message };
+  }
+}
+
+/** Queue a financial-statement PDF for conversion. Returns `{ job_id, filename }`. */
+export function fsUpload(mode, file, conversationId) {
+  return uploadFile(`${mode.base_path}/upload`, file, { conversation_id: conversationId });
+}
+
+/**
+ * Watch one conversion to completion.
+ *
+ * `onProgress` fires per stage; the promise resolves with the finished
+ * document summary, or rejects with the failure the service reported. The
+ * gateway has already stored the document by the time the result frame is
+ * emitted, so a caller that drops this stream loses only the progress bar.
+ */
+export async function fsWatchUpload(mode, jobId, onProgress) {
+  const path = `${mode.base_path}/upload/${encodeURIComponent(jobId)}/events`;
+  let res;
+  try {
+    res = await fetch(path, {
+      headers: { Accept: 'text/event-stream', ...authHeaders() },
+    });
+  } catch {
+    throw new Error('Could not reach the backend to follow the upload.');
+  }
+  if (res.status === 401) {
+    notifyUnauthorized();
+    const err = new Error('Your session has expired. Sign in again.');
+    err.status = 401;
+    throw err;
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `Could not follow the upload (HTTP ${res.status})`);
+  }
+
+  let result = null;
+  let failure = null;
+  await readSSE(res, {
+    progress: (p) => onProgress?.(p),
+    result: (r) => { result = r; },
+    error: (e) => { failure = e; },
+  });
+
+  if (failure) throw new Error(failure.error || 'The document could not be processed.');
+  if (!result) throw new Error('The upload ended without producing a document.');
+  return result;
+}
+
+/** Documents uploaded into one conversation. */
+export function fsDocuments(mode, conversationId) {
+  return request(`${mode.base_path}/documents?conversation_id=${encodeURIComponent(conversationId)}`);
+}
+
+/** The full extraction-quality report for one uploaded document. */
+export function fsDocumentQuality(mode, conversationId, docId) {
+  return request(
+    `${mode.base_path}/documents/${encodeURIComponent(docId)}/quality` +
+    `?conversation_id=${encodeURIComponent(conversationId)}`,
+  );
+}
+
+export function fsDeleteDocument(mode, conversationId, docId) {
+  return request(
+    `${mode.base_path}/documents/${encodeURIComponent(docId)}` +
+    `?conversation_id=${encodeURIComponent(conversationId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+/**
+ * The scanned crop a cited table was read from, as an object URL.
+ *
+ * Fetched as a blob rather than pointed at with `<img src>` because the route
+ * is authenticated and an img tag carries no Authorization header. Callers MUST
+ * revoke the returned URL on unmount — this is the one place in the client that
+ * hands back a resource the browser will otherwise hold until reload.
+ */
+export async function fsTableSnippet(mode, conversationId, docId, tableId) {
+  const path =
+    `${mode.base_path}/documents/${encodeURIComponent(docId)}` +
+    `/tables/${encodeURIComponent(tableId)}/snippet.jpg` +
+    `?conversation_id=${encodeURIComponent(conversationId)}`;
+  const res = await fetch(path, { headers: { ...authHeaders() } });
+  if (res.status === 401) {
+    notifyUnauthorized();
+    throw new Error('Your session has expired. Sign in again.');
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || 'No scan is available for that citation.');
+  }
+  return URL.createObjectURL(await res.blob());
+}
+
+/** Which pages a document has an image for, and their pixel size. */
+export function fsDocumentPages(mode, conversationId, docId) {
+  return request(
+    `${mode.base_path}/documents/${encodeURIComponent(docId)}/pages` +
+    `?conversation_id=${encodeURIComponent(conversationId)}`,
+  );
+}
+
+/**
+ * The corrected page image OCR/docling actually read, as an object URL.
+ *
+ * Same shape as `fsTableSnippet` above — a blob fetch, not `<img src>`,
+ * because the route is authenticated. Callers MUST revoke the returned URL on
+ * unmount or page change.
+ */
+export async function fsPageImage(mode, conversationId, docId, pageNo) {
+  const path =
+    `${mode.base_path}/documents/${encodeURIComponent(docId)}` +
+    `/pages/${encodeURIComponent(pageNo)}.jpg` +
+    `?conversation_id=${encodeURIComponent(conversationId)}`;
+  const res = await fetch(path, { headers: { ...authHeaders() } });
+  if (res.status === 401) {
+    notifyUnauthorized();
+    throw new Error('Your session has expired. Sign in again.');
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || 'No image is available for that page.');
+  }
+  return URL.createObjectURL(await res.blob());
+}
+
+/** The reconstructed narrative and verified tables for one page. */
+export function fsPageText(mode, conversationId, docId, pageNo) {
+  return request(
+    `${mode.base_path}/documents/${encodeURIComponent(docId)}` +
+    `/pages/${encodeURIComponent(pageNo)}/text` +
+    `?conversation_id=${encodeURIComponent(conversationId)}`,
+  );
+}
+
+/**
+ * Set, confirm or revert one cell the extraction flagged `[unreadable ...]`
+ * or `[recovered ...]`, from a figure the user read off the scan.
+ *
+ * `body` is `{ rowIndex, colIndex, expectedCell, action, value? }` — see
+ * `edits.py` for the exact contract. Not routed through the generic
+ * `request()` helper above: a refusal here carries a structured
+ * `{code, message}` in `detail` (409 stale/scope, 422 bad value) that the
+ * editor needs to react to differently, where `request()`'s `err.message`
+ * would otherwise stringify the whole object as `[object Object]`.
+ */
+export async function fsEditCell(mode, conversationId, docId, tableId, body) {
+  const path =
+    `${mode.base_path}/documents/${encodeURIComponent(docId)}` +
+    `/tables/${encodeURIComponent(tableId)}/cells` +
+    `?conversation_id=${encodeURIComponent(conversationId)}`;
+  let res;
+  try {
+    res = await fetch(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({
+        row_index: body.rowIndex,
+        col_index: body.colIndex,
+        expected_cell: body.expectedCell,
+        action: body.action,
+        ...(body.value !== undefined ? { value: body.value } : {}),
+      }),
+    });
+  } catch {
+    throw new Error('Could not reach the backend to save this figure.');
+  }
+  if (res.status === 401) {
+    notifyUnauthorized();
+    const err = new Error('Your session has expired. Sign in again.');
+    err.status = 401;
+    throw err;
+  }
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = payload.detail;
+    const structured = detail && typeof detail === 'object';
+    const err = new Error(
+      (structured ? detail.message : detail) || `Could not save this figure (HTTP ${res.status}).`
+    );
+    err.status = res.status;
+    if (structured) { err.code = detail.code; Object.assign(err, detail); }
+    throw err;
+  }
+  return payload;
+}
+
+/** Set (or clear, with a null amount) the audit team's materiality. */
+export function fsSetMateriality(mode, conversationId, { amount, basis, unitLabel } = {}) {
+  return post(`${mode.base_path}/materiality`, {
+    conversation_id: conversationId,
+    amount: amount ?? null,
+    basis: basis || '',
+    unit_label: unitLabel || '',
   });
 }

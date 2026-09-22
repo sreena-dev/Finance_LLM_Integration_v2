@@ -67,6 +67,23 @@ class QueryResponse(BaseModel):
     # rather than hidden: an answer that addresses something subtly different
     # from what was asked is otherwise impossible to explain after the fact.
     rewritten_query: str = ""
+    # Both financial-statement-only: populated when the conversation has an
+    # upload in scope, otherwise left at their defaults so every other mode's
+    # response is unaffected. `response_model=QueryResponse` silently drops any
+    # key a route returns that is not declared here -- these two were computed
+    # correctly in modes/financial_statement/adapter.py and dropped at exactly
+    # this boundary for as long as they were missing from this shared model.
+    materiality_legend: dict | None = None
+    uploaded_documents: list[dict] = []
+    # Set only when the uploaded-document store (Redis) couldn't be reached
+    # for this question — see modes/financial_statement/adapter.py. None means
+    # either no upload was relevant or the store answered normally; it is not
+    # a signal that a document exists.
+    upload_store_notice: str | None = None
+    # How the answer was checked: confidence (and what it was lowered from and
+    # why), the tools used, and whether no tool was called. Financial-statement
+    # only; None for every other mode. Shown collapsed, never above the answer.
+    checks: dict | None = None
 
 
 # ---------------------------------------------------------------------------
