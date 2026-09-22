@@ -36,21 +36,31 @@ def _render(obs=(), **overrides):
 
 
 def test_all_16_sections_present_on_a_clean_package():
+    """Every one of the 16 numbered headings must appear, in order, with no
+    gaps — §10 and §11 included, even on a standalone package with no
+    prior-year matters (the case that used to skip both headings entirely
+    and jump straight from "9." to "12.")."""
     out = _render()
     for heading in [
         "1. Report Control Sheet", "2. Executive Summary", "3. Input Package and Review Status",
         "4. Scope and Assignment Context", "5-6. Statutory Auditor's Opinion Analysis",
         "7. FS – Audit Report – CARO Consistency Analysis", "8. Silence and Material Gap Analysis",
-        "9. Public-Sector / High-Sensitivity Matters", "12. Observations, Audit Pointers and Evidence Required",
+        "9. Public-Sector / High-Sensitivity Matters", "10. Consolidated / Group Matters",
+        "11. Prior-Year / Continuing Matters", "12. Observations, Audit Pointers and Evidence Required",
         "13. Candidate Matters for Consideration under Section 143(6)", "14. Limitations and Caveats",
         "15. Reviewer Action Summary", "16. Annexures", "Annexure A", "Annexure B", "Annexure C", "Annexure E",
     ]:
         assert heading in out, f"missing: {heading}"
 
 
-def test_section_10_omitted_for_standalone_scope():
+def test_section_10_heading_always_present_not_applicable_for_standalone_scope():
+    """§10's heading must stay in the TOC even when it doesn't apply — the
+    old behaviour (omitting the heading entirely for standalone scope) made
+    the numbering jump straight from "9." to "12.", silently skipping 10
+    and 11, which read as broken numbering rather than "not applicable"."""
     out = _render()
-    assert "10. Consolidated / Group Matters" not in out
+    assert "10. Consolidated / Group Matters" in out
+    assert "Not applicable — this review's scope is standalone, not consolidated." in out
 
 
 def test_section_10_included_for_consolidated_scope():
@@ -63,11 +73,13 @@ def test_section_10_included_for_consolidated_scope():
         quality_flags={}, doc_meta={}, existing_report_md="",
     )
     assert "10. Consolidated / Group Matters" in out
+    assert "Group-audit-specific checks are not yet implemented" in out
 
 
-def test_section_11_omitted_without_prior_year_observation():
+def test_section_11_heading_always_present_none_identified_without_prior_year_observation():
     out = _render()
-    assert "11. Prior-Year / Continuing Matters" not in out
+    assert "11. Prior-Year / Continuing Matters" in out
+    assert "No prior-year or continuing matters were identified from the supplied package." in out
 
 
 def test_section_11_included_with_prior_year_observation():

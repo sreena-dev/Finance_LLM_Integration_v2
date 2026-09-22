@@ -427,19 +427,28 @@ def render_detailed_report(
             lines.append(f"- [{obs.observation_id}] {obs.component} — nature: {obs.public_sector_lens.get('nature')}")
     lines.append("")
 
-    # 10. Consolidated / Group Matters (conditional — standalone omits entirely)
+    # 10. Consolidated / Group Matters. Always rendered — omitting the
+    # heading entirely for a standalone-scope report (the common case) used
+    # to make the TOC jump straight from "9." to "12.", silently skipping
+    # 10 and 11, which is exactly what looked like broken numbering. Every
+    # other conditional section in this function (9, 13) keeps its heading
+    # and prints a "none identified" fallback instead; this now matches.
+    lines.append("## 10. Consolidated / Group Matters")
     if ctx.scope == "consolidated":
-        lines.append("## 10. Consolidated / Group Matters")
         lines.append("Group-audit-specific checks are not yet implemented in this pipeline — see GAP_CLOSURE_LOG.md.")
-        lines.append("")
+    else:
+        lines.append(f"Not applicable — this review's scope is {ctx.scope}, not consolidated.")
+    lines.append("")
 
-    # 11. Prior-Year / Continuing Matters (conditional)
+    # 11. Prior-Year / Continuing Matters. Always rendered — see §10's note above.
+    lines.append("## 11. Prior-Year / Continuing Matters")
     prior_matters = [o for o in ordered if o.check_id == "PRIOR-OPN-01"]
-    if prior_matters:
-        lines.append("## 11. Prior-Year / Continuing Matters")
+    if not prior_matters:
+        lines.append("No prior-year or continuing matters were identified from the supplied package.")
+    else:
         for obs in prior_matters:
             lines.append(f"- [{obs.observation_id}] {obs.observation}")
-        lines.append("")
+    lines.append("")
 
     # 12. Observations, Audit Pointers and Evidence Required (merged register)
     lines.append("## 12. Observations, Audit Pointers and Evidence Required")
