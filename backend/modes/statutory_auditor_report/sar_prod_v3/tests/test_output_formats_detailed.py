@@ -137,3 +137,40 @@ def test_renders_without_crashing_on_a_fully_empty_package():
         CTX, [], merged_json={}, applicability={}, quality_flags={}, doc_meta={}, existing_report_md="",
     )
     assert "Report Control Sheet" in out
+
+
+def test_section_2_does_not_embed_full_executive_summary():
+    """§2 used to embed render_executive_summary()'s complete output
+    verbatim — its own H1 title plus a nested "1."-"8." numbering that
+    duplicated Top Findings (§4), the CARO consistency table (§7) and
+    Silence matters (§8) later in this same document. §2 must stay a short
+    synopsis, not a second copy of Format 2."""
+    obs = _classified(Observation(
+        check_id="DIR-I-01", component="C&AG Direction I", tag="RISK_FLAG", risk_rating="Medium",
+        observation="A standing C&AG direction is in effect for this report's date.", evidence="q",
+    ))
+    out = _render(obs)
+    assert "# Executive Summary" not in out  # the embedded format's own H1
+    assert "3. Statutory Auditor Opinion Summary" not in out  # its nested numbering
+    # The observation's full text must appear exactly where §9/§12 put it —
+    # not a third time inside §2's old nested "4. Top Findings" list.
+    assert out.count("A standing C&AG direction is in effect for this report's date.") == 2
+
+
+def test_section_12_does_not_repeat_observation_as_why_it_matters():
+    """When neither `audit_risk` nor `gap` is set (the common case for
+    AUDIT_POINTER/RISK_FLAG checks), §12 used to print the identical
+    observation sentence a second time as "Why It Matters"/"Why it
+    matters" — once in the table cell, once again in the narrative block
+    right below it, immediately next to the sentence it was repeating."""
+    obs = _classified(Observation(
+        check_id="PRE-05", component="Rule 11 Sub-clauses", tag="AUDIT_POINTER",
+        risk_rating="Information request only",
+        observation="Rule 11 sub-clauses were not identified.",
+    ))
+    out = _render(obs)
+    assert out.count("Rule 11 sub-clauses were not identified.") == 2  # table + "- Issue:" only
+    assert "Why it matters: Rule 11 sub-clauses were not identified." not in out
+    # The table's "Why It Matters" column renders "—" instead of repeating
+    # the observation text that's already in the same row's "Observation" column.
+    assert "| — | — | Pending |" in out

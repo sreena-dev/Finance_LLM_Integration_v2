@@ -83,7 +83,26 @@ def _material_observations(observations: list[Observation]) -> list[Observation]
 
 
 def _why_it_matters(obs: Observation) -> str:
+    """The audit-risk / gap explanation, falling back to the observation
+    text itself when neither is set. That fallback is load-bearing in
+    render_display_response (§2), the one format where this is the only
+    place the observation's actual content appears at all. In
+    render_detailed_report (§4), `obs.observation` is already printed
+    immediately beside every call site below — see `_why_it_matters_detail`
+    there for the version that avoids repeating it a second time."""
     return obs.audit_risk or obs.gap or obs.observation
+
+
+def _why_it_matters_detail(obs: Observation) -> str:
+    """Same as `_why_it_matters`, but for contexts where `obs.observation`
+    is already shown right next to this — returns "" instead of repeating
+    it verbatim. Used only in render_detailed_report's §12 table/narrative,
+    which used to print the identical sentence twice per observation (once
+    as "Observation"/"Issue", once again as "Why It Matters") whenever
+    `audit_risk`/`gap` were unset, which is the common case for
+    AUDIT_POINTER/RISK_FLAG checks."""
+    why = _why_it_matters(obs)
+    return why if why != obs.observation else ""
 
 
 def _source_label(obs: Observation) -> str:
@@ -316,9 +335,25 @@ def render_detailed_report(
     lines.append("- Output specification: LLM_Output_Specification_CAG_Statutory_Auditor_Report_Review.md")
     lines.append("")
 
-    # 2. Executive Summary (embed Format 2 verbatim — same source data, §17)
+    # 2. Executive Summary — a short synopsis only, not the full Format 2
+    # output. This used to embed render_executive_summary()'s complete text
+    # verbatim, including its own H1 title and its own nested "1."-"8."
+    # numbering — which duplicated Top Findings (§4), the CARO consistency
+    # table (§5) and Silence matters (§6) that this Detailed Report already
+    # covers in full, later, in its own §7 (CARO consistency), §8
+    # (Silence), §9 (Public-Sector) and §12 (the complete observation
+    # register, both a table and a per-observation narrative block). That
+    # made every C&AG-direction-style observation print 3-4 times over and
+    # put a second, competing numbering scheme inside this section. §17's
+    # "single source of truth" requirement is about the *data* agreeing
+    # across formats, not about literally reprinting one format inside
+    # another — Format 2 stays available on its own via the Executive
+    # Summary tab for a reviewer who wants only that.
     lines.append("## 2. Executive Summary")
-    lines.append(render_executive_summary(ctx, observations))
+    lines.append(_overall_coherence(observations))
+    lines.append(f"Opinion: {ctx.opinion_type or 'Unclear'}  |  Review status: {ctx.review_status}")
+    if ctx.review_status != "complete":
+        lines.append(" ".join(ctx.review_status_reasons))
     lines.append("")
 
     # 3. Input Package and Review Status
@@ -414,7 +449,7 @@ def render_detailed_report(
         evidence = "; ".join(obs.evidence_required) or "—"
         lines.append(
             f"| {obs.observation_id} | {obs.observation} | {_TAG_DISPLAY.get(obs.tag, obs.tag)} | "
-            f"{obs.risk_rating} | {_source_label(obs)} | {_why_it_matters(obs)} | {evidence} | {obs.reviewer_status} |"
+            f"{obs.risk_rating} | {_source_label(obs)} | {_why_it_matters_detail(obs) or '—'} | {evidence} | {obs.reviewer_status} |"
         )
     lines.append("")
     for obs in ordered:
@@ -424,7 +459,9 @@ def render_detailed_report(
         lines.append(f"- Source: {_source_label(obs)}")
         if obs.sa_framework:
             lines.append(f"- SA 700/705 consideration: {obs.sa_framework['standard']} ({obs.sa_framework['nature']})")
-        lines.append(f"- Why it matters: {_why_it_matters(obs)}")
+        why = _why_it_matters_detail(obs)
+        if why:
+            lines.append(f"- Why it matters: {why}")
         if obs.evidence_required:
             lines.append(f"- Evidence required: {'; '.join(obs.evidence_required)}")
         if obs.caveats:
