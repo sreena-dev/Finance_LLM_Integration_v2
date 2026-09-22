@@ -30,13 +30,21 @@ def _write_canonical(tmp_path):
 
 
 def test_control_totals_metric_computes_from_canonical_tb_directly(tmp_path):
+    # TB-R20: total_debit/total_credit/difference are the signed CLOSING-BALANCE foot
+    # (this fixture's closing_balance column is all-positive, so it all falls on the
+    # debit side and total_credit is 0 -- an unrealistic TB, deliberately kept simple
+    # here since this test's purpose is exercising the metric plumbing, not a balanced
+    # fixture). Turnover (this fixture's actual debit/credit columns) is reported
+    # separately under turnover_total_debit/turnover_total_credit.
     path = _write_canonical(tmp_path)
     result = chat_query_fsli_table(metric="control_totals", canonical_tb_file=str(path))
     assert result["execution_status"] == "SUCCESS"
     totals = result["data"][0]
-    assert totals["total_debit"] == 500.0
-    assert totals["total_credit"] == 1000.0
-    assert totals["difference"] == -500.0
+    assert totals["total_debit"] == 1500.0
+    assert totals["total_credit"] == 0.0
+    assert totals["difference"] == 1500.0
+    assert totals["turnover_total_debit"] == 500.0
+    assert totals["turnover_total_credit"] == 1000.0
 
 
 def test_pct_of_total_computes_revenue_contribution(tmp_path):

@@ -70,6 +70,7 @@
    both the upload tab and the database tab so the two periods are never
    ambiguous about which one is which. */
 .tbpick__slots { display: flex; flex-direction: column; gap: 12px; }
+.tbpick__slot-group { display: flex; flex-direction: column; gap: 6px; }
 .tbpick__slot { display: flex; flex-direction: column; gap: 6px; }
 .tbpick__slot-label {
   font-size: 11px;

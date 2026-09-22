@@ -142,6 +142,28 @@
       ]
     },
     {
+      "tag": "claims",
+      "weight": 15,
+      "keywords": [
+        "income-claims",
+        "claims receivable",
+        "claim recognised",
+        "claim recognized",
+        "income claims"
+      ]
+    },
+    {
+      "tag": "withheld_recoverable",
+      "weight": 15,
+      "keywords": [
+        "withheld by customer",
+        "amount recoverable from customer",
+        "amount recoverable from vendor",
+        "amount recoverable others",
+        "interest recoverable from sub-contractor"
+      ]
+    },
+    {
       "tag": "foreign_currency",
       "weight": 25,
       "keywords": [

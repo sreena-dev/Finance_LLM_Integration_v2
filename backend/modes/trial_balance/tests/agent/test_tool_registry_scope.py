@@ -11,18 +11,27 @@ Two ways that scoping goes wrong, both silent:
   1. A tool routes.py calls deterministically stops resolving. The route returns a
      424 and a whole audit area vanishes from the report.
   2. A tool the AGENT needs is scoped out. Nothing errors -- the agent simply never
-     calls it. That is how the upload path breaks: it has no deterministic chain, so
-     the agent itself runs process_input_documents -> extract_grouping_mapping ->
-     build_canonical_tb -> persist_canonical_tb_to_live, and dropping any of those
-     domains leaves the route returning 200 with no canonical TB ever produced.
+     calls it.
 
-Both are asserted below, because both were live risks while this was being written.
+The upload path used to be case 2's canonical example (no deterministic chain; the
+agent had to run process_input_documents -> extract_grouping_mapping ->
+build_canonical_tb -> persist_canonical_tb_to_live itself, or nothing was ever
+produced). It has since become case 1 instead: routes.py's /upload-mapped now calls
+ingest_tb_to_live deterministically, the same single entry point live-template
+submissions use -- see TestDeterministicRegistryIsComplete for that guard.
 """
 
 import re
 from pathlib import Path
 
 import pytest
+
+pytest.importorskip(
+    "yukta",
+    reason="yukta is installed from a local path and published to no index, so it is "
+           "absent on a clean checkout -- see requirements.txt. These tests import "
+           "backend.agent, which needs it.",
+)
 
 from modes.trial_balance.pipeline.agent import agent_tool_domains, build_tools, get_tool_registry
 from modes.trial_balance.pipeline.config import settings
@@ -67,16 +76,14 @@ class TestDeterministicRegistryIsComplete:
 
 
 class TestAgentScopeCoversWhatTheAgentMustDo:
-    def test_upload_chain_is_visible_to_the_agent(self):
-        """The upload path has no deterministic chain. Every one of these must be
-        agent-selectable or uploads silently produce nothing."""
-        names = _tool_names(build_tools())
-        for tool in ("process_input_documents", "extract_grouping_mapping",
-                     "build_canonical_tb", "persist_canonical_tb_to_live"):
-            assert tool in names, (
-                f"{tool} is not agent-selectable, but the upload path depends on the "
-                "agent calling it. Add its domain to settings.AGENT_TOOL_DOMAINS."
-            )
+    def test_ingest_tb_to_live_is_deterministically_reachable_not_agent_dependent(self):
+        """The upload path's ingestion step is no longer something the agent must
+        remember to call -- routes.py's /upload-mapped calls ingest_tb_to_live
+        deterministically (asserted by test_every_call_tool_name_in_routes_resolves),
+        the same way live-template submissions do. Scoping it out of the agent's own
+        menu (settings.AGENT_TOOL_DOMAINS) must not disable that route."""
+        assert "ingest_tb_to_live" in _call_tool_names_in_routes()
+        assert "ingest_tb_to_live" in get_tool_registry()
 
     def test_chat_tools_are_visible_to_the_agent(self):
         """/ask and /ask-general are agent-routed; without these they cannot answer."""
@@ -87,24 +94,6 @@ class TestAgentScopeCoversWhatTheAgentMustDo:
     def test_db_lookup_tools_are_visible(self):
         names = _tool_names(build_tools())
         assert {"list_db_documents", "load_tb_from_db"} <= names
-
-
-class TestPersistenceIsReachable:
-    def test_persist_is_agent_selectable_and_instructed(self):
-        """persist_canonical_tb_to_live is called by NOTHING deterministically -- it
-        runs only because the system prompt instructs the agent to. Both halves of
-        that have to hold, and the Phase-5 prompt trim briefly removed the second."""
-        from modes.trial_balance.pipeline.agent import _load_system_prompt
-
-        assert "persist_canonical_tb_to_live" in _tool_names(build_tools())
-        assert "persist_canonical_tb_to_live" in _load_system_prompt(), (
-            "The prompt no longer instructs the agent to persist to LIVE staging, and "
-            "nothing calls it deterministically -- uploads would never reach LIVE."
-        )
-        assert "persist_canonical_tb_to_live" not in _call_tool_names_in_routes(), (
-            "persist is now called deterministically -- update this test and the "
-            "prompt instruction, which is then redundant."
-        )
 
 
 class TestPromptBudget:

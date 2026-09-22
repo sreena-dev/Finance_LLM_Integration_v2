@@ -16,8 +16,10 @@ import inspect
 import json
 import logging
 import re
+import socket
 from pathlib import Path
 from typing import Any, Callable, List
+from urllib.parse import urlparse
 
 from yukta import AgentConfig, Memory, SystemPrompt, create_agent, create_memory
 from yukta.core.Clients import VLLMClient
@@ -29,10 +31,10 @@ from modes.trial_balance.pipeline.tools import TOOL_REGISTRY
 
 logger = logging.getLogger(__name__)
 
-# Must run before get_agent() constructs the first LLM client (module-level, at
-# import time, is early enough -- the agent itself is built lazily on first
-# request). See pipeline/tracing.py for why this can't just be yukta's own
-# instrumentation.init_tracing().
+# The gateway shares one Phoenix project across all modes (see tracing.py); this
+# must run before get_agent() builds the first LLM client (module import time,
+# not lazily inside a request). See pipeline/tracing.py for why this can't just
+# be yukta's own instrumentation.init_tracing().
 tracing.init_tracing()
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "Prompt.md"
@@ -136,23 +138,14 @@ class SafeVLLMClient(VLLMClient):
         # Setting it as a session-level default header fixes get_model_info() without
         # touching _make_request()'s own (already-correct) per-call header, since `requests`
         # merges call-level headers on top of session-level ones.
-        # PATCHED (integration): `_session` is not present on every build of
-        # yukta's VLLMClient. The one in use here issues a module-level
-        # `requests.get(...)` from get_model_info() and has no session object at
-        # all, so this line raised "'SafeVLLMClient' object has no attribute
-        # '_session'" from the constructor -- taking down the whole Trial Balance
-        # agent before it ran anything.
-        #
-        # Guarded the same way the Financial Statement mode already guards the
-        # identical access. Where there is no session there is also no
-        # session-level header to fix, and the only consequence is the one this
-        # workaround was written to avoid: get_model_info() may 401 and the
-        # context window falls back to its default. A smaller context window is a
-        # degradation; a constructor that raises is an outage.
         api_key = self.config.get("api_key")
-        session = getattr(self, "_session", None)
-        if api_key and session is not None:
-            session.headers["Authorization"] = f"Bearer {api_key}"
+        # Some yukta VLLMClient builds don't set up `_session` until the first real
+        # request -- constructing this wrapper before that happens (as this
+        # integration's process-startup ordering does) hit
+        # "'SafeVLLMClient' object has no attribute '_session'" here. Guard rather
+        # than assume the base class always initializes it in __init__.
+        if api_key and getattr(self, "_session", None) is not None:
+            self._session.headers["Authorization"] = f"Bearer {api_key}"
 
     def generate(self, messages, tools=None, **kwargs):
         kwargs["max_tokens"] = min(kwargs.get("max_tokens", 4096), 4096)
@@ -339,6 +332,31 @@ def build_tb_agent():
     )
     agent.set_memory(memory)
     return agent
+
+
+def llm_reachable(timeout: float = 2.0) -> bool:
+    """A raw TCP-connect probe against settings.LLM_BASE_URL's host:port, deliberately
+    NOT an HTTP request through the yukta client -- that client already retries 3x with
+    its own backoff on a connection failure, and both build_audit_reasoning's and
+    build_comparison_reasoning's per-item loops retry the whole client call another 3x
+    on top of that (up to 9 real attempts per LLM-dependent step). For a multi-step
+    COMPARISON run, that compounds across many more steps than a SINGLE_TB run needs
+    (the agent orchestrates far more of a comparison itself), which is what made a
+    comparison look hung for many minutes when the LLM endpoint was simply down.
+
+    Call this ONCE, cheaply (a few milliseconds when reachable, at most `timeout`
+    seconds when not), before invoking the agent at all -- if the endpoint is
+    unreachable, every one of those retries downstream is doomed anyway, so failing
+    the whole request fast and honestly beats grinding through them first."""
+    try:
+        parsed = urlparse(settings.LLM_BASE_URL)
+        host, port = parsed.hostname, (parsed.port or (443 if parsed.scheme == "https" else 80))
+        if not host:
+            return False
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 _agent = None

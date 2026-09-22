@@ -17,15 +17,24 @@ import pytest
 from docx import Document
 from openpyxl import load_workbook
 
-from modes.trial_balance.tests.conftest_phase2 import SCREEN_ROWS, write_canonical
+from modes.trial_balance.tests.conftest_phase2 import SCREEN_ROWS, write_canonical  # noqa: E402
+
+pytest.importorskip(
+    "yukta",
+    reason="yukta is installed from a local path and published to no index, so it is "
+           "absent on a clean checkout -- see requirements.txt. These tests import "
+           "backend.agent, which needs it.",
+)
 
 from modes.trial_balance.router import (  # noqa: E402
     _run_comparison_analytics_chain,
     _run_core_analytics_chain,
 )
-from modes.trial_balance.pipeline.tools import find_identifiers  # noqa: E402
-from modes.trial_balance.pipeline.tools import read_manifest  # noqa: E402
-from modes.trial_balance.pipeline.tools import build_comparison_report  # noqa: E402
+from modes.trial_balance.pipeline.tools import (
+    build_comparison_report,  # noqa: E402
+    find_identifiers,  # noqa: E402
+    read_manifest,  # noqa: E402
+)
 
 _LAYER1 = json.dumps([
     {"rule": "TB-000", "rule_name": "Sign", "status": "PASS", "message": "positive = debit."},
@@ -112,11 +121,11 @@ class TestSectionStructure:
         "3. TB Integrity and Reconciliation",
         "4. Financial-Statement Reconstruction",
         "5. Mapping and Classification Quality",
-        "6. Materiality Assessment (CY basis)",
+        "6. Materiality Assessment",
         "7. Comparative Analytical Review",
-        "8. FSLI and Ledger-Level Movements (Current Year)",
+        "8. FSLI and Ledger-Level Movements",
         "9. Ratio and Relationship Analytics",
-        "10. Account-Risk Scoring (Current Year)",
+        "10. Account-Risk Scoring",
         "11. Assertion-Level Risk Assessment",
         "12. Sensitive and Public-Sector Accounts",
         "13. Estimates and Judgemental Balances",
@@ -157,6 +166,87 @@ class TestSectionStructure:
         assert "PY closing to CY opening continuity" in text
 
 
+class TestRemark21ComparativeSections:
+    """Wave 9 remark #21: Sections 6/8/10 must carry both periods' columns, not
+    render CY-only content with a cosmetic suffix. The `comparative_run` fixture
+    doesn't run the PY-leg ratio/materiality/risk tools itself (see TestPYLegRatioAnd
+    RiskTools in test_analytics_chain_wiring.py for that wiring), so PY figures here
+    read as the graceful "—" placeholder -- this test asserts structure (both period
+    columns present), not that PY data specifically populated in this fixture."""
+
+    def test_materiality_table_has_py_and_cy_columns(self, comparative_run):
+        comp, _ = comparative_run
+        text = _doc_text(comp / "TB_Comparison_Report.docx")
+        assert "(PY)" in text
+        assert "(CY)" in text
+        assert "(CY basis)" not in text
+
+    def test_fsli_table_has_variance_column(self, comparative_run):
+        comp, _ = comparative_run
+        text = _doc_text(comp / "TB_Comparison_Report.docx")
+        assert "Variance" in text
+
+    def test_account_risk_scoring_reports_both_periods(self, comparative_run):
+        comp, _ = comparative_run
+        text = _doc_text(comp / "TB_Comparison_Report.docx")
+        assert "computed independently for each period" in text
+
+
+class TestRemark17LimitationsGrouping:
+    """Wave 9 remark #17: the Limitations & No-Opinion Statement must render as 3
+    labeled groups (Data / Model-methodology / Audit-scope) rather than one flat
+    bullet list, and must carry comparative-specific limitations only in comparison
+    mode."""
+
+    def test_three_group_labels_render(self, comparative_run):
+        comp, _ = comparative_run
+        text = _doc_text(comp / "TB_Comparison_Report.docx")
+        assert "Data limitations" in text
+        assert "Model / methodology limitations" in text
+        assert "Audit-scope limitations" in text
+
+    def test_comparative_specific_bullets_render(self, comparative_run):
+        comp, _ = comparative_run
+        text = _doc_text(comp / "TB_Comparison_Report.docx")
+        assert "Prior-year grouping not independently tested" in text
+        assert "PY figures not agreed to audited accounts" in text
+        assert "No restatement or transition check performed" in text
+        assert "Chart-of-account changes not agreed to a change log" in text
+        # Single-period-only bullet must not leak into comparative mode.
+        assert "Single-period scope" not in text
+
+
+class TestRemark33ChartOfAccountsChurn:
+    """Wave 8 remark #33: the report must never assert a chart-of-accounts churn
+    magnitude is "ordinary" and downgrade the recommended procedure to confirmatory --
+    that's an audit conclusion the tool isn't entitled to draw. It must instead state
+    the churn as a percentage of the population and leave the procedure choice to the
+    audit team."""
+
+    def test_no_unconditional_ordinary_or_confirmatory_language(self, comparative_run):
+        comp, _ = comparative_run
+        text = _doc_text(comp / "TB_Comparison_Report.docx")
+        assert "is ordinary for a company" not in text
+        assert "confirmatory rather than investigative" not in text
+
+    def test_churn_percentage_is_stated(self, comparative_run):
+        comp, _ = comparative_run
+        text = _doc_text(comp / "TB_Comparison_Report.docx")
+        assert "% of the" in text and "account population" in text
+
+
+class TestRemark6BalanceFlagLabels:
+    """Wave 8 remark #6: the Section 7 balance-appearance/disappearance flags must not
+    reuse NEW_ENTRY/DROPPED (identical-looking to the genuine chart-of-account addition/
+    removal language two paragraphs above) -- rename and disambiguate."""
+
+    def test_flags_are_not_the_old_ambiguous_literals(self, comparative_run):
+        comp, _ = comparative_run
+        text = _doc_text(comp / "TB_Comparison_Report.docx")
+        assert "NEW_ENTRY" not in text
+        assert "DROPPED" not in text
+
+
 class TestCrossReferenceInvariant:
     def test_every_sheet_is_named_in_the_document(self, comparative_run):
         """The requirement, on the comparative side. The first run of this caught two
@@ -190,11 +280,20 @@ class TestCrossReferenceInvariant:
 
     def test_cy_phase2_populations_are_carried_across(self, comparative_run):
         """The CY leg ran the full analytics chain, so its populations belong in this
-        workbook rather than a second one the reader has to go and find."""
+        workbook rather than a second one the reader has to go and find.
+
+        Findings Register / Evidence Requests / Management Queries were consolidated to 2
+        sheets (not 3): a finding's management query is a pure function of that finding
+        record, so it renders as extra columns on "Findings & Queries Register" rather than
+        a separate "Management Queries" sheet a reader has to go and re-correlate by account."""
         comp, _ = comparative_run
         names = _sheets(comp)
-        for sheet in ("Findings Register", "Evidence Requests", "Management Queries"):
+        for sheet in ("Findings & Queries Register", "Evidence Request Register"):
             assert sheet in names, f"{sheet} not carried into the comparative workbook"
+        assert "Management Queries" not in names, (
+            "Management Queries should be merged into Findings & Queries Register's own "
+            "columns, not a separate sheet"
+        )
 
 
 class TestSafety:

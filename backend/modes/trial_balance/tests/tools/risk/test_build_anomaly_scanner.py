@@ -5,8 +5,6 @@ LLM client -- covered separately by its own graceful-degradation test."""
 
 import json
 
-import pytest
-
 from modes.trial_balance.pipeline.tools import build_anomaly_scanner
 
 
@@ -27,6 +25,7 @@ class TestRoundNumberCheck:
         ]
         canonical_tb_file = make_canonical_tb(rows)
         result = build_anomaly_scanner(canonical_tb_file=str(canonical_tb_file), output_dir=str(tmp_path))
+        assert result["execution_status"] == "SUCCESS", result.get("message")
         assert result["execution_status"] == "SUCCESS"
 
         with open(tmp_path / "anomaly_findings.json") as f:
@@ -45,6 +44,7 @@ class TestRoundNumberCheck:
         ]
         canonical_tb_file = make_canonical_tb(rows)
         result = build_anomaly_scanner(canonical_tb_file=str(canonical_tb_file), output_dir=str(tmp_path))
+        assert result["execution_status"] == "SUCCESS", result.get("message")
         with open(tmp_path / "anomaly_findings.json") as f:
             payload = json.load(f)
         assert payload["checks"]["TB-023"]["status"] == "PASS"
@@ -59,6 +59,7 @@ class TestDuplicateDescriptionCheck:
         ]
         canonical_tb_file = make_canonical_tb(rows)
         result = build_anomaly_scanner(canonical_tb_file=str(canonical_tb_file), output_dir=str(tmp_path))
+        assert result["execution_status"] == "SUCCESS", result.get("message")
         with open(tmp_path / "anomaly_findings.json") as f:
             payload = json.load(f)
         assert payload["checks"]["TB-030"]["status"] == "FLAGGED"
@@ -72,6 +73,7 @@ class TestDuplicateDescriptionCheck:
         ]
         canonical_tb_file = make_canonical_tb(rows)
         result = build_anomaly_scanner(canonical_tb_file=str(canonical_tb_file), output_dir=str(tmp_path))
+        assert result["execution_status"] == "SUCCESS", result.get("message")
         with open(tmp_path / "anomaly_findings.json") as f:
             payload = json.load(f)
         assert payload["checks"]["TB-030"]["status"] == "PASS"
@@ -85,6 +87,7 @@ class TestYearConsistencyCheck:
         ]
         canonical_tb_file = make_canonical_tb(rows)
         result = build_anomaly_scanner(canonical_tb_file=str(canonical_tb_file), output_dir=str(tmp_path), tb_year=2026)
+        assert result["execution_status"] == "SUCCESS", result.get("message")
         with open(tmp_path / "anomaly_findings.json") as f:
             payload = json.load(f)
         assert payload["checks"]["TB-033"]["status"] == "FLAGGED"
@@ -96,6 +99,7 @@ class TestYearConsistencyCheck:
         rows = [{"gl_code": "1001", "gl_name": "Advance - Project FY2016-17", "closing_balance": 300_000.0}]
         canonical_tb_file = make_canonical_tb(rows)
         result = build_anomaly_scanner(canonical_tb_file=str(canonical_tb_file), output_dir=str(tmp_path))
+        assert result["execution_status"] == "SUCCESS", result.get("message")
         with open(tmp_path / "anomaly_findings.json") as f:
             payload = json.load(f)
         assert payload["checks"]["TB-033"]["status"] == "SKIPPED"
@@ -105,6 +109,7 @@ class TestYearConsistencyCheck:
         rows = [{"gl_code": "1001", "gl_name": "Provision for Audit Fee - FY2023-24", "closing_balance": 5000.0}]
         canonical_tb_file = make_canonical_tb(rows)
         result = build_anomaly_scanner(canonical_tb_file=str(canonical_tb_file), output_dir=str(tmp_path), tb_year=2026)
+        assert result["execution_status"] == "SUCCESS", result.get("message")
         with open(tmp_path / "anomaly_findings.json") as f:
             payload = json.load(f)
         # 2026 - 2023 = 3, at the threshold (> 3 required to flag) -- must not flag.
@@ -116,6 +121,7 @@ class TestSemanticMismatchGracefulDegradation:
         rows = [{"gl_code": "1001", "gl_name": "Office Rent Paid", "closing_balance": 1000.0}]
         canonical_tb_file = make_canonical_tb(rows)
         result = build_anomaly_scanner(canonical_tb_file=str(canonical_tb_file), output_dir=str(tmp_path))
+        assert result["execution_status"] == "SUCCESS", result.get("message")
         assert result["execution_status"] == "SUCCESS"  # never fails just because llm_client is absent
         with open(tmp_path / "anomaly_findings.json") as f:
             payload = json.load(f)
@@ -145,5 +151,6 @@ class TestEmptyCanonicalTb:
     def test_empty_canonical_tb_produces_no_findings_without_crashing(self, make_canonical_tb, tmp_path):
         canonical_tb_file = make_canonical_tb([])
         result = build_anomaly_scanner(canonical_tb_file=str(canonical_tb_file), output_dir=str(tmp_path))
+        assert result["execution_status"] == "SUCCESS", result.get("message")
         assert result["execution_status"] == "SUCCESS"
         assert result["artifacts"] == []

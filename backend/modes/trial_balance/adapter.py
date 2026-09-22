@@ -10,12 +10,18 @@ def status() -> tuple[bool, str | None]:
     (its storage layer: upload/list/delete/validate/grouping-upload) is reachable;
     `ask`/`audit` additionally need the LLM stack and report their own reason via
     their response body if that's what's missing, same as the router's other
-    tool-call failures already do."""
-    try:
-        from modes.trial_balance.pipeline.db import db_cursor
+    tool-call failures already do.
 
-        with db_cursor() as cur:
-            cur.execute("SELECT 1")
-        return True, None
+    Reuses pipeline/health_checks.py's check_postgres() rather than its own raw
+    probe, so there's one Postgres-reachability check for this mode, not two
+    independently-maintained ones (router.py's GET /health uses the same function
+    for its richer multi-engine report)."""
+    try:
+        from modes.trial_balance.pipeline.health_checks import check_postgres
+
+        result = check_postgres()
+        if result.get("status") == "ok":
+            return True, None
+        return False, result.get("detail") or "Postgres unreachable"
     except Exception as exc:
         return False, str(exc)

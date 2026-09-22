@@ -10,11 +10,16 @@ from pathlib import Path
 
 import pytest
 
-from modes.trial_balance.pipeline.tools import find_identifiers, mask_structure, mask_text
-from modes.trial_balance.pipeline.tools import build_normalisation_note
-from modes.trial_balance.pipeline.tools import build_engagement_context
-from modes.trial_balance.pipeline.tools import build_audit_ratio_pack
-from modes.trial_balance.pipeline.tools import build_materiality_lens
+from modes.trial_balance.pipeline.tools import (
+    build_audit_ratio_pack,
+    build_engagement_context,
+    build_materiality_lens,
+    build_normalisation_note,
+    find_identifiers,
+    mask_structure,
+    mask_text,
+)
+
 # write_canonical is a plain helper, not a fixture -- imported rather than requested.
 from modes.trial_balance.tests.conftest_phase2 import write_canonical
 
@@ -113,7 +118,148 @@ class TestAuditRatioPack:
             for side in ("numerator", "denominator"):
                 assert r[side]["head"], f"{key}.{side} has no head name"
                 assert r[side]["balance"] is not None
-                assert r[side]["basis"] in ("fsli_hierarchy", "gl_name_fallback")
+                assert r[side]["basis"] in (
+                    "fsli_hierarchy", "gl_name_fallback",
+                    "financial_snapshot",  # total_revenue/total_expenses, classify_row-derived
+                    "derived",  # e.g. revenue_less_cogs -- arithmetic over two already-traced components
+                )
+
+    def test_defines_more_than_five_ratios(self):
+        """The old pack shipped exactly 5 ratios (debtor/creditor/inventory intensity,
+        depreciation proxy, finance-cost ratio) -- this is the rebuild's headline ask."""
+        from modes.trial_balance.pipeline.tools import _RATIOS
+
+        assert len(_RATIOS) > 5
+        keys = {spec["key"] for spec in _RATIOS}
+        for expected in ("debtor_days", "creditor_days", "inventory_days",
+                          "employee_cost_ratio", "operating_expense_ratio", "gross_margin_proxy"):
+            assert expected in keys, f"{expected} missing from the rebuilt ratio set"
+
+    def test_creditor_and_inventory_intensity_fall_back_to_total_expenses_for_a_services_tb(self, tmp_path):
+        """The reported bug: a services-sector TB has no distinct Purchases/COGS line by
+        design (it doesn't buy goods for resale), so creditor/inventory intensity came back
+        null for every such TB under the old design. They should now compute against Total
+        Expenses instead, with that substitution recorded rather than silent."""
+        rows = [
+            {"gl_code": "3000", "gl_name": "Revenue from Operations", "closing_balance": -50_000_000.0,
+             "main_head": "Revenue", "sub_head_1": "Revenue from operations",
+             "account_type": "Income", "mapped_status": "MAPPED"},
+            {"gl_code": "6100", "gl_name": "Employee Cost", "closing_balance": 30_000_000.0,
+             "main_head": "Expenses", "sub_head_1": "Employee benefit expenses",
+             "account_type": "Expense", "mapped_status": "MAPPED"},
+            {"gl_code": "6200", "gl_name": "Professional Fees", "closing_balance": 5_000_000.0,
+             "main_head": "Expenses", "sub_head_1": "Other expenses",
+             "account_type": "Expense", "mapped_status": "MAPPED"},
+            {"gl_code": "2200", "gl_name": "Trade Payable - Vendor", "closing_balance": 8_000_000.0,
+             "main_head": "Current liabilities", "sub_head_1": "Trade payables",
+             "account_type": "Liability", "mapped_status": "MAPPED"},
+        ]
+        tb = write_canonical(tmp_path / "canonical_tb.parquet", rows)
+        (tmp_path / "materiality.json").write_text(json.dumps({
+            "selected_materiality": {"overall_materiality": 1_000_000.0},
+            "thresholds": {"overall": 1_000_000.0, "performance": 750_000.0, "clearly_trivial": 50_000.0},
+        }), encoding="utf-8")
+        # Stands in for build_financial_snapshot's real output -- only the two keys
+        # build_audit_ratio_pack actually reads.
+        (tmp_path / "financial_snapshot_statistics.json").write_text(json.dumps({
+            "total_revenue": 50_000_000.0, "total_expenses": 35_000_000.0,
+        }), encoding="utf-8")
+
+        result = build_audit_ratio_pack(canonical_tb_file=str(tb), output_dir=str(tmp_path))
+        assert result["execution_status"] == "SUCCESS"
+        ratios = _load(tmp_path, "audit_ratio_pack.json")["ratios"]
+
+        creditor = ratios["creditor_intensity"]
+        assert creditor["value"] is not None, "should not go null just because this TB has no COGS/Purchases line"
+        assert creditor["used_fallback_denominator"] is True
+        assert creditor["denominator"]["component"] == "total_expenses"
+        assert creditor["value"] == pytest.approx(8_000_000.0 / 35_000_000.0, abs=1e-6)
+
+        assert ratios["operating_expense_ratio"]["value"] == pytest.approx(35_000_000.0 / 50_000_000.0, abs=1e-6)
+        # No real COGS line exists, so the margin proxy must stay null rather than
+        # substitute Total Expenses under a "gross margin" label.
+        assert ratios["gross_margin_proxy"]["value"] is None
+
+    def test_days_ratio_is_365x_the_intensity_ratio(self, phase2_run):
+        tb, run_dir = phase2_run
+        build_audit_ratio_pack(canonical_tb_file=tb, output_dir=str(run_dir))
+        ratios = _load(run_dir, "audit_ratio_pack.json")["ratios"]
+        assert ratios["debtor_days"]["value"] == pytest.approx(ratios["debtor_intensity"]["value"] * 365, abs=0.01)
+
+    def test_creditor_days_far_outside_band_is_flagged(self, phase2_run):
+        # Wave 2 Fix 1a: a plausibility band now exists where none did before.
+        tb, run_dir = phase2_run
+        build_audit_ratio_pack(canonical_tb_file=tb, output_dir=str(run_dir))
+        ratios = _load(run_dir, "audit_ratio_pack.json")["ratios"]
+        assert ratios["creditor_days"]["status"] in ("within_expectation", "outside_expectation", "not_computed")
+
+    def test_immaterial_residual_cogs_still_falls_back_to_total_expenses(self, tmp_path):
+        """The EPIL bug: a tiny residual 'materials' line (~Rs 4.19cr, dwarfed by total
+        expenses) counted as a "present" COGS match and silently defeated the documented
+        COGS -> Total Expenses fallback, driving creditor/inventory intensity to an
+        implausible reading off a near-zero denominator. A materiality-based trigger must
+        still fall back to Total Expenses here, same as a fully-absent COGS line."""
+        rows = [
+            {"gl_code": "3000", "gl_name": "Revenue from Operations", "closing_balance": -50_000_000.0,
+             "main_head": "Revenue", "sub_head_1": "Revenue from operations",
+             "account_type": "Income", "mapped_status": "MAPPED"},
+            {"gl_code": "5000", "gl_name": "Cost of Materials Consumed", "closing_balance": 419_000.0,
+             "main_head": "Expenses", "sub_head_1": "Cost of materials consumed",
+             "account_type": "Expense", "mapped_status": "MAPPED"},
+            {"gl_code": "6100", "gl_name": "Employee Cost", "closing_balance": 30_000_000.0,
+             "main_head": "Expenses", "sub_head_1": "Employee benefit expenses",
+             "account_type": "Expense", "mapped_status": "MAPPED"},
+            {"gl_code": "6200", "gl_name": "Professional Fees", "closing_balance": 5_000_000.0,
+             "main_head": "Expenses", "sub_head_1": "Other expenses",
+             "account_type": "Expense", "mapped_status": "MAPPED"},
+            {"gl_code": "2200", "gl_name": "Trade Payable - Vendor", "closing_balance": 8_000_000.0,
+             "main_head": "Current liabilities", "sub_head_1": "Trade payables",
+             "account_type": "Liability", "mapped_status": "MAPPED"},
+        ]
+        tb = write_canonical(tmp_path / "canonical_tb.parquet", rows)
+        (tmp_path / "materiality.json").write_text(json.dumps({
+            "selected_materiality": {"overall_materiality": 1_000_000.0},
+            "thresholds": {"overall": 1_000_000.0, "performance": 750_000.0, "clearly_trivial": 50_000.0},
+        }), encoding="utf-8")
+        (tmp_path / "financial_snapshot_statistics.json").write_text(json.dumps({
+            "total_revenue": 50_000_000.0, "total_expenses": 35_419_000.0,
+        }), encoding="utf-8")
+
+        result = build_audit_ratio_pack(canonical_tb_file=str(tb), output_dir=str(tmp_path))
+        assert result["execution_status"] == "SUCCESS"
+        creditor = _load(tmp_path, "audit_ratio_pack.json")["ratios"]["creditor_intensity"]
+        assert creditor["used_fallback_denominator"] is True
+        assert creditor["fallback_reason"] == "immaterial_partial_match"
+        assert creditor["denominator"]["component"] == "total_expenses"
+
+    def test_excludes_purchase_returns_from_the_cogs_component(self, tmp_path):
+        """A 'Purchase Returns' account is a contra entry that should REDUCE the
+        purchases/COGS base, not be summed into it in absolute terms alongside real
+        purchases -- gl_total_by_keywords sums matches in absolute terms by design, so
+        without this exclusion a large returns account inflates the denominator and
+        understates creditor/inventory intensity."""
+        rows = [
+            {"gl_code": "5000", "gl_name": "Purchases", "closing_balance": 20_000_000.0,
+             "main_head": "Expenses", "sub_head_1": "Cost of materials consumed",
+             "account_type": "Expense", "mapped_status": "MAPPED"},
+            {"gl_code": "5010", "gl_name": "Purchase Returns", "closing_balance": -3_000_000.0,
+             "main_head": "Expenses", "sub_head_1": "Cost of materials consumed",
+             "account_type": "Expense", "mapped_status": "MAPPED"},
+            {"gl_code": "2200", "gl_name": "Trade Payable - Vendor", "closing_balance": 4_000_000.0,
+             "main_head": "Current liabilities", "sub_head_1": "Trade payables",
+             "account_type": "Liability", "mapped_status": "MAPPED"},
+        ]
+        tb = write_canonical(tmp_path / "canonical_tb.parquet", rows)
+        (tmp_path / "materiality.json").write_text(json.dumps({
+            "selected_materiality": {"overall_materiality": 1_000_000.0},
+            "thresholds": {"overall": 1_000_000.0, "performance": 750_000.0, "clearly_trivial": 50_000.0},
+        }), encoding="utf-8")
+
+        build_audit_ratio_pack(canonical_tb_file=str(tb), output_dir=str(tmp_path))
+        ratios = _load(tmp_path, "audit_ratio_pack.json")["ratios"]
+        # Denominator must be the 20M purchase line alone, not 23M (20M + the 3M return
+        # summed in absolute terms).
+        assert ratios["creditor_intensity"]["denominator"]["balance"] == pytest.approx(20_000_000.0, abs=1.0)
 
 
 class TestEngagementContext:

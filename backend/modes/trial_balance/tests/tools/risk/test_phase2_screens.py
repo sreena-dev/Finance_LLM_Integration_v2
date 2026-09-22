@@ -19,14 +19,17 @@ from pathlib import Path
 
 import pytest
 
-from modes.trial_balance.pipeline.tools import build_abnormal_sign_screen
-from modes.trial_balance.pipeline.tools import build_caro_indicators
-from modes.trial_balance.pipeline.tools import build_counterpart_screen
-from modes.trial_balance.pipeline.tools import build_going_concern_screen
-from modes.trial_balance.pipeline.tools import build_override_indicators
-from modes.trial_balance.pipeline.tools import build_public_sector_lens
-from modes.trial_balance.pipeline.tools import build_relationship_expectations
-from modes.trial_balance.pipeline.tools import build_statutory_screen
+from modes.trial_balance.pipeline.tools import (
+    build_abnormal_sign_screen,
+    build_caro_indicators,
+    build_counterpart_screen,
+    build_going_concern_screen,
+    build_override_indicators,
+    build_public_sector_lens,
+    build_relationship_expectations,
+    build_statutory_screen,
+)
+from modes.trial_balance.tests.conftest_phase2 import write_canonical
 
 SCREENS = [
     (build_counterpart_screen, "counterpart_screen.json"),
@@ -126,6 +129,26 @@ class TestRelationshipExpectations:
             if r["status"] == "not_computed":
                 assert "reason" in r and r.get("missing_component")
                 assert "observed_ratio" not in r
+
+    def test_rel09_inventory_not_computed_agrees_with_audit_ratio_pack(self, phase2_run):
+        # Wave 2 Fix 1c: cross-engine consistency check. build_audit_ratio_pack and
+        # build_relationship_expectations resolve "inventory" independently -- neither
+        # this fixture nor a real services-sector TB carries an inventory account, so
+        # BOTH engines must agree it is not computed, not have one silently read a false
+        # positive off an unrelated keyword match (the client's "Inventory Intensity nil
+        # though the relationship reads 100%" symptom).
+        from modes.trial_balance.pipeline.tools import build_audit_ratio_pack
+
+        tb, run_dir = phase2_run
+        _run(build_relationship_expectations, tb, run_dir)
+        rel09 = next(r for r in _load(run_dir, "relationship_expectations.json")["results"] if r["id"] == "REL-09")
+
+        _run(build_audit_ratio_pack, tb, run_dir)
+        inventory_intensity = _load(run_dir, "audit_ratio_pack.json")["ratios"]["inventory_intensity"]
+
+        assert rel09["status"] == "not_computed"
+        assert inventory_intensity["value"] is None
+        assert inventory_intensity["status"] == "not_computed"
 
 
 class TestAbnormalSignScreen:
@@ -232,6 +255,35 @@ class TestGoingConcernScreen:
         for phrase in ("is not a going concern", "material uncertainty exists", "will cease"):
             assert phrase not in blob, f"conclusion-shaped phrase leaked: {phrase}"
 
+    def test_cash_figure_uses_netted_balance_when_netting_screen_has_run(self, tmp_path):
+        # Wave 2 Fix 3b: EPIL's GL 20950021/20950022 ("SBI- MUSCAT (US$) -R"/"-P")
+        # inflated this screen's cash-and-bank figure to gross (~Rs 52,629cr on the live
+        # run) instead of the true net (~Rs 700cr) exposure. Once build_netting_screen has
+        # already produced netted_balances.parquet for this output_dir, the cash figure
+        # here must use it.
+        from modes.trial_balance.pipeline.tools import build_netting_screen
+
+        rows = [
+            {"gl_code": "20950021", "gl_name": "SBI- MUSCAT (US$) -R", "closing_balance": 6_396_870_000.0,
+             "main_head": "Current assets", "sub_head_1": "Cash and Bank Balances", "mapped_status": "MAPPED"},
+            {"gl_code": "20950022", "gl_name": "SBI- MUSCAT (US$) -P", "closing_balance": -6_389_870_000.0,
+             "main_head": "Current assets", "sub_head_1": "Cash and Bank Balances", "mapped_status": "MAPPED"},
+        ]
+        tb = write_canonical(tmp_path / "canonical_tb.parquet", rows)
+
+        gross_run = tmp_path / "gross"
+        gross_run.mkdir()
+        _run(build_going_concern_screen, str(tb), gross_run)
+        gross_cash = _load(gross_run, "going_concern_screen.json")["computed"]["cash_and_bank"]
+        assert gross_cash == pytest.approx(6_396_870_000.0 + 6_389_870_000.0)
+
+        netted_run = tmp_path / "netted"
+        netted_run.mkdir()
+        build_netting_screen(canonical_tb_file=str(tb), output_dir=str(netted_run))
+        _run(build_going_concern_screen, str(tb), netted_run)
+        net_cash = _load(netted_run, "going_concern_screen.json")["computed"]["cash_and_bank"]
+        assert net_cash == pytest.approx(7_000_000.0)
+
 
 class TestCaroIndicators:
     def test_downgrades_to_information_request_when_applicability_unconfirmed(self, phase2_run):
@@ -292,3 +344,27 @@ class TestOverrideIndicators:
         (Path(run_dir) / "anomaly_findings.json").unlink()
         result = _run(build_override_indicators, tb, run_dir)
         assert any("anomaly_findings.json not available" in w for w in result.get("warnings", []))
+
+
+class TestStatutoryDuesPopulationLabeling:
+    """Wave 2 Fix 2b: statutory dues are independently aggregated in 5 places across
+    this codebase -- every population must name the other four so a reviewer never
+    mistakes one screen's total for the only "statutory dues" figure."""
+
+    def test_statutory_screen_results_carry_population_basis(self, phase2_run):
+        tb, run_dir = phase2_run
+        _run(build_statutory_screen, tb, run_dir)
+        data = _load(run_dir, "statutory_screen.json")
+        assert all(r.get("population_basis") for r in data["results"])
+
+    def test_going_concern_screen_carries_population_basis(self, phase2_run):
+        tb, run_dir = phase2_run
+        _run(build_going_concern_screen, tb, run_dir)
+        data = _load(run_dir, "going_concern_screen.json")
+        assert data.get("statutory_dues_population_basis")
+
+    def test_caro_indicators_carries_population_basis(self, phase2_run):
+        tb, run_dir = phase2_run
+        _run(build_caro_indicators, tb, run_dir)
+        data = _load(run_dir, "caro_indicators.json")
+        assert data.get("statutory_dues_population_basis")

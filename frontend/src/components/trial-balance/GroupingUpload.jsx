@@ -1,71 +1,63 @@
-import { useRef, useState } from 'react';
-import { tbUploadGrouping } from '../../api/client';
+import { useRef } from 'react';
 import Icon from '../common/Icon';
 import Notice from '../common/Notice';
 import './GroupingUpload.css';
 
 /**
  * Optional client chart-of-accounts / FSLI grouping file — a single upload
- * button, same simple pattern as the trial balance upload above it. Supplying
+ * button, same simple pattern as the trial-balance upload above it. Supplying
  * one changes the audit materially: every account the file names is
  * classified by the client's own FSLI label instead of the keyword engine.
+ *
+ * Pure staging component: picking a file only hands it up to the parent via
+ * `onStage` — it is not uploaded to the backend until "Run analysis" fires
+ * (see TrialBalanceView's runIngestionThenAudit), so a bare TB and its
+ * grouping file always reach ingest_tb_to_live together, never separately.
+ * `slotState` (set by the parent during Run) drives the running/success/
+ * error display; this component has no fetch state of its own any more.
  */
-export default function GroupingUpload({ mode, doc, priorDoc, grouping, onChange, onNeedsMapping }) {
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState(null);
+export default function GroupingUpload({ staged, result, slotState, onStage, onRemove }) {
   const inputRef = useRef(null);
 
-  async function pick(event) {
+  function pick(event) {
     const file = event.target.files?.[0];
-    // Reset immediately so re-picking the same filename still fires onChange.
+    // Reset immediately so re-picking the same filename still fires onStage.
     event.target.value = '';
     if (!file) return;
-
-    setError(null);
-    setUploading(true);
-    try {
-      const res = await tbUploadGrouping(mode, {
-        file,
-        docId: doc?.doc_id,
-        docId2: priorDoc?.doc_id,
-      });
-      if (res.needsMapping) {
-        onNeedsMapping({ ...res, filename: file.name });
-      } else {
-        onChange({ ...res, filename: file.name });
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setUploading(false);
-    }
+    onStage(file);
   }
+
+  const running = slotState?.status === 'running';
+  const filename = result?.filename || staged?.name;
 
   return (
     <div className="tbgrp">
-      {grouping ? (
+      {filename ? (
         <div className="tbgrp__file-row">
-          <Icon name="check" size={14} />
-          <span className="tbgrp__filename">{grouping.filename}</span>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => onChange(null)}>
-            Remove
-          </button>
+          <Icon name={running ? 'refresh' : 'check'} size={14} />
+          <span className="tbgrp__filename">{filename}</span>
+          {!running && (
+            <button type="button" className="btn btn--ghost btn--sm" onClick={onRemove}>
+              Remove
+            </button>
+          )}
         </div>
       ) : (
-        <label className={`tbgrp__btn ${uploading ? 'is-busy' : ''}`}>
-          <Icon name={uploading ? 'refresh' : 'upload'} size={14} />
-          {uploading ? 'Uploading…' : 'Upload grouping file (optional)'}
+        <label className="tbgrp__btn">
+          <Icon name="upload" size={14} />
+          Upload grouping file
           <input
             ref={inputRef}
             type="file"
             accept=".xlsx,.xls"
-            disabled={uploading}
             onChange={pick}
           />
         </label>
       )}
 
-      {error && <Notice tone="error" title="Could not read this grouping file">{error}</Notice>}
+      {slotState?.status === 'failed' && (
+        <Notice tone="error" title="Could not read this grouping file">{slotState.message}</Notice>
+      )}
     </div>
   );
 }

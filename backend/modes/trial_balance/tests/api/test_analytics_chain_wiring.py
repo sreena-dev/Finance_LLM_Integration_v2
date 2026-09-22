@@ -22,6 +22,14 @@ from unittest.mock import patch
 
 import pytest
 
+pytest.importorskip(
+    "yukta",
+    reason="yukta is installed from a local path and published to no index, so it is "
+           "absent on a clean checkout -- see requirements.txt. These tests import "
+           "backend.agent, which needs it.",
+)
+
+from modes.trial_balance.pipeline.agent import call_tool
 from modes.trial_balance.router import _run_core_analytics_chain
 
 
@@ -135,6 +143,38 @@ class TestOrderingDependencies:
         assert ev["summary"]["findings_covered"] > 0
         assert ev["summary"]["evidence_requests"] > 0
 
+    def test_layer2_patch_runs_before_exception_consolidation(self, phase2_run):
+        """TB-R19/R21: validate_layer2_tb (which patches TB-012/013/016/017/018/020 from
+        SKIPPED to a real PASS/WARNING/HALTED status) must run BEFORE
+        build_exception_consolidator, build_assertion_evidence_map and
+        validate_tb_pipeline -- all three used to consume layer1_results.json while those
+        six rules were still SKIPPED stubs, so a genuinely HALTED TB-012 never reached
+        exception consolidation or pipeline validation at all. Asserted on call ORDER
+        (not artifact content, which phase2_run's stub layer1_results.json doesn't carry
+        TB-012 in) since that's the actual defect: a wiring/sequencing bug, not a content
+        bug any individual tool's own tests would catch."""
+        tb, run_dir = phase2_run
+        call_order = []
+        real_call_tool = call_tool
+
+        def _recording_call_tool(tool_name, **kwargs):
+            call_order.append(tool_name)
+            return real_call_tool(tool_name, **kwargs)
+
+        with patch("modes.trial_balance.router.get_agent") as mock_agent, \
+             patch("modes.trial_balance.router.call_tool", side_effect=_recording_call_tool):
+            mock_agent.return_value.llm_client = None
+            _run_core_analytics_chain(tb, str(run_dir))
+
+        assert "validate_layer2_tb" in call_order, "validate_layer2_tb did not run"
+        assert "build_exception_consolidator" in call_order, "build_exception_consolidator did not run"
+        assert call_order.index("validate_layer2_tb") < call_order.index("build_exception_consolidator"), (
+            f"validate_layer2_tb must run before build_exception_consolidator; got order {call_order}"
+        )
+        assert call_order.index("validate_layer2_tb") < call_order.index("validate_tb_pipeline"), (
+            f"validate_layer2_tb must run before validate_tb_pipeline; got order {call_order}"
+        )
+
     def test_run_log_ran_last_and_saw_the_whole_run(self, chain_run):
         """Infers the tool list from artifacts on disk, so running it early would
         under-report what executed."""
@@ -184,3 +224,191 @@ class TestChainRemainsResilient:
         # Later steps still ran despite the two failures above.
         assert (Path(run_dir) / "finding_records.json").exists()
         assert (Path(run_dir) / "run_log.json").exists()
+
+
+class TestNettingScreenWiring:
+    """Wave 2 Fix 3: build_netting_screen was implemented and unit-tested but never
+    actually wired into _run_core_analytics_chain -- confirmed live: a real EPIL
+    COMPARISON re-run showed going_concern_screen.json's cash_and_bank still at the full
+    gross ~Rs 52,629cr figure, and no netting_screen.json in the session at all, because
+    the chain never called it. Must run, and must run BEFORE build_going_concern_screen
+    so netted_balances.parquet exists for it to read."""
+
+    def test_netting_screen_runs_and_precedes_going_concern_screen(self, phase2_run):
+        tb, run_dir = phase2_run
+        call_order = []
+        real_call_tool = call_tool
+
+        def _recording_call_tool(tool_name, **kwargs):
+            call_order.append(tool_name)
+            return real_call_tool(tool_name, **kwargs)
+
+        with patch("modes.trial_balance.router.get_agent") as mock_agent, \
+             patch("modes.trial_balance.router.call_tool", side_effect=_recording_call_tool):
+            mock_agent.return_value.llm_client = None
+            _run_core_analytics_chain(tb, str(run_dir))
+
+        assert "build_netting_screen" in call_order, "build_netting_screen did not run"
+        assert (Path(run_dir) / "netting_screen.json").exists()
+        assert call_order.index("build_netting_screen") < call_order.index("build_going_concern_screen"), (
+            f"build_netting_screen must run before build_going_concern_screen; got order {call_order}"
+        )
+
+
+class TestWave3ScreensWiring:
+    """Wave 3: every new screen (build_contract_exposure_lens, build_foreign_operations_
+    lens, build_deposit_margin_money_screen, build_provisions_writeoff_screen,
+    build_msme_interest_screen) must actually run in the deterministic chain -- Wave 2's
+    build_netting_screen was built and unit-tested but never wired in, and only a live
+    re-triage caught it; this test exists so the same class of gap can't ship silently
+    for Wave 3's screens too."""
+
+    def test_all_wave3_screens_run_and_contract_exposure_precedes_deposit_screen(self, phase2_run):
+        tb, run_dir = phase2_run
+        call_order = []
+        real_call_tool = call_tool
+
+        def _recording_call_tool(tool_name, **kwargs):
+            call_order.append(tool_name)
+            return real_call_tool(tool_name, **kwargs)
+
+        with patch("modes.trial_balance.router.get_agent") as mock_agent, \
+             patch("modes.trial_balance.router.call_tool", side_effect=_recording_call_tool):
+            mock_agent.return_value.llm_client = None
+            _run_core_analytics_chain(tb, str(run_dir))
+
+        for tool_name, artifact in (
+            ("build_contract_exposure_lens", "contract_exposure.json"),
+            ("build_foreign_operations_lens", "foreign_operations.json"),
+            ("build_deposit_margin_money_screen", "deposit_margin_money_screen.json"),
+            ("build_provisions_writeoff_screen", "provisions_writeoff_screen.json"),
+            ("build_msme_interest_screen", "msme_interest_screen.json"),
+        ):
+            assert tool_name in call_order, f"{tool_name} did not run"
+            assert (Path(run_dir) / artifact).exists(), f"{artifact} was not written"
+
+        assert call_order.index("build_contract_exposure_lens") < call_order.index("build_deposit_margin_money_screen"), (
+            f"build_contract_exposure_lens must run before build_deposit_margin_money_screen; got order {call_order}"
+        )
+
+
+class TestWave8ScreensWiring:
+    """Wave 8: every new screen (build_unbilled_revenue_screen, build_dta_recoverability_
+    screen, build_wip_contract_asset_screen) must actually run in the deterministic chain
+    -- same lesson as Wave 2's netting-screen miss and Wave 3's own wiring test."""
+
+    def test_all_wave8_screens_run(self, phase2_run):
+        tb, run_dir = phase2_run
+        call_order = []
+        real_call_tool = call_tool
+
+        def _recording_call_tool(tool_name, **kwargs):
+            call_order.append(tool_name)
+            return real_call_tool(tool_name, **kwargs)
+
+        with patch("modes.trial_balance.router.get_agent") as mock_agent, \
+             patch("modes.trial_balance.router.call_tool", side_effect=_recording_call_tool):
+            mock_agent.return_value.llm_client = None
+            _run_core_analytics_chain(tb, str(run_dir))
+
+        for tool_name, artifact in (
+            ("build_unbilled_revenue_screen", "unbilled_revenue_screen.json"),
+            ("build_dta_recoverability_screen", "dta_recoverability_screen.json"),
+            ("build_wip_contract_asset_screen", "wip_contract_asset_screen.json"),
+        ):
+            assert tool_name in call_order, f"{tool_name} did not run"
+            assert (Path(run_dir) / artifact).exists(), f"{artifact} was not written"
+
+
+class TestPYLegLayer2Register:
+    """Wave 8 remark #30: validate_layer2_tb (TB-012/013/016/017/018/020 -- 6 rules,
+    including TB-012's Assets=Liabilities+Equity identity check) previously only ran
+    inside _run_core_analytics_chain, which the PY leg (run_full_analytics=False) never
+    invokes -- so PY only ever got layer1's rules, never layer2's. It only needs
+    canonical_tb_file + the layer1_results.json validate_layer1_tb already wrote in this
+    same branch, so this is purely an invocation gap."""
+
+    def test_py_leg_patches_layer2_rules_into_its_own_layer1_results(self, phase2_run):
+        from modes.trial_balance.router import _run_layer1_precheck
+
+        tb, run_dir = phase2_run
+        real_call = call_tool
+
+        def _redirect_load_tb_from_db(name, **kwargs):
+            if name == "load_tb_from_db":
+                return {"execution_status": "SUCCESS", "artifacts": [tb]}
+            return real_call(name, **kwargs)
+
+        with patch("modes.trial_balance.router.get_agent") as mock_agent, \
+             patch("modes.trial_balance.router.call_tool", side_effect=_redirect_load_tb_from_db):
+            mock_agent.return_value.llm_client = None
+            _run_layer1_precheck("sess-1", "PY_DOC", str(run_dir), run_full_analytics=False)
+
+        results = json.loads((Path(run_dir) / "layer1_results.json").read_text(encoding="utf-8"))
+        by_rule = {r["rule"]: r for r in results}
+        assert "TB-012" in by_rule, "PY leg's layer1_results.json has no TB-012 entry at all"
+        assert by_rule["TB-012"]["status"] != "SKIPPED", (
+            "PY leg's TB-012 is still SKIPPED -- validate_layer2_tb never patched it"
+        )
+
+
+class TestPYLegRatioAndRiskTools:
+    """Wave 9 remark #21 (Part A): the comparative report's Sections 6/8/10 and the
+    ratio-trend sheet were CY-only because build_financial_ratios/build_audit_ratio_
+    pack/build_relationship_analytics/build_risk_indicators never ran for the PY leg,
+    even though every prerequisite they need (fsli_summary.parquet, financial_
+    snapshot_statistics.json) was already produced by the calls that DO run in this
+    branch. Same wiring-gap lesson as TestWave3ScreensWiring and TestPYLegLayer2Register."""
+
+    def test_py_leg_writes_ratio_and_risk_artifacts(self, phase2_run):
+        from modes.trial_balance.router import _run_layer1_precheck
+
+        tb, run_dir = phase2_run
+        real_call = call_tool
+
+        def _redirect_load_tb_from_db(name, **kwargs):
+            if name == "load_tb_from_db":
+                return {"execution_status": "SUCCESS", "artifacts": [tb]}
+            return real_call(name, **kwargs)
+
+        with patch("modes.trial_balance.router.get_agent") as mock_agent, \
+             patch("modes.trial_balance.router.call_tool", side_effect=_redirect_load_tb_from_db):
+            mock_agent.return_value.llm_client = None
+            _run_layer1_precheck("sess-1", "PY_DOC", str(run_dir), run_full_analytics=False)
+
+        for artifact in (
+            "financial_ratios.json",
+            "audit_ratio_pack.json",
+            "relationship_analytics.json",
+            "risk_indicators.json",
+        ):
+            assert (Path(run_dir) / artifact).exists(), f"PY leg did not write {artifact}"
+
+
+class TestPYLegMateriality:
+    """Wave 2 Fix 4a: the PY leg of a COMPARISON run must build its own materiality.json,
+    not leave PY-side movements graded against a threshold from a year they don't belong
+    to. build_materiality's inputs (financial_snapshot_statistics.json, fsli_summary.
+    parquet, canonical_tb.parquet, snapshot_drilldown.parquet) are already produced by the
+    build_fsli_summary/build_financial_snapshot calls in the same run_full_analytics=False
+    branch, so this is purely an invocation gap, not a missing dependency."""
+
+    def test_py_leg_writes_materiality_json(self, phase2_run):
+        from modes.trial_balance.router import _run_layer1_precheck
+
+        tb, run_dir = phase2_run
+        real_call = call_tool
+
+        def _redirect_load_tb_from_db(name, **kwargs):
+            if name == "load_tb_from_db":
+                return {"execution_status": "SUCCESS", "artifacts": [tb]}
+            return real_call(name, **kwargs)
+
+        with patch("modes.trial_balance.router.get_agent") as mock_agent, \
+             patch("modes.trial_balance.router.call_tool", side_effect=_redirect_load_tb_from_db):
+            mock_agent.return_value.llm_client = None
+            _run_layer1_precheck("sess-1", "PY_DOC", str(run_dir), run_full_analytics=False)
+
+        assert (Path(run_dir) / "materiality.json").exists(), (
+            "PY leg did not build materiality.json -- PY-side movements have no PY threshold"
+        )

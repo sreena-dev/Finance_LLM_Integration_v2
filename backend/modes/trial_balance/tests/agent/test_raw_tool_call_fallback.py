@@ -11,6 +11,15 @@ model's chat template); this fallback is a client-side safety net.
 
 import json
 
+import pytest
+
+pytest.importorskip(
+    "yukta",
+    reason="yukta is installed from a local path and published to no index, so it is "
+           "absent on a clean checkout -- see requirements.txt. These tests import "
+           "backend.agent, which needs it.",
+)
+
 from modes.trial_balance.pipeline.agent import _parse_raw_tool_call_text
 
 

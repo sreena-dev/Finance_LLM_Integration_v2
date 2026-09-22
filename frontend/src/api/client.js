@@ -224,8 +224,26 @@ export async function tbPreview(mode, token) {
   return request(`${mode.base_path}/preview?token=${encodeURIComponent(token)}`);
 }
 
-export function tbUploadMapped(mode, mapping) {
-  return post(`${mode.base_path}/upload-mapped`, mapping);
+export function tbUploadMapped(mode, { token, groupingToken, acceptDataQualityRisk, companyDetails, persistToLive }) {
+  const cd = companyDetails || {};
+  return post(`${mode.base_path}/upload-mapped`, {
+    token,
+    grouping_token: groupingToken || null,
+    accept_data_quality_risk: acceptDataQualityRisk || false,
+    company_name: cd.companyName || null,
+    cin: cd.cin || null,
+    financial_year: cd.financialYear || null,
+    standard: cd.standard || null,
+    // Omitted -> backend default True (the ordinary upload-and-audit path).
+    // False is the query-analysis staging path (TbRunPicker's 'query' mode):
+    // same classify/quality-gate chain, canonical_tb.parquet still written,
+    // nothing reaches LIVE.
+    ...(persistToLive === false ? { persist_to_live: false } : {}),
+  });
+}
+
+export async function tbSuggestPriorityCompanies(mode) {
+  return request(`${mode.base_path}/companies/priority`);
 }
 
 /**
@@ -248,8 +266,17 @@ export async function tbDeleteDocument(mode, docId) {
   });
 }
 
-export function tbAsk(mode, { docId, question, sessionId }) {
-  return post(`${mode.base_path}/ask`, { doc_id: docId, question, session_id: sessionId });
+/**
+ * `conversationId` is optional, same contract as `runQuery` above: the prior
+ * turns live server-side against the signed-in user in TB's own Postgres, so a
+ * thread resumes after a refresh. Omit it and the server starts a new one.
+ */
+export function tbAsk(mode, { docId, question, conversationId }) {
+  return post(`${mode.base_path}/ask`, {
+    doc_id: docId,
+    question,
+    conversation_id: conversationId || null,
+  });
 }
 
 /**
@@ -258,17 +285,24 @@ export function tbAsk(mode, { docId, question, sessionId }) {
  * different response shape: it can carry `computed` (a deterministic arithmetic
  * result) and `guardrail` (the pipeline declined to source the answer).
  */
-export function tbAskGeneral(mode, { question, sessionId, uploadDocIds }) {
+export function tbAskGeneral(mode, { question, conversationId, uploadDocIds }) {
   return post(`${mode.base_path}/ask-general`, {
     question,
-    session_id: sessionId,
+    conversation_id: conversationId || null,
     upload_doc_ids: uploadDocIds?.length ? uploadDocIds : null,
   });
 }
 
+/**
+ * `docLabel` is display-only (the doc's filename, already known client-side) --
+ * stored alongside the conversation this run persists so a reopened sidebar
+ * entry has a readable title even though the backend has no cheap way to
+ * resolve doc_id -> filename itself. No conversationId param: every audit run
+ * always starts its own fresh conversation (see router.py's own comment).
+ */
 export function tbAudit(
   mode,
-  { docId, docIdPrior, entity, engagementContext, framework, groupingToken, uploadDocIds }
+  { docId, docIdPrior, entity, engagementContext, framework, groupingToken, uploadDocIds, docLabel }
 ) {
   return post(`${mode.base_path}/audit`, {
     doc_id: docId,
@@ -278,6 +312,7 @@ export function tbAudit(
     framework: framework || null,
     grouping_token: groupingToken || null,
     upload_doc_ids: uploadDocIds?.length ? uploadDocIds : null,
+    doc_label: docLabel || null,
   });
 }
 
@@ -297,15 +332,6 @@ export function tbUploadGrouping(mode, { file, docId, docId2 }) {
     doc_id: docId,
     doc_id_2: docId2,
   });
-}
-
-// Known gap (not fixed in the TB-v2 migration): the backend has no
-// POST /audit/upload-grouping-mapped route to receive this. The only way
-// /audit/upload-grouping returns needs_mapping is a grouping file
-// preview_excel_data cannot parse at all, which has no recovery path yet —
-// GroupingMapper.jsx will open, but submitting it 404s.
-export function tbUploadGroupingMapped(mode, mapping) {
-  return post(`${mode.base_path}/audit/upload-grouping-mapped`, mapping);
 }
 
 export async function tbAuditWorkbook(mode, { docId, docIdPrior, uploadDocIds, format }) {

@@ -41,9 +41,14 @@ const emptyTBState = () => ({
   priorId: null,
   messages: [],
   pdfIds: [],
-  // 'db' = free-form questions answered by intent from already-ingested data,
-  // no file needed. 'upload' = questions scoped to a file uploaded this session.
-  chatQueryMode: 'db',
+  // Analysis/Chat toggle -- a physical on/off switch in the toprow. 'analysis'
+  // (OFF, default): Single TB Analysis / Two TB Comparative Analysis are the
+  // active entry points, composer hidden. 'chat' (ON): those two grey out
+  // instead, and the composer (Upload button + text input + Ask) appears --
+  // for the not-yet-built chat query feature. The Upload button's picker
+  // stages a TB for that future feature (session-only, no LIVE write); text
+  // input/Ask stay disabled until the query-answering backend exists.
+  viewMode: 'analysis',
 });
 
 function ModeHeader({ mode, health }) {
@@ -89,6 +94,15 @@ export default function App() {
   const [conversations, setConversations] = useState([]);
   const [convoId, setConvoId] = useState(null);
   const [convoState, setConvoState] = useState({ loading: false, error: null });
+
+  // Trial Balance chat history. Kept separate from the Financial Statements
+  // trio above rather than generalised into one: `threads[id]` is a bare
+  // message array, but `tbStates[id]` also carries the loaded documents/run
+  // (`currentId`, `viewMode`, ...), so rehydrating a conversation here must
+  // merge into that object's `messages` field, never replace the whole thing.
+  const [tbConversations, setTBConversations] = useState([]);
+  const [tbConvoId, setTBConvoId] = useState(null);
+  const [tbConvoState, setTBConvoState] = useState({ loading: false, error: null });
 
   // Which uploaded document (if any) the right-hand pane is showing.
   // Conversation-scoped, not mode-scoped: a document belongs to one
@@ -297,6 +311,93 @@ export default function App() {
     [refreshConversations]
   );
 
+  // ── Trial Balance conversations ─────────────────────────────────────────
+  const tbMode = useMemo(() => modes.find((m) => m.id === 'trial-balance') || null, [modes]);
+
+  const refreshTBConversations = useCallback(async () => {
+    if (!tbMode) return;
+    setTBConvoState((s) => ({ ...s, loading: true, error: null }));
+    try {
+      setTBConversations(await listConversations(tbMode));
+      setTBConvoState({ loading: false, error: null });
+    } catch (err) {
+      setTBConvoState({ loading: false, error: err.status === 401 ? null : err.message });
+    }
+  }, [tbMode]);
+
+  useEffect(() => {
+    if (activeId === 'trial-balance' && tbMode) refreshTBConversations();
+  }, [activeId, tbMode, refreshTBConversations]);
+
+  const newTBConversation = useCallback(() => {
+    setTBConvoId(null);
+    setTBStates((prev) => ({
+      ...prev,
+      ['trial-balance']: { ...(prev['trial-balance'] || emptyTBState()), messages: [] },
+    }));
+  }, []);
+
+  const openTBConversation = useCallback(
+    async (id) => {
+      if (!tbMode || id === tbConvoId) return;
+      setTBConvoState((s) => ({ ...s, error: null }));
+      try {
+        const { messages } = await fetchConversation(tbMode, id);
+        // An audit turn's payload carries a `result` key (see router.py's /audit
+        // handler); a plain chat answer has no payload, or one without it. Spreading
+        // m.payload reproduces exactly the { result, doc, priorDoc, pdfIds } shape
+        // AuditCard already renders from a live run, so it needs no changes.
+        //
+        // A plain chat turn's `content` is only ever the bare answer text -- /ask
+        // and /ask-general never persist computed/guardrail/sources (only /audit
+        // does, via payload) -- so it's wrapped back into the { result, scope }
+        // shape runChatQuestion's own live push already uses, with tb_doc_id
+        // (present per-message) standing in for "was this doc-scoped or general".
+        const rehydrated = (messages || []).map((m, i) => {
+          if (m.role === 'user') return { id: `u-${id}-${i}`, kind: 'user', text: m.content };
+          if (m.payload && m.payload.result) return { id: `a-${id}-${i}`, kind: 'audit', ...m.payload };
+          return {
+            id: `a-${id}-${i}`,
+            kind: 'answer',
+            result: { answer: m.content },
+            scope: m.tb_doc_id ? 'trial-balance' : 'corpora',
+          };
+        });
+        setTBStates((prev) => ({
+          ...prev,
+          ['trial-balance']: { ...(prev['trial-balance'] || emptyTBState()), messages: rehydrated },
+        }));
+        setTBConvoId(id);
+      } catch (err) {
+        setTBConvoState((s) => ({ ...s, error: err.message }));
+      }
+    },
+    [tbMode, tbConvoId]
+  );
+
+  const removeTBConversation = useCallback(
+    async (id) => {
+      if (!tbMode) return;
+      try {
+        await deleteConversation(tbMode, id);
+        setTBConversations((prev) => prev.filter((c) => c.conversation_id !== id));
+        if (id === tbConvoId) newTBConversation();
+      } catch (err) {
+        setTBConvoState((s) => ({ ...s, error: err.message }));
+      }
+    },
+    [tbMode, tbConvoId, newTBConversation]
+  );
+
+  const onTBConversationChange = useCallback(
+    (id) => {
+      if (!id) return;
+      setTBConvoId((cur) => (cur === id ? cur : id));
+      refreshTBConversations();
+    },
+    [refreshTBConversations]
+  );
+
   if (booting) {
     return (
       <div className="boot">
@@ -347,9 +448,9 @@ export default function App() {
       <Sidebar modes={sidebarModes} activeId={activeId} onSelect={setActiveId} health={health}
                rail={activeId === 'financial-statement' && Boolean(fsViewDoc)}
                retentionDays={activeId === 'financial-statement' ? retentionDays : null}>
-        {/* Only Financial Statements persists a thread, so only it gets a
-            history list. Rendering this for every mode would advertise a
-            feature the others do not have. */}
+        {/* Financial Statements and Trial Balance both persist a conversation
+            thread server-side; the other modes do not, so this list only
+            mounts for those two, each against its own history. */}
         {activeId === 'financial-statement' && (
           <ConversationList
             conversations={conversations}
@@ -359,6 +460,17 @@ export default function App() {
             onSelect={openConversation}
             onNew={newConversation}
             onDelete={removeConversation}
+          />
+        )}
+        {activeId === 'trial-balance' && (
+          <ConversationList
+            conversations={tbConversations}
+            activeId={tbConvoId}
+            loading={tbConvoState.loading}
+            error={tbConvoState.error}
+            onSelect={openTBConversation}
+            onNew={newTBConversation}
+            onDelete={removeTBConversation}
           />
         )}
       </Sidebar>
@@ -433,6 +545,8 @@ export default function App() {
                     health={health[activeMode.id]}
                     state={tbStates[activeMode.id] || emptyTBState()}
                     setState={setTBFor(activeMode.id)}
+                    conversationId={tbConvoId}
+                    onConversationChange={onTBConversationChange}
                   />
                 ) : activeMode.ui === 'fdr' ? (
                   // Self-contained mocked view; the gateway's ModeHeader already
