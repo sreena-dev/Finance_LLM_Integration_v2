@@ -30,7 +30,7 @@ from app.auth.deps import CurrentUser, require_user
 from modes.trial_balance.pipeline.agent import ToolNotAvailableError, call_tool, get_agent, llm_reachable
 from modes.trial_balance.pipeline.agent_memory import invoke_scoped
 from modes.trial_balance.pipeline.config import settings
-from modes.trial_balance.pipeline.db import add_findings, create_session, fetch_live_document, find_latest_session, learn_priority_company, update_session_status
+from modes.trial_balance.pipeline.db import add_findings, append_turns, create_session, delete_conversation, fetch_live_document, fetch_main_document, find_latest_session, get_messages, history_for_agent, learn_priority_company, list_conversations, new_conversation_id, update_session_status
 from modes.trial_balance.pipeline.tools import PipelineDBError, PipelineFileError, resolve_output_dir, verify_packs
 from modes.trial_balance.pipeline.valkey_client import preview_store_get, preview_store_set, preview_store_update
 
@@ -77,14 +77,30 @@ def _tool_error_response(exc: Exception):
 
 def _verify_document_access(tb_doc_id: Optional[str], user: CurrentUser) -> None:
     """MAIN documents are shared across every authenticated user (see list_documents'
-    docstring); LIVE documents are private to whoever created them. Raises 404
-    (never 403 -- don't confirm another user's data exists) if tb_doc_id resolves
-    to a LIVE document someone else owns, OR to a pre-isolation LIVE row with no
+    docstring); LIVE documents are private to whoever created them. A tb_doc_id can
+    exist in BOTH tables at once -- every document promoted to MAIN before this
+    isolation feature existed still has its original LIVE row too, now an orphan
+    with no recorded owner (confirmed live: 7 of 40 MAIN documents in this
+    environment). MAIN is checked FIRST and always wins when present: a document
+    visible in the firm's shared, already-promoted corpus must stay usable
+    regardless of what its old LIVE staging row looks like -- checking LIVE first
+    would 404 every one of those as "owned by nobody," blocking a real document
+    every authenticated user can already see via GET /documents.
+
+    Only falls through to the LIVE-ownership check for a tb_doc_id that is NOT in
+    MAIN at all -- i.e. someone's own in-progress, not-yet-promoted upload. Raises
+    404 (never 403) if that LIVE document belongs to someone else, or has no
     recorded owner (an orphan, invisible to everyone rather than reassigned to
-    whoever asks first). A tb_doc_id that exists only in MAIN, or in neither
-    table, passes through unchanged -- MAIN's shared visibility, or a natural
-    "not found" from whatever tool call runs next."""
+    whoever asks first). A tb_doc_id in neither table passes through unchanged --
+    a natural "not found" from whatever tool call runs next.
+
+    NOT used by delete_document: deletion only ever touches LIVE (never MAIN,
+    see its own docstring), so it needs its own strict, LIVE-only ownership
+    check -- the MAIN shortcut here must never let a MAIN document's existence
+    authorize deleting someone else's (or an orphaned) LIVE row."""
     if not tb_doc_id:
+        return
+    if fetch_main_document(tb_doc_id):
         return
     live_doc = fetch_live_document(tb_doc_id)
     if live_doc and live_doc.get("user_id") != user.user_id:
@@ -131,7 +147,21 @@ class UploadMappedRequest(BaseModel):
 class AskRequest(BaseModel):
     doc_id: Optional[str] = None
     question: str
-    session_id: Optional[str] = None
+    # NOTE: session_id used to be declared here and doubled as the Valkey
+    # conversation-memory key -- removed rather than left as a dead field
+    # (same "declared but never read" cleanup this file already did once for
+    # upload_doc_ids) now that conversation_id below is the single id driving
+    # both the Valkey cache key and the durable Postgres record. Pydantic's
+    # default extra="ignore" means an old client still sending session_id
+    # keeps working, it's just silently unused.
+    #
+    # Which durable, 90-day-retained conversation this turn belongs to (see
+    # pipeline/db.py's pipeline_chat_messages). Optional and defaulted, same
+    # contract as the platform's own QueryRequest.conversation_id: an existing
+    # caller sending only `question` keeps working, and the server starts a
+    # new conversation when it's absent. Prior turns are read from the
+    # database against the AUTHENTICATED user, never trusted from the client.
+    conversation_id: Optional[str] = None
 
 
 # NOTE: `upload_doc_ids` was declared on this model, AuditRequest and
@@ -142,7 +172,7 @@ class AskRequest(BaseModel):
 # unaffected; it is simply no longer advertised in the OpenAPI schema.
 class AskGeneralRequest(BaseModel):
     question: str
-    session_id: Optional[str] = None
+    conversation_id: Optional[str] = None
 
 
 class AuditRequest(BaseModel):
@@ -152,6 +182,14 @@ class AuditRequest(BaseModel):
     engagement_context: Optional[str] = None
     framework: Optional[str] = None
     grouping_token: Optional[str] = None
+    # Same contract as AskRequest.conversation_id above -- the frontend never sends this
+    # today (each audit run always starts its own fresh conversation), kept as a real
+    # optional field for the same forward-compatible reason /ask has it.
+    conversation_id: Optional[str] = None
+    # Display-only, never read for identity/authorization/routing -- this handler has no
+    # cheap way to resolve doc_id to a filename itself; the frontend already has it in
+    # hand (state.documents), same trust level as UploadMappedRequest's company_name/cin.
+    doc_label: Optional[str] = None
 
 
 class ValidateRequest(BaseModel):
@@ -393,9 +431,15 @@ def get_document(doc_id: str, user: CurrentUser = Depends(require_user)):
 def delete_document(doc_id: str, user: CurrentUser = Depends(require_user)):
     """delete_db_document only ever touches LIVE tables (never MAIN, never deletes
     it -- see pipeline/db.py's module docstring), so this is exactly the kind of
-    TB-own-data write full isolation applies to."""
-    _verify_document_access(doc_id, user)
-    if not fetch_live_document(doc_id):
+    TB-own-data write full isolation applies to. Deliberately does NOT call
+    _verify_document_access -- that helper lets a MAIN document's existence pass
+    a caller through regardless of LIVE ownership, which is correct for read/
+    analyze operations but would be a real bug here: it must never let someone
+    delete another user's (or an orphaned) LIVE row just because a MAIN row with
+    the same tb_doc_id happens to exist. This check is LIVE-only, strict, no
+    MAIN shortcut."""
+    owner = fetch_live_document(doc_id)
+    if not owner or owner.get("user_id") != user.user_id:
         raise HTTPException(status_code=404, detail="Document not found.")
     try:
         result = call_tool("delete_db_document", tb_doc_id=doc_id)
@@ -422,10 +466,43 @@ def _user_scoped_memory_key(user_id: str, raw_session_id: str) -> str:
     return f"{user_id}:{raw_session_id}"
 
 
+def _resolve_conversation(user: CurrentUser, conversation_id: Optional[str]) -> tuple:
+    """(conversation_id, durable_history). If the caller supplied a
+    conversation_id, it must be theirs -- history_for_agent() returns []
+    both for "doesn't exist" and "belongs to someone else" (pipeline_chat_
+    messages' user_id-scoped WHERE clause, never checked after the fact), so
+    an empty result 404s without confirming which. A fresh conversation_id is
+    minted when none was supplied (turn 1)."""
+    if conversation_id:
+        history = history_for_agent(user.user_id, conversation_id)
+        if not history:
+            raise HTTPException(status_code=404, detail="No such conversation.")
+        return conversation_id, history
+    return new_conversation_id(), []
+
+
+def _persist_turn(
+    user: CurrentUser, conversation_id: str, tb_doc_id: Optional[str], question: str, answer: str,
+    payload: Optional[dict] = None,
+) -> None:
+    """Best-effort, after a successful answer only -- a failed call leaves no
+    orphan question (matches append_turns' own contract). Logged, never
+    raised: the answer already succeeded, only the durable record of it
+    would be lost. `payload` is the full structured response (currently only
+    an /audit run's envelope) stored alongside the assistant turn so a
+    reopened conversation can render it richly -- /ask and /ask-general don't
+    pass one, same as before."""
+    try:
+        append_turns(user.user_id, conversation_id, tb_doc_id, question, answer, payload=payload)
+    except Exception as e:
+        logger.warning("[chat history] failed to persist turn for conversation %s: %s", conversation_id, e)
+
+
 @router.post("/ask")
 def ask(request: AskRequest, user: CurrentUser = Depends(require_user)):
     """A question about a specific uploaded/analyzed Trial Balance (doc_id)."""
     _verify_document_access(request.doc_id, user)
+    conversation_id, durable_history = _resolve_conversation(user, request.conversation_id)
     # Same DB-write guard as /audit: a Postgres hiccup here must degrade gracefully
     # rather than escape as an unhandled 500.
     try:
@@ -439,20 +516,29 @@ def ask(request: AskRequest, user: CurrentUser = Depends(require_user)):
     if not llm_reachable():
         logger.warning("LLM endpoint unreachable (%s) -- /ask answered as unavailable.", settings.LLM_BASE_URL)
         update_session_status(session_id, "FAILED", error_message="LLM endpoint unreachable")
-        return {"answer": _LLM_UNAVAILABLE_ANSWER, "session_id": session_id, "available": False}
+        return {"answer": _LLM_UNAVAILABLE_ANSWER, "session_id": session_id, "conversation_id": conversation_id, "available": False}
 
     try:
         prompt = f"Trial Balance doc_id: {request.doc_id}\nQuestion: {request.question}"
-        # request.session_id (client-echoed, spans multiple /ask turns) is the
-        # conversation-memory key when the caller supplies one; the freshly
-        # created accounting session_id otherwise (single-turn, no continuity
-        # across calls). Either way this is now isolated per key -- never the
-        # agent's old shared, cross-tenant default memory (see agent_memory.py) --
-        # and now also never guessable/reusable across two different users.
-        memory_key = _user_scoped_memory_key(user.user_id, request.session_id or session_id)
-        response = invoke_scoped(get_agent(), prompt, session_id=memory_key)
+        # conversation_id (stable across every turn once minted -- see
+        # _resolve_conversation) is now the ONE identifier a client tracks for
+        # continuity, driving both the Valkey fast-path cache key AND the
+        # durable Postgres store below. request.session_id (legacy, pre-dates
+        # conversation_id) is no longer used for memory keying -- keeping it
+        # as the key would mean a client had to track two separate ids to get
+        # full continuity, one for the 2-hour Valkey cache and a different one
+        # for the 90-day durable record. This is still isolated per key --
+        # never the agent's old shared, cross-tenant default memory (see
+        # agent_memory.py) -- and never guessable/reusable across two
+        # different users. durable_history seeds the agent's REAL working
+        # memory (not just a display list) whenever Valkey's 2-hour cache for
+        # this conversation has already expired but pipeline_chat_messages
+        # still has it.
+        memory_key = _user_scoped_memory_key(user.user_id, conversation_id)
+        response = invoke_scoped(get_agent(), prompt, session_id=memory_key, durable_history=durable_history)
         update_session_status(session_id, "SUCCESS")
-        return {"answer": response, "session_id": session_id, "available": True}
+        _persist_turn(user, conversation_id, request.doc_id, request.question, response)
+        return {"answer": response, "session_id": session_id, "conversation_id": conversation_id, "available": True}
     except Exception as e:
         update_session_status(session_id, "FAILED", error_message=str(e))
         return _tool_error_response(e)
@@ -461,6 +547,7 @@ def ask(request: AskRequest, user: CurrentUser = Depends(require_user)):
 @router.post("/ask-general")
 def ask_general(request: AskGeneralRequest, user: CurrentUser = Depends(require_user)):
     """A question with no Trial Balance attached — answered from reference corpora."""
+    conversation_id, durable_history = _resolve_conversation(user, request.conversation_id)
     try:
         session_id = create_session(mode="CHAT_QUERY", source="ask-general", user_id=user.user_id)
     except Exception as e:
@@ -470,21 +557,55 @@ def ask_general(request: AskGeneralRequest, user: CurrentUser = Depends(require_
         logger.warning("LLM endpoint unreachable (%s) -- /ask-general answered as unavailable.", settings.LLM_BASE_URL)
         update_session_status(session_id, "FAILED", error_message="LLM endpoint unreachable")
         return {
-            "answer": _LLM_UNAVAILABLE_ANSWER, "session_id": session_id,
+            "answer": _LLM_UNAVAILABLE_ANSWER, "session_id": session_id, "conversation_id": conversation_id,
             "computed": None, "guardrail": None, "available": False,
         }
 
     try:
-        memory_key = _user_scoped_memory_key(user.user_id, request.session_id or session_id)
-        response = invoke_scoped(get_agent(), request.question, session_id=memory_key)
+        # See /ask's own comment: conversation_id (not request.session_id) is
+        # what drives both the Valkey fast-path key and durable_history's
+        # Postgres fallback now.
+        memory_key = _user_scoped_memory_key(user.user_id, conversation_id)
+        response = invoke_scoped(get_agent(), request.question, session_id=memory_key, durable_history=durable_history)
         update_session_status(session_id, "SUCCESS")
+        _persist_turn(user, conversation_id, None, request.question, response)
         return {
-            "answer": response, "session_id": session_id,
+            "answer": response, "session_id": session_id, "conversation_id": conversation_id,
             "computed": None, "guardrail": None, "available": True,
         }
     except Exception as e:
         update_session_status(session_id, "FAILED", error_message=str(e))
         return _tool_error_response(e)
+
+
+# ── Chat history (durable, 90-day-retained conversations) ───────────────────
+#
+# Mirrors financial_statement/router.py's three conversation routes exactly:
+# user_id-scoped inside the SQL (see pipeline/db.py), never checked afterward,
+# a miss is always 404 (never 403 -- don't confirm another user's conversation
+# exists). Unlike FS's platform-DB-backed artha_fs_messages, these read/write
+# TB's own Postgres (pipeline_chat_messages) so retention can reuse
+# soft_delete_expired_sessions' already-proven 90-day pattern.
+
+@router.get("/conversations")
+def list_conversations_route(user: CurrentUser = Depends(require_user)):
+    return {"conversations": list_conversations(user.user_id)}
+
+
+@router.get("/conversations/{conversation_id}")
+def get_conversation(conversation_id: str, user: CurrentUser = Depends(require_user)):
+    messages = get_messages(user.user_id, conversation_id)
+    if not messages:
+        raise HTTPException(status_code=404, detail="No such conversation.")
+    return {"conversation_id": conversation_id, "messages": messages}
+
+
+@router.delete("/conversations/{conversation_id}", status_code=204)
+def delete_conversation_route(conversation_id: str, user: CurrentUser = Depends(require_user)):
+    removed = delete_conversation(user.user_id, conversation_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="No such conversation.")
+    return None
 
 
 # ── Audit (single-TB or comparison) ─────────────────────────────────────────
@@ -1089,6 +1210,11 @@ def audit(request: AuditRequest, user: CurrentUser = Depends(require_user)):
     COMPARISON chain when both doc_id and doc_id_prior are given."""
     _verify_document_access(request.doc_id, user)
     _verify_document_access(request.doc_id_prior, user)
+    # See AuditRequest.conversation_id's own comment: the frontend never sends this today,
+    # so this always takes _resolve_conversation's "mint a new one" branch in practice --
+    # each audit run gets its own fresh conversation. durable_history is discarded; an
+    # audit run doesn't feed the agent's chat memory the way /ask does.
+    conversation_id, _ = _resolve_conversation(user, request.conversation_id)
     mode = "COMPARISON" if request.doc_id_prior else "SINGLE_TB"
     # create_session() is a live DB write and the Postgres host has been observed to go
     # briefly unreachable. Outside the try below it produced a bare unhandled 500, unlike
@@ -1163,12 +1289,34 @@ def audit(request: AuditRequest, user: CurrentUser = Depends(require_user)):
             )
         result = _finalize_audit_result(mode, Path(run_dir), entity_hint=request.entity)
         update_session_status(session_id, "SUCCESS")
-        return {
+        response_envelope = {
             "session_id": session_id,
             "mode": mode,
             "result": result,
             "layer1_validation": {"cy": cy_validation, "py": py_validation},
         }
+
+        # Records this run as a conversation so it appears in the sidebar the same way a
+        # chat turn does (see AuditCard.jsx: it renders from exactly {result, doc,
+        # priorDoc, pdfIds} -- this payload reproduces that same shape verbatim, so a
+        # reopened conversation renders identically to the live result). pdfIds is always
+        # [] -- upload_doc_ids isn't accepted by this endpoint (removed earlier), so no
+        # live audit run tracks it server-side today either.
+        label = "Two TB Comparative Analysis" if mode == "COMPARISON" else "Single TB Analysis"
+        doc_display = request.doc_label or request.doc_id
+        question = f"{label} — {doc_display}" + (f" vs {request.doc_id_prior}" if request.doc_id_prior else "")
+        _persist_turn(
+            user, conversation_id, request.doc_id, question,
+            answer=f"{label} completed for {doc_display}.",
+            payload={
+                "result": response_envelope,
+                "doc": {"doc_id": request.doc_id, "filename": doc_display},
+                "priorDoc": {"doc_id": request.doc_id_prior} if request.doc_id_prior else None,
+                "pdfIds": [],
+            },
+        )
+
+        return {**response_envelope, "conversation_id": conversation_id}
     except Exception as e:
         update_session_status(session_id, "FAILED", error_message=str(e))
         return _tool_error_response(e)

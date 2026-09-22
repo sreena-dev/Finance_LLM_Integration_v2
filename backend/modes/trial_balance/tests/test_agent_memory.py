@@ -63,6 +63,38 @@ def test_two_users_with_the_same_raw_session_id_never_share_memory():
     assert len(memory_b.chat.messages) == 0  # user B sees no trace of user A's turn
 
 
+def test_durable_history_rehydrates_when_valkey_has_nothing():
+    """The actual scenario this exists for: Valkey's 2-hour TTL already expired
+    on a conversation that pipeline_chat_messages still has a durable record
+    of (up to the full 90-day retention window) -- durable_history seeds the
+    agent's real working memory, not just a display list."""
+    durable_history = [
+        {"role": "user", "content": "What is the current ratio?"},
+        {"role": "assistant", "content": "It is 1.8."},
+    ]
+    memory = _session_memory("sess-expired", "system prompt text", durable_history=durable_history)
+    assert len(memory.chat.messages) == 2
+    # pipeline_chat_messages stores "assistant" (matches its Postgres CHECK
+    # constraint); yukta's own Chat role name is "agent" -- confirm the mapping.
+    assert [m.role for m in memory.chat.messages] == ["user", "agent"]
+    assert memory.chat.messages[0].content == "What is the current ratio?"
+    assert memory.chat.messages[1].content == "It is 1.8."
+
+
+def test_durable_history_is_ignored_when_valkey_already_has_a_live_session():
+    """A still-cached Valkey session must never be overridden by a possibly-
+    stale Postgres snapshot -- Valkey wins whenever it has something."""
+    memory = _session_memory("sess-live", "system prompt text")
+    memory.chat.add_user_message("Live question")
+    memory.chat.add_agent_message("Live answer")
+    memory.chat_manager.save_chat("sess-live")
+
+    stale_durable_history = [{"role": "user", "content": "Stale question"}, {"role": "assistant", "content": "Stale answer"}]
+    rehydrated = _session_memory("sess-live", "system prompt text", durable_history=stale_durable_history)
+    assert len(rehydrated.chat.messages) == 2
+    assert rehydrated.chat.messages[0].content == "Live question"
+
+
 def test_corrupt_or_missing_prior_state_falls_back_to_fresh_chat(monkeypatch):
     """A load failure (bad JSON, unexpected shape) must degrade to a fresh
     empty chat for this call, never raise and never block the request."""

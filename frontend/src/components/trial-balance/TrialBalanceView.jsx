@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
-  tbAudit, tbUpload, tbUploadGrouping, tbUploadMapped,
+  tbAsk, tbAskGeneral, tbAudit, tbUpload, tbUploadGrouping, tbUploadMapped,
 } from '../../api/client';
 import Icon from '../common/Icon';
 import Notice from '../common/Notice';
@@ -44,14 +44,18 @@ const nextId = () => `m${++_seq}`;
  * between the two top-level modes: 'analysis' (OFF, the default) shows only
  * Single TB Analysis / Two TB Comparative Analysis, composer hidden;
  * 'chat' (ON) reveals the composer (Upload button + text input + Ask) and
- * greys out the two analysis buttons instead. The composer's Upload button
- * opens a picker mirroring Single TB Analysis's own (Upload new + Existing
- * Database tabs), but its "Proceed" stages a TB for the not-yet-built chat
- * query feature (session-only, no LIVE write — see stageForQuery) rather
- * than running a full audit. Text input/Ask stay disabled either way until
- * the actual query-answering backend exists.
+ * greys out the two analysis buttons instead. Asking a question there calls
+ * `/ask` (scoped to whatever document is currently active, `currentId`) or
+ * `/ask-general` (the reference corpora, when nothing is active) — see
+ * runChatQuestion — and persists as a conversation the same way Financial
+ * Statement's chat does, via `conversationId`/`onConversationChange`. The
+ * composer's Upload button is a separate, still-unwired feature: it opens a
+ * picker mirroring Single TB Analysis's own, but its "Proceed" only stages a
+ * TB for a not-yet-built "chat about a document not yet in LIVE" feature
+ * (session-only, no LIVE write — see stageForQuery); it plays no part in
+ * answering a question about the document already loaded.
  */
-export default function TrialBalanceView({ mode, state, setState }) {
+export default function TrialBalanceView({ mode, state, setState, conversationId, onConversationChange }) {
   const { documents, currentId, priorId, messages, pdfIds, viewMode } = state;
 
   // Staged (picked, not yet uploaded) files per slot -- nothing here has
@@ -78,9 +82,7 @@ export default function TrialBalanceView({ mode, state, setState }) {
   // "Proceed" for this needs no backend call at all, unlike a fresh upload.
   const [queryDbDoc, setQueryDbDoc] = useState(null);
   const [busy, setBusy] = useState(false);
-  // Composer's query text -- purely visual for now (Send stays disabled until
-  // the chat query feature exists); kept controlled so the field reads as
-  // genuinely usable rather than a static placeholder.
+  // Composer's query text, submitted by runChatQuestion.
   const [input, setInput] = useState('');
   const endRef = useRef(null);
 
@@ -481,12 +483,47 @@ export default function TrialBalanceView({ mode, state, setState }) {
         docId, docIdPrior: priorDocId,
         groupingToken: groupingResult?.token,
         uploadDocIds: pdfIds,
+        docLabel: doc?.filename,
       });
 
       drop(loadingId);
       push({ kind: 'audit', result, doc, priorDoc: prior, pdfIds: [...pdfIds] });
+      // Each analysis run starts its own conversation server-side (see /audit's
+      // own comment) -- adopt it as the active one so it's selected in the
+      // sidebar, same as a chat turn's first message does.
+      if (result.conversation_id) onConversationChange(result.conversation_id);
     } catch (err) {
       replace(loadingId, { kind: 'error', text: err.message || `${label} failed.` });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Chat Mode's Ask button. Scoped to whatever document is currently active
+   * (`currentId`) via `/ask`, or `/ask-general` when nothing is loaded — this
+   * answers about the document already in this stream, not the composer's
+   * separate stage-a-fresh-file flow (see the class doc-comment). Mirrors
+   * runAudit's push/loading/replace/busy shape exactly.
+   */
+  async function runChatQuestion() {
+    const question = input.trim();
+    if (!question || busy) return;
+    push({ kind: 'user', text: question });
+    setInput('');
+    const loadingId = push({ kind: 'loading', stages: ['Thinking'] });
+    setBusy(true);
+    try {
+      const result = currentId
+        ? await tbAsk(mode, { docId: currentId, question, conversationId })
+        : await tbAskGeneral(mode, { question, conversationId });
+      drop(loadingId);
+      push({ kind: 'answer', text: result.answer });
+      if (result.conversation_id && result.conversation_id !== conversationId) {
+        onConversationChange(result.conversation_id);
+      }
+    } catch (err) {
+      replace(loadingId, { kind: 'error', text: err.message || 'Could not get an answer.' });
     } finally {
       setBusy(false);
     }
@@ -547,6 +584,9 @@ export default function TrialBalanceView({ mode, state, setState }) {
             }
             if (m.kind === 'note') {
               return <p key={m.id} className="tb__note">{m.text}</p>;
+            }
+            if (m.kind === 'answer') {
+              return <div key={m.id} className="tb__answer">{m.text}</div>;
             }
             if (m.kind === 'error') {
               return (
@@ -612,9 +652,12 @@ export default function TrialBalanceView({ mode, state, setState }) {
       </div>
 
       {/*
-       * Composer -- only in Chat mode. Send stays disabled until the chat
-       * query feature itself exists (see stageForQuery/TbRunPicker for the
-       * part of this that IS wired up: the Upload button and its picker).
+       * Composer -- only in Chat mode. Asks about `currentId` (the document
+       * currently active in this stream) via runChatQuestion, or the
+       * reference corpora when nothing is active. The Upload button is a
+       * separate, still-unwired feature (see the class doc-comment) that
+       * stages a fresh document for a not-yet-built query-only flow -- it
+       * does not feed the question below.
        */}
       {viewMode === 'chat' && (
         <div className="tb__composer">
@@ -631,10 +674,22 @@ export default function TrialBalanceView({ mode, state, setState }) {
             className="tb__input"
             rows={1}
             value={input}
-            placeholder="Ask a question — coming soon…"
+            placeholder={currentDoc ? `Ask about ${currentDoc.filename}…` : 'Ask a question…'}
             onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                runChatQuestion();
+              }
+            }}
           />
-          <button type="button" className="btn btn--primary tb__ask" disabled title="Chat query analysis is coming in a future update">
+          <button
+            type="button"
+            className="btn btn--primary tb__ask"
+            disabled={busy || !input.trim()}
+            title="Ask"
+            onClick={runChatQuestion}
+          >
             <Icon name="sparkle" size={16} />
             Ask
           </button>

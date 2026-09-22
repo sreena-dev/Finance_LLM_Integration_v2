@@ -261,8 +261,17 @@ export async function tbDeleteDocument(mode, docId) {
   });
 }
 
-export function tbAsk(mode, { docId, question, sessionId }) {
-  return post(`${mode.base_path}/ask`, { doc_id: docId, question, session_id: sessionId });
+/**
+ * `conversationId` is optional, same contract as `runQuery` above: the prior
+ * turns live server-side against the signed-in user in TB's own Postgres, so a
+ * thread resumes after a refresh. Omit it and the server starts a new one.
+ */
+export function tbAsk(mode, { docId, question, conversationId }) {
+  return post(`${mode.base_path}/ask`, {
+    doc_id: docId,
+    question,
+    conversation_id: conversationId || null,
+  });
 }
 
 /**
@@ -271,17 +280,24 @@ export function tbAsk(mode, { docId, question, sessionId }) {
  * different response shape: it can carry `computed` (a deterministic arithmetic
  * result) and `guardrail` (the pipeline declined to source the answer).
  */
-export function tbAskGeneral(mode, { question, sessionId, uploadDocIds }) {
+export function tbAskGeneral(mode, { question, conversationId, uploadDocIds }) {
   return post(`${mode.base_path}/ask-general`, {
     question,
-    session_id: sessionId,
+    conversation_id: conversationId || null,
     upload_doc_ids: uploadDocIds?.length ? uploadDocIds : null,
   });
 }
 
+/**
+ * `docLabel` is display-only (the doc's filename, already known client-side) --
+ * stored alongside the conversation this run persists so a reopened sidebar
+ * entry has a readable title even though the backend has no cheap way to
+ * resolve doc_id -> filename itself. No conversationId param: every audit run
+ * always starts its own fresh conversation (see router.py's own comment).
+ */
 export function tbAudit(
   mode,
-  { docId, docIdPrior, entity, engagementContext, framework, groupingToken, uploadDocIds }
+  { docId, docIdPrior, entity, engagementContext, framework, groupingToken, uploadDocIds, docLabel }
 ) {
   return post(`${mode.base_path}/audit`, {
     doc_id: docId,
@@ -291,6 +307,7 @@ export function tbAudit(
     framework: framework || null,
     grouping_token: groupingToken || null,
     upload_doc_ids: uploadDocIds?.length ? uploadDocIds : null,
+    doc_label: docLabel || null,
   });
 }
 

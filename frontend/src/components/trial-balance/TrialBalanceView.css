@@ -93,6 +93,18 @@
   background: var(--ink-50);
   border-radius: var(--radius-sm);
 }
+
+.tb__answer {
+  align-self: flex-start;
+  max-width: 76%;
+  padding: 10px 15px;
+  border-radius: 14px 14px 14px 3px;
+  background: var(--ink-50);
+  color: var(--ink-900);
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
 .tb__muted { margin: 0; font-size: 13px; color: var(--ink-500); }
 
 .tb__loading { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-500); }

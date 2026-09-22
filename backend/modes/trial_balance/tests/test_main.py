@@ -156,6 +156,8 @@ class TestRouterContract:
             f"{base}/documents/{{doc_id}}",
             f"{base}/ask",
             f"{base}/ask-general",
+            f"{base}/conversations",
+            f"{base}/conversations/{{conversation_id}}",
             f"{base}/audit",
             f"{base}/audit/upload-grouping",
             f"{base}/audit/workbook",

@@ -1,20 +1,25 @@
-"""Retention job: soft-delete pipeline_sessions older than the retention
-window (resolved decision: 90 days), then remove ONLY the local scratch
-directory for a session where every one of its files has a confirmed durable
-copy in MinIO (storage_backend='minio' with a non-null storage_uri in
-pipeline_artifact_files). A session with any file lacking a confirmed MinIO
-copy is left on local disk and logged, never deleted -- this deliberately
-means a session backfilled or produced while MINIO_ENABLED=false is
-retained forever rather than risk destroying the only copy of an audit
-artifact. Run as a scheduled job (cron / k8s CronJob) outside the request
-path, never automatically at application boot:
+"""Retention job: soft-delete pipeline_sessions AND pipeline_chat_messages
+older than the retention window (resolved decision: 90 days), then remove
+ONLY the local scratch directory for a session where every one of its files
+has a confirmed durable copy in MinIO (storage_backend='minio' with a
+non-null storage_uri in pipeline_artifact_files). A session with any file
+lacking a confirmed MinIO copy is left on local disk and logged, never
+deleted -- this deliberately means a session backfilled or produced while
+MINIO_ENABLED=false is retained forever rather than risk destroying the only
+copy of an audit artifact. Chat messages have no local-disk/durability-copy
+concept (they're already fully durable in Postgres the moment they're
+written), so soft-deleting them is the whole job -- no local-removal step.
+Run as a scheduled job (cron / k8s CronJob) outside the request path, never
+automatically at application boot:
 
     python -m modes.trial_balance.pipeline.scripts.cleanup_sessions [--older-than-days 90] [--dry-run]
 
 This is the last phase of the storage-architecture rollout, run deliberately
 after Phase 1 (MinIO durability) is proven, per the phase-ordering rationale:
 a destructive-adjacent job must never run before the durable copy it depends
-on is trustworthy.
+on is trustworthy. Chat-message retention piggybacks on this same job (same
+--older-than-days window, same schedule) rather than growing a second
+scheduled job to keep in sync with this one.
 """
 
 import argparse
@@ -22,7 +27,12 @@ import logging
 import shutil
 
 from modes.trial_balance.pipeline.config import settings
-from modes.trial_balance.pipeline.db import list_artifact_files_for_session, list_expired_sessions, soft_delete_expired_sessions
+from modes.trial_balance.pipeline.db import (
+    list_artifact_files_for_session,
+    list_expired_sessions,
+    soft_delete_expired_chat_messages,
+    soft_delete_expired_sessions,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -49,14 +59,25 @@ def _session_is_safe_to_delete_locally(session_id: str) -> tuple:
 
 
 def cleanup(older_than_days: int = 90, dry_run: bool = False) -> dict:
-    stats = {"soft_deleted": 0, "locally_removed": 0, "retained_no_durable_copy": 0, "no_local_dir": 0, "errors": 0}
+    stats = {
+        "soft_deleted": 0, "locally_removed": 0, "retained_no_durable_copy": 0, "no_local_dir": 0,
+        "errors": 0, "chat_conversations_soft_deleted": 0,
+    }
 
     if dry_run:
         logger.info("[dry-run] would soft-delete pipeline_sessions older than %d day(s)", older_than_days)
+        logger.info("[dry-run] would soft-delete pipeline_chat_messages older than %d day(s)", older_than_days)
     else:
         newly_expired = soft_delete_expired_sessions(older_than_days)
         stats["soft_deleted"] = len(newly_expired)
         logger.info("Soft-deleted %d session(s) older than %d day(s).", len(newly_expired), older_than_days)
+
+        newly_expired_conversations = soft_delete_expired_chat_messages(older_than_days)
+        stats["chat_conversations_soft_deleted"] = len(newly_expired_conversations)
+        logger.info(
+            "Soft-deleted messages from %d conversation(s) older than %d day(s).",
+            len(newly_expired_conversations), older_than_days,
+        )
 
     for session in list_expired_sessions():
         session_id = session["session_id"]
@@ -96,9 +117,9 @@ def main():
     stats = cleanup(older_than_days=args.older_than_days, dry_run=args.dry_run)
     logger.info(
         "Cleanup complete: %d soft-deleted, %d locally removed, %d retained (no durable copy), "
-        "%d had no local dir, %d error(s).",
+        "%d had no local dir, %d error(s), %d chat conversation(s) soft-deleted.",
         stats["soft_deleted"], stats["locally_removed"], stats["retained_no_durable_copy"],
-        stats["no_local_dir"], stats["errors"],
+        stats["no_local_dir"], stats["errors"], stats["chat_conversations_soft_deleted"],
     )
 
 

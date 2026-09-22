@@ -597,3 +597,170 @@ def get_findings(session_id: str, severity: Optional[str] = None, category: Opti
     with db_cursor() as cur:
         cur.execute(query, params)
         return [dict(r) for r in cur.fetchall()]
+
+
+# =============================================================================
+# CHAT HISTORY -- pipeline_chat_messages (0002_add_chat_history.sql)
+#
+# Mirrors financial_statement/conversations.py's shape: one append-only table,
+# "a conversation" is a GROUP BY over conversation_id, user_id is in the WHERE
+# clause of every read/delete and never checked afterward (router.py turns an
+# empty get_messages() into a 404, not a 403 -- don't confirm another user's
+# conversation exists). Lives in TB's own Postgres, not the platform DB, so its
+# retention reuses soft_delete_expired_sessions' exact pattern below instead of
+# the platform's artha_fs_messages, which has no retention at all today.
+# =============================================================================
+
+
+def new_conversation_id() -> str:
+    return str(uuid.uuid4())
+
+
+# A title is the first user turn, trimmed. Mirrors financial_statement/
+# conversations.py's own _title_from() exactly (same char cap, same
+# word-boundary trim, same fallback) -- ConversationList.jsx (shared by both
+# modes) has always rendered a `title` field; TB's list_conversations only
+# ever computed title_src (the raw text) and left turning it into a display
+# title as "for the caller to build" (see its own prior docstring), but no
+# caller ever did, so every TB conversation showed a blank title in the
+# sidebar until now.
+_TITLE_CHARS = 70
+
+
+def _title_from(text: str) -> str:
+    text = " ".join((text or "").split())
+    if len(text) <= _TITLE_CHARS:
+        return text or "New conversation"
+    return text[:_TITLE_CHARS].rsplit(" ", 1)[0] + "…"
+
+
+def list_conversations(user_id: str, limit: int = 50) -> list:
+    """One row per conversation_id, most recently active first. tb_doc_id is
+    whichever the first turn recorded (NULL for an /ask-general-only thread)."""
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT conversation_id,
+                   min(created_at) AS started_at,
+                   max(created_at) AS last_at,
+                   count(*) AS n_messages,
+                   (array_agg(tb_doc_id ORDER BY seq))[1] AS tb_doc_id,
+                   (array_agg(content ORDER BY seq) FILTER (WHERE role = 'user'))[1] AS title_src
+            FROM pipeline_chat_messages
+            WHERE user_id = %s AND deleted_at IS NULL
+            GROUP BY conversation_id
+            ORDER BY max(created_at) DESC
+            LIMIT %s
+            """,
+            (user_id, limit),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        for row in rows:
+            row["title"] = _title_from(row["title_src"])
+        return rows
+
+
+def get_messages(user_id: str, conversation_id: str) -> list:
+    """Empty for both "no such conversation" and "belongs to someone else" --
+    the caller (router.py) turns that into a 404 without confirming which.
+    Malformed conversation_id degrades to "not found" rather than a server
+    error."""
+    from modes.trial_balance.pipeline.tools import PipelineDBError
+
+    try:
+        with db_cursor() as cur:
+            cur.execute(
+                """
+                SELECT seq, role, content, payload, tb_doc_id, created_at
+                FROM pipeline_chat_messages
+                WHERE user_id = %s AND conversation_id = %s AND deleted_at IS NULL
+                ORDER BY seq
+                """,
+                (user_id, conversation_id),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except PipelineDBError:
+        return []
+
+
+def history_for_agent(user_id: str, conversation_id: str, turns: int = 8) -> list:
+    """Last `turns` messages as {"role", "content"} pairs, for seeding the
+    agent's rehydrated Memory (pipeline/agent_memory.py) when Valkey's 2-hour
+    window has already expired. Unlike Financial Statement's history_for_
+    rewriter, TB has no query-rewrite step -- this feeds straight into agent
+    memory, not a rewrite prompt."""
+    rows = get_messages(user_id, conversation_id)
+    return [{"role": r["role"], "content": r["content"]} for r in rows[-turns:]]
+
+
+def append_turns(user_id: str, conversation_id: str, tb_doc_id: Optional[str],
+                  question: str, answer_text: str, payload: Optional[dict] = None) -> None:
+    """Records one user+assistant turn pair in a single transaction. seq is
+    computed inside the same transaction as the insert; the unique index on
+    (conversation_id, seq) is what makes a concurrent-turn collision
+    impossible, not merely unlikely. Called only after the agent has already
+    answered -- a failed call leaves no orphan question, matching
+    conversations.py's own append_turns contract."""
+    with db_cursor(dict_rows=False) as cur:
+        cur.execute(
+            "SELECT coalesce(max(seq), 0) AS n FROM pipeline_chat_messages WHERE conversation_id = %s",
+            (conversation_id,),
+        )
+        next_seq = cur.fetchone()[0]
+        cur.execute(
+            """
+            INSERT INTO pipeline_chat_messages
+                (message_id, conversation_id, user_id, tb_doc_id, seq, role, content, payload)
+            VALUES (%s, %s, %s, %s, %s, 'user', %s, NULL),
+                   (%s, %s, %s, %s, %s, 'assistant', %s, %s)
+            """,
+            (
+                str(uuid.uuid4()), conversation_id, user_id, tb_doc_id, next_seq + 1, question,
+                str(uuid.uuid4()), conversation_id, user_id, tb_doc_id, next_seq + 2, answer_text,
+                json.dumps(payload) if payload is not None else None,
+            ),
+        )
+
+
+def delete_conversation(user_id: str, conversation_id: str) -> int:
+    """Hard delete -- a user removing their own conversation should genuinely
+    remove it, not just hide it from themselves. Soft-delete (deleted_at) is
+    reserved for the retention job below, a different actor with a different
+    intent. Malformed conversation_id degrades to "0 rows removed" rather than
+    a server error."""
+    from modes.trial_balance.pipeline.tools import PipelineDBError
+
+    try:
+        with db_cursor(dict_rows=False) as cur:
+            cur.execute(
+                "DELETE FROM pipeline_chat_messages WHERE user_id = %s AND conversation_id = %s",
+                (user_id, conversation_id),
+            )
+            return cur.rowcount or 0
+    except PipelineDBError:
+        return 0
+
+
+def soft_delete_expired_chat_messages(older_than_days: int = 90) -> list:
+    """Same shape as soft_delete_expired_sessions -- marks deleted_at for every
+    message older than the retention window that isn't already soft-deleted.
+    Called alongside soft_delete_expired_sessions by
+    backend/scripts/cleanup_sessions.py's --older-than-days flag, so TB's
+    entire retention story (sessions + chat) stays on one scheduled job.
+    Returns the distinct conversation_ids just flagged, for the caller to
+    log/report."""
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE pipeline_chat_messages
+            SET deleted_at = now()
+            WHERE deleted_at IS NULL
+              AND created_at < now() - (%s || ' days')::interval
+            RETURNING conversation_id
+            """,
+            (older_than_days,),
+        )
+        # DISTINCT isn't valid directly inside RETURNING -- one row per message
+        # updated, so dedupe conversation_ids in Python instead (order-preserving,
+        # a UPDATE...RETURNING has no natural order to lose here anyway).
+        return list(dict.fromkeys(r["conversation_id"] for r in cur.fetchall()))

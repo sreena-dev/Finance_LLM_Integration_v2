@@ -37,9 +37,18 @@ _CHAT_MEMORY_MAX_TOKENS = 15000  # matches backend/agent.py's _build_memory defa
 _valkey_chat_backend = ValkeyChatStorageBackend()
 
 
-def _session_memory(session_id: str, system_prompt: str) -> Memory:
+def _session_memory(session_id: str, system_prompt: str, durable_history: Optional[list] = None) -> Memory:
     """A Memory scoped to `session_id`: rehydrated from Valkey if a prior turn
-    exists for this session, otherwise a fresh empty chat under that same id."""
+    exists for this session, otherwise a fresh empty chat under that same id.
+
+    `durable_history` ([{"role": "user"|"assistant", "content": str}, ...],
+    oldest first -- see pipeline/db.py's history_for_agent()) is the fallback
+    when Valkey has NOTHING for this session: either genuinely new, or --
+    the case this exists for -- Valkey's 2-hour TTL already expired on a
+    conversation that Postgres still has a durable record of (up to the full
+    90-day retention window). Only used when Valkey's own load comes back
+    empty, so a live, still-cached session is never overridden by a
+    possibly-stale Postgres snapshot."""
     config = MemoryConfig(max_tokens=_CHAT_MEMORY_MAX_TOKENS, storage_backend=_valkey_chat_backend)
     memory = Memory(system_prompt=system_prompt, session_id=session_id, config=config)
 
@@ -56,11 +65,28 @@ def _session_memory(session_id: str, system_prompt: str) -> Memory:
     if prior is not None:
         memory.chat = prior
         memory.chat_manager.chats[session_id] = prior
+    elif durable_history:
+        try:
+            for turn in durable_history:
+                if turn.get("role") == "user":
+                    memory.chat.add_user_message(turn.get("content", ""))
+                else:
+                    # yukta's own Chat role name is "agent", not "assistant" --
+                    # pipeline_chat_messages stores "assistant" to match the
+                    # Postgres CHECK constraint shared with every other role-typed
+                    # column convention in this codebase.
+                    memory.chat.add_agent_message(turn.get("content", ""))
+            memory.chat_manager.chats[session_id] = memory.chat
+        except Exception as e:
+            # A rehydration failure must degrade to a fresh empty chat for this
+            # turn, never break the request -- same posture as the Valkey-load
+            # failure path above.
+            logger.warning("[agent_memory] failed to rehydrate durable history for session %s: %s", session_id, e)
 
     return memory
 
 
-def invoke_scoped(agent, prompt: str, session_id: Optional[str] = None) -> str:
+def invoke_scoped(agent, prompt: str, session_id: Optional[str] = None, durable_history: Optional[list] = None) -> str:
     """Run one agent turn with memory scoped to `session_id` instead of the
     agent's process-wide default. Call this from every route that calls
     get_agent().invoke(...) -- never call agent.invoke() directly with the
@@ -69,7 +95,7 @@ def invoke_scoped(agent, prompt: str, session_id: Optional[str] = None) -> str:
     effective_session_id = session_id or f"anon-{uuid.uuid4().hex[:12]}"
 
     system_prompt = agent.get_system_prompt()
-    memory = _session_memory(effective_session_id, system_prompt)
+    memory = _session_memory(effective_session_id, system_prompt, durable_history=durable_history)
     agent.set_memory(memory)
 
     try:

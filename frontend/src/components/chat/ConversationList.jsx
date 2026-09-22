@@ -1,9 +1,10 @@
 /**
- * Saved Financial Statements conversations, in the sidebar.
+ * Saved conversations for a mode, in the sidebar.
  *
- * Rendered ONLY for the financial-statement mode. No other mode persists a
- * thread, so showing this anywhere else would advertise a feature that does not
- * exist there.
+ * Generic over any mode that persists a conversation server-side; App.jsx
+ * mounts one instance per such mode (currently financial-statement and
+ * trial-balance), each wired to that mode's own list/select/new/delete
+ * handlers. No mode-specific logic lives in this file.
  *
  * Its own file and its own CSS: `chat/ChatView.css` is imported by ReportView
  * and shared with SAR Q&A, so adding rules there would reach a working screen
