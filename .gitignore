@@ -36,6 +36,7 @@ Thumbs.db
 # Any mode's per-session uploads and generated pipeline artifacts
 backend/modes/*/sessions/
 backend/modes/*/pipeline/output/
+backend/modes/*/pipeline/sessions/
 
 # TB-v2 writes its run artifacts one level HIGHER than the patterns above —
 # backend/modes/sessions/<session-id>/ and backend/modes/output/ — which
