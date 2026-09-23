@@ -351,6 +351,66 @@ def build_report_writer(llm=None):
 # Writer user message assembler (called by pipeline, not by the LLM)
 # ===========================================================================
 
+def _format_formal_checks_summary(formal_checks_summary: dict | None) -> str:
+    """Renders the Gap-closure Phase 1 deterministic formal-checks summary
+    (UDIN, SA 706.8 EoM closing sentence, report-date-vs-FS-approval-date
+    sequencing) into three lines the writer can quote directly in section
+    1.3 / 2.1, instead of judging any of the three itself from raw text.
+
+    See formal_review.run_formal_checks() for what populates this dict, and
+    GAP_CLOSURE_LOG.md for why these three checks moved out of the writer's
+    judgment and into deterministic code.
+    """
+    if not formal_checks_summary:
+        return "Not available for this run."
+
+    udin = formal_checks_summary.get("udin") or {}
+    if udin.get("checks"):
+        udin_line = (
+            "All present and ICAI-format-valid."
+            if udin.get("all_valid")
+            else "; ".join(c["observation"] for c in udin["checks"] if not c["passed"])
+        )
+    else:
+        udin_line = "Not verified — no auditor/UDIN block was extracted."
+
+    eom = formal_checks_summary.get("eom_closing_sentence")
+    if eom is None:
+        eom_line = "Not applicable — no Emphasis of Matter section was identified."
+    else:
+        eom_line = eom["observation"]
+
+    date_seq = formal_checks_summary.get("report_date_sequence")
+    if date_seq is None:
+        date_line = "Not verified — report date and/or FS approval date were not both extracted."
+    else:
+        date_line = date_seq["observation"]
+
+    return (
+        f"- UDIN: {udin_line}\n"
+        f"- SA 706.8 Emphasis-of-Matter closing sentence: {eom_line}\n"
+        f"- Report date vs. FS approval date (s.134(1)): {date_line}"
+    )
+
+
+def _format_applicability_summary(applicability: dict | None) -> str:
+    """Renders the Gap-closure Phase 2 (Gap #4) applicability verdicts —
+    CARO / IFC / KAM — into three lines telling the writer which areas are
+    confirmed-applicable (reason freely about their clause/opinion data),
+    and which are unresolved (do not raise a "missing clause"/"missing KAM"
+    finding — that has already been raised as its own AUDIT_POINTER;
+    source spec §22 / §19.1)."""
+    if not applicability:
+        return "Not available for this run."
+    lines = []
+    labels = {"caro": "CARO 2020", "ifc": "IFC (s.143(3)(i))", "kam": "Key Audit Matters"}
+    for area, label in labels.items():
+        result = applicability.get(area) or {}
+        status = result.get("status", "uncertain")
+        lines.append(f"- {label}: {status.upper()} — {result.get('basis', '')}")
+    return "\n".join(lines)
+
+
 def build_writer_user_message(
     merged_json: dict,
     coherence_observations: list[dict],
@@ -362,10 +422,28 @@ def build_writer_user_message(
     company: str,
     fy_label: str,
     scope: str = "standalone",
+    formal_checks_summary: dict | None = None,
+    review_status: str = "complete",
+    review_status_reasons: list[str] | None = None,
+    applicability: dict | None = None,
 ) -> str:
     """
     Assembles the user message for the SAR_REPORT_WRITER agent.
     Called by the pipeline after all data has been gathered and coherence checked.
+
+    `formal_checks_summary`, `review_status` and `review_status_reasons` are
+    Gap-closure Phase 1 additions (Gap #5 — see GAP_CLOSURE_LOG.md): the
+    three formal checks (UDIN, SA 706.8 closing sentence, report-date
+    sequencing) and the package-level completeness verdict are now computed
+    deterministically before this message is built, and handed to the
+    writer as already-settled facts — mirroring how PRE-FLIGHT SUMMARY
+    below already tells the writer "do NOT re-raise" pre-flight findings.
+
+    `applicability` is a Gap-closure Phase 2 addition (Gap #4 — see
+    applicability.py): tells the writer which of CARO / IFC / KAM are
+    confirmed applicable versus unresolved, so it does not independently
+    conclude "clause X is missing" or "KAM is missing" on an area whose
+    applicability this package cannot confirm (source spec §22 / §19.1).
     """
     import json as _json
 
@@ -374,6 +452,16 @@ def build_writer_user_message(
         f"{o['component']} — {o['observation']}"
         for o in coherence_observations
     ) or "No coherence observations raised."
+
+    review_status_line = ""
+    if review_status != "complete":
+        reasons_text = " ".join(review_status_reasons or [])
+        review_status_line = (
+            f"\n**REVIEW STATUS: {review_status.upper()}** — {reasons_text} "
+            f"Label the memorandum's Memorandum Status accordingly "
+            f"(e.g. 'PROVISIONAL — PENDING UDIN CONFIRMATION') and reduce confidence "
+            f"language for report-dependent observations; do not withhold analysis.\n"
+        )
 
     fs_text = ""
     if financial_tables:
@@ -388,10 +476,16 @@ def build_writer_user_message(
         fs_text = "\n\n".join(parts)
 
     return (
-        f"**SCOPE:** {scope.upper()} | **COMPANY:** {company} | **FY:** {fy_label}\n\n"
+        f"**SCOPE:** {scope.upper()} | **COMPANY:** {company} | **FY:** {fy_label}\n"
+        f"{review_status_line}\n"
         f"**STRUCTURED DATA PACKAGE (from Extractor Agents):**\n"
         f"```json\n{_json.dumps(merged_json, indent=2)}\n```\n\n"
         f"**PRE-FLIGHT SUMMARY:**\n{preflight_summary}\n\n"
+        f"**FORMAL CHECKS SUMMARY (deterministic — already verified, do NOT re-derive from raw text; "
+        f"cite these verdicts directly in 1.3 and 2.1):**\n{_format_formal_checks_summary(formal_checks_summary)}\n\n"
+        f"**APPLICABILITY SUMMARY (deterministic — do NOT raise a new 'missing clause'/'missing KAM' "
+        f"finding on an area marked UNCERTAIN below; that has already been raised as its own AUDIT_POINTER):**\n"
+        f"{_format_applicability_summary(applicability)}\n\n"
         f"**COHERENCE OBSERVATIONS (already tagged — reference in your report):**\n{obs_text}\n\n"
         f"**SA 700 / SA 705 / SA 706 REFERENCE EXCERPTS:**\n{sa_reference}\n\n"
         f"**CARO 2020 REFERENCE EXCERPTS:**\n{caro_reference}\n\n"
@@ -445,19 +539,19 @@ def build_writer_user_message(
         "Directors' / Board Report | C&AG Section 143(5) directions | Prior-year SAR | Prior C&AG comments.\n"
         "Also confirm: standalone or consolidated scope; single auditor or joint auditors (list FRN of each).\n\n"
         "### 2.2 Opinion and Basis for Opinion\n"
-        "Para 1 — Opinion classification: Unmodified / Qualified / Adverse / Disclaimer. "
+        "- Opinion classification: Unmodified / Qualified / Adverse / Disclaimer. "
         "Apply SA 705 pervasiveness test. State verbatim quote of opinion paragraph. "
         "Test for buried qualifications: 'subject to' language, hedge words ('we believe'), long caveat lists.\n"
-        "Para 2 — Basis for Opinion: is independence and ethical-compliance declaration present? "
+        "- Basis for Opinion: is independence and ethical-compliance declaration present? "
         "Cite the exact wording. Are SAs under s.143(10) referenced?\n"
-        "Para 3 — Cross-reference: does the opinion hold given CARO adverse clauses and IFC findings? "
+        "- Cross-reference: does the opinion hold given CARO adverse clauses and IFC findings? "
         "State whether the unmodified opinion is coherent with each.\n\n"
         "### 2.3 Material Uncertainty Related to Going Concern (SA 570)\n"
-        "Para 1 — Is a MURGC paragraph present? Quote the going concern statement verbatim.\n"
-        "Para 2 — Check FS stress indicators: negative net worth, current ratio < 1.0, "
+        "- Is a MURGC paragraph present? Quote the going concern statement verbatim.\n"
+        "- Check FS stress indicators: negative net worth, current ratio < 1.0, "
         "negative operating cash flow, CARO clause (ix) defaults, CARO clause (xix) adverse, "
         "material losses over multiple years. State whether any indicator is present.\n"
-        "Para 3 — Apply SA 570 decision logic: (1) auditor acknowledged uncertainty but no MURGC → FINDING; "
+        "- Apply SA 570 decision logic: (1) auditor acknowledged uncertainty but no MURGC → FINDING; "
         "(2) uncertainty only inferred here → RISK_FLAG; (3) CARO (xix) adverse + no MURGC treatment → High RISK_FLAG; "
         "(4) going concern appropriate + MURGC present → confirm cross-reference to FS note.\n\n"
         "### 2.4 Key Audit Matters (SA 701)\n"
@@ -494,9 +588,9 @@ def build_writer_user_message(
         "### 2.7 CARO 2020 Adverse Clause Review\n"
         "DO NOT list all 21 clauses. Only adverse, partial, or high-risk clauses.\n"
         "For EACH adverse/partial clause:\n"
-        "Para 1 — State clause number, topic, answer type (adverse/partial), and full verbatim finding.\n"
-        "Para 2 — Risk implication: what does this mean for the financial statements?\n"
-        "Para 3 — Expected echo: should this appear in the main opinion / EoM / KAM / IFC / Rule 11 / C&AG? "
+        "- State clause number, topic, answer type (adverse/partial), and full verbatim finding.\n"
+        "- Risk implication: what does this mean for the financial statements?\n"
+        "- Expected echo: should this appear in the main opinion / EoM / KAM / IFC / Rule 11 / C&AG? "
         "If echo is absent → RISK_FLAG. Tag the observation.\n"
         "MANDATORY TABLE:\n"
         "| Clause | Topic | Answer | Verbatim Quote | Note Ref | Tag | Risk |\n"
@@ -505,11 +599,11 @@ def build_writer_user_message(
         "**Compliant Clauses:** [clause numbers only, comma-separated]\n"
         "**Not In Package:** [clauses absent from supplied text]\n\n"
         "### 2.8 Internal Financial Controls (IFC / ICFR)\n"
-        "Para 1 — IFC opinion type (Unmodified/Qualified/Adverse/Disclaimer) and criteria used "
+        "- IFC opinion type (Unmodified/Qualified/Adverse/Disclaimer) and criteria used "
         "(state which guidance note or framework the auditor referenced).\n"
-        "Para 2 — For any control weakness identified: state the weakness, map it to the FS risk it creates, "
+        "- For any control weakness identified: state the weakness, map it to the FS risk it creates, "
         "and identify which FS line items or balances are at elevated risk.\n"
-        "Para 3 — Coherence check: if IFC is adverse/qualified but main opinion is unmodified → FINDING. "
+        "- Coherence check: if IFC is adverse/qualified but main opinion is unmodified → FINDING. "
         "Cross-reference with Rule 11(g), CARO clause (xi), and C&AG IT direction if applicable.\n\n"
         "### 2.9 C&AG Section 143(5) Directions\n"
         "If this is a PSU: for each direction issued, state (a) the direction text, "
@@ -519,18 +613,18 @@ def build_writer_user_message(
         "If not a PSU or C&AG directions are absent from the supplied package: "
         "state this explicitly with the source of that determination.\n\n"
         "### 2.10 Subsequent Events and Report-Date Logic\n"
-        "Para 1 — State the report date and the FS approval date (s.134(1)). "
+        "- State the report date and the FS approval date (s.134(1)). "
         "If report date precedes FS approval date → FINDING (direct violation).\n"
-        "Para 2 — Assess reasonableness of the report-date gap against the entity's own Board/AGM timeline. "
+        "- Assess reasonableness of the report-date gap against the entity's own Board/AGM timeline. "
         "DO NOT apply any fixed numeric day-range benchmark — SA 700 sets none.\n"
-        "Para 3 — Are any subsequent events (post year-end to report date) disclosed in the report or FS notes? "
+        "- Are any subsequent events (post year-end to report date) disclosed in the report or FS notes? "
         "Material undisclosed subsequent events → RISK_FLAG + AUDIT_POINTER.\n\n"
         "### 2.11 SA 720 — Other Information Consistency\n"
-        "Para 1 — Compare going-concern treatment: what does the auditor state vs what does the Board/Directors' "
+        "- Compare going-concern treatment: what does the auditor state vs what does the Board/Directors' "
         "Report say about the company's ability to continue as a going concern?\n"
-        "Para 2 — Compare key financial metrics: are ratios, CSR spend, dividend statements in the Directors' Report "
+        "- Compare key financial metrics: are ratios, CSR spend, dividend statements in the Directors' Report "
         "consistent with the FS and with what the auditor's report implies?\n"
-        "Para 3 — Any direct contradiction between Other Information and the FS or the auditor's "
+        "- Any direct contradiction between Other Information and the FS or the auditor's "
         "report → FINDING. Note and inconsistency that requires explanation → RISK_FLAG.\n\n"
         "### 2.12 Financial Statement Observations\n"
         "Scan FS tables for high-risk items that the SAR is silent on. For each item:\n"

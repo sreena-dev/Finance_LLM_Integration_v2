@@ -109,8 +109,22 @@ class ReportResponse(BaseModel):
     fy_label: str
     scope: str
     report_md: str
+    # Gap-closure Phase 4 (LLM_Output_Specification_CAG_Statutory_Auditor_
+    # Report_Review.md, Formats 1 and 2): short, deterministic, templated
+    # directly from `observations` below — never a second LLM call — so
+    # they cannot present a different conclusion than the detailed report.
+    display_response: str = ""
+    executive_summary: str = ""
+    detailed_report: str = ""
     parsed: dict = {}
     observations: list = []
+    # Gap-closure Phase 1 (see backend/modes/statutory_auditor_report/
+    # sar_prod_v3/GAP_CLOSURE_LOG.md): package-level completeness verdict —
+    # "complete" | "provisional" | "blocked" — and why, when not "complete".
+    # Declared explicitly (not folded into `parsed`) so the frontend can
+    # show it without reaching into pipeline-internal JSON shape.
+    review_status: str = "complete"
+    review_status_reasons: list[str] = []
     quality_flags: dict = {}
     doc_meta: dict = {}
     elapsed_seconds: float = 0.0

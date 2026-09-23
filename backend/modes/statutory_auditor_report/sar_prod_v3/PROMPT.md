@@ -46,6 +46,24 @@ OTHER MATTER signals:
 
 RULE: If same section label contains both EoM and KAM content, extract BOTH correctly.
 
+MODIFICATION QUANTIFICATION (only when opinion.type is qualified, adverse, or disclaimer)
+  - quantified_amount: the numeric amount the Basis for Opinion states as the effect of the
+    modification, if any is stated. Use the digits only (no currency symbol, no commas). null if
+    no amount is stated (e.g. a scope-limitation modification with no quantified effect).
+  - affected_line_items: the financial-statement line item(s) or note(s) the modification affects,
+    as named in the text (e.g. "Trade Receivables", "Note 14").
+  - tax_effect_quote: verbatim quote of any tax-effect statement tied to the modification. Empty
+    string if none.
+  - pervasiveness_cues: set each boolean to true ONLY when directly evidenced in the text — do not
+    infer. affects_multiple_elements = the modification affects more than one FS line item/area.
+    affects_fundamental_balance = it affects a balance fundamental to understanding the financial
+    statements. large_relative_to_key_bases = the auditor states or implies the amount is large
+    relative to net worth/profit/assets/borrowings. cannot_determine_effect = the auditor states
+    they could not determine the full effect. multiple_modifications_same_direction = more than
+    one modification in this opinion points the same direction (e.g. two qualifications both
+    understating liabilities).
+  - If opinion.type is unmodified, leave the entire "modification" block at its default (null/empty/false) values.
+
 OUTPUT - JSON ONLY. Return ONLY valid JSON. No markdown fences. No text before or after.
 
 {
@@ -63,6 +81,20 @@ OUTPUT - JSON ONLY. Return ONLY valid JSON. No markdown fences. No text before o
     "independence_declaration_present": true,
     "quote": "",
     "section_ref": ""
+  },
+  "modification": {
+    "quantified_amount": null,
+    "quantified_amount_unit": "",
+    "affected_line_items": [],
+    "affected_note_ref": "",
+    "tax_effect_quote": "",
+    "pervasiveness_cues": {
+      "affects_multiple_elements": false,
+      "affects_fundamental_balance": false,
+      "large_relative_to_key_bases": false,
+      "cannot_determine_effect": false,
+      "multiple_modifications_same_direction": false
+    }
   },
   "going_concern": {
     "discussed": true,

@@ -176,8 +176,16 @@ def generate_report(entity: str, fy_start: int, fy_end: int, scope: str = "stand
         "fy_label": f"FY {fy_start}-{str(fy_end)[-2:]}",
         "scope": scope,
         "report_md": result.get("report", ""),
+        "display_response": result.get("display_response", ""),
+        "executive_summary": result.get("executive_summary", ""),
+        "detailed_report": result.get("detailed_report", ""),
         "parsed": result.get("parsed", {}) or {},
         "observations": result.get("observations", []) or [],
+        # Gap-closure Phase 1 additions — see sar_prod_v3/GAP_CLOSURE_LOG.md.
+        # `.get(..., "complete")` / `[]` defaults keep this adapter working
+        # unchanged against an older pipeline build that predates these keys.
+        "review_status": result.get("review_status", "complete"),
+        "review_status_reasons": result.get("review_status_reasons", []) or [],
         "quality_flags": result.get("quality_flags", {}) or {},
         "doc_meta": result.get("doc_meta", {}) or {},
         "elapsed_seconds": round(time.perf_counter() - started, 2),

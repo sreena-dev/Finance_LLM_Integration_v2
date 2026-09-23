@@ -121,6 +121,15 @@
   overflow-wrap: anywhere;
 }
 
+/* ── Format switcher ───────────────────────────────────────────────────── */
+
+/* Reuses ReportView.css's .scope/.scope__* segmented-control classes (that
+   file isn't imported here, so the shared rules are restated rather than
+   duplicated by reference) — same visual language as the Report/Chat toggle
+   above this component, for one consistent tab idiom in this view. */
+.doc__format-tabs { flex-direction: row; align-items: center; gap: 10px; }
+.doc__format-tabs .scope__label { flex: none; }
+
 /* ── The memorandum sheet ──────────────────────────────────────────────── */
 
 /* Styled as paper: wider margins, serif body, subtle page shadow — this is
@@ -143,12 +152,24 @@
 
 .doc__blank { margin: 0; color: var(--ink-500); font-style: italic; }
 
+/* Display Response (§2) is plain structured text, not markdown — rendered
+   verbatim so its indentation still reads as sections/bullets. */
+.doc__plain {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--ink-800, var(--ink-700));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 900px) {
   .doc__sheet { padding: 26px 20px; }
   .doc__actions { width: 100%; }
 }
 
 @media print {
-  .doc__head, .doc__flags, .doc__obs { display: none; }
+  .doc__head, .doc__flags, .doc__obs, .doc__format-tabs { display: none; }
   .doc__sheet { border: none; box-shadow: none; padding: 0; }
 }
