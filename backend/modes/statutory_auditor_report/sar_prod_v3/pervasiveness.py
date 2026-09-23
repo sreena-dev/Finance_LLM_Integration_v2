@@ -79,10 +79,10 @@ def check_opinion_type_vs_pervasiveness(merged_json: dict) -> Observation | None
             tag="RISK_FLAG", risk_rating="High",
             observation=(
                 f"The opinion is Qualified, but {cue_count} of 5 pervasiveness cues were recorded "
-                f"for the underlying modification (source spec §14). Per the SA 705 decision "
-                f"table, a pervasive effect would ordinarily point to Adverse or Disclaimer rather "
-                f"than Qualified. This is a cross-check for human review, not a re-classification "
-                f"of the auditor's stated opinion."
+                f"for the underlying modification. Per the SA 705 decision table, a pervasive "
+                f"effect would ordinarily point to Adverse or Disclaimer rather than Qualified. "
+                f"This is a cross-check for human review, not a re-classification of the "
+                f"auditor's stated opinion."
             ),
             evidence=f"Opinion type: qualified | Pervasiveness cues recorded: {cue_count}/5",
             evidence_required=["Auditor's own pervasiveness assessment / working papers"],

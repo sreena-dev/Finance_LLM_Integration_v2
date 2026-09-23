@@ -111,7 +111,7 @@ def resolve_caro_applicability(caro_json: dict, *, caro_text_found: bool, caro_r
         "basis": (
             "No CARO 2020 annexure was identified in the supplied package, and no explicit "
             "non-applicability statement was found. Absence alone does not confirm CARO is "
-            "inapplicable — it may instead be a gap in the supplied package (source spec §22)."
+            "inapplicable — it may instead be a gap in the supplied package."
         ),
     }
 
@@ -134,7 +134,7 @@ def resolve_ifc_applicability(ifc_json: dict, *, ifc_text_found: bool, ifc_raw_t
             "non-applicability statement was found. IFC reporting under s.143(3)(i) applies to "
             "most companies audited under the Companies Act 2013, so absence here more likely "
             "reflects an incomplete package than genuine non-applicability — treat as unresolved, "
-            "not as confirmed non-applicability, per source spec §22's CARO-analogous logic."
+            "not as confirmed non-applicability."
         ),
     }
 
@@ -147,8 +147,8 @@ def resolve_kam_applicability(main_json: dict) -> ApplicabilityResult:
         "status": "uncertain",
         "basis": (
             "No Key Audit Matters section was identified. KAM is mandatory only for listed "
-            "entities, and listed status is not established from this package. Per source spec "
-            "§19.1, this must not be treated as a definitive missing-KAM finding."
+            "entities, and listed status is not established from this package, so this must not "
+            "be treated as a definitive missing-KAM finding."
         ),
     }
 

@@ -326,7 +326,7 @@ def check_cag_directions_unquantified(merged_json: dict, fin_metrics: dict, appl
             f"The report indicates {pending} pending C&AG direction(s) under section 143(5) but "
             f"no reconciling text was extracted for them. This is a completeness pointer, not a "
             f"finding — the actual directions and the auditor's response require separate "
-            f"verification (source spec §25.1's non-response rule)."
+            f"verification."
         ),
         evidence=f"cag_directions.pending_count={pending}",
         evidence_required=["Actual C&AG directions/sub-directions for the assignment year", "auditor's response", "impact workings"],
@@ -363,8 +363,8 @@ def check_kam_high_risk_silence(merged_json: dict, fin_metrics: dict, applicabil
             "The financial statements show distress indicator(s) ("
             + "; ".join(distress_signals[:2])
             + "), but the Key Audit Matters do not appear to cover going concern, liquidity, or "
-            "cash-flow risk. Per source spec §19, high-risk financial-statement areas are expected "
-            "to be compared against KAM coverage."
+            "cash-flow risk. High-risk financial-statement areas are expected to be reflected in "
+            "KAM coverage."
         ),
         evidence="; ".join(distress_signals),
         evidence_required=["Management's assessment of the identified distress indicator(s)"],

@@ -73,7 +73,7 @@ def test_section_10_included_for_consolidated_scope():
         quality_flags={}, doc_meta={}, existing_report_md="",
     )
     assert "10. Consolidated / Group Matters" in out
-    assert "Group-audit-specific checks are not yet implemented" in out
+    assert "Group-audit-specific checks are not available in this review." in out
 
 
 def test_section_11_heading_always_present_none_identified_without_prior_year_observation():

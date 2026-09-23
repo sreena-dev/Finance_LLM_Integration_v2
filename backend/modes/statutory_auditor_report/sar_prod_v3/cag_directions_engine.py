@@ -132,8 +132,8 @@ def check_direction_addressed(direction_theme: dict, cag_directions_text: str) -
             observation=(
                 f"A standing C&AG direction under section 143(5) — \"{direction_theme['label']}\" — "
                 f"is in effect for this report's date, but the supplied package contains no reproduced "
-                f"C&AG directions text at all. Per source spec §25.1, an actual direction with no answer "
-                f"in the package is a FINDING."
+                f"C&AG directions text at all. A standing direction with no answer in the package is "
+                f"a FINDING."
             ),
             evidence=f"Direction theme: {direction_theme['label']} (source: cag_directions_chunks, live directions DB)",
             evidence_required=["Auditor's response to this direction", "impact workings"],
@@ -149,8 +149,8 @@ def check_direction_addressed(direction_theme: dict, cag_directions_text: str) -
         observation=(
             f"A standing C&AG direction under section 143(5) — \"{direction_theme['label']}\" — is in "
             f"effect for this report's date. The supplied package's reproduced C&AG directions text does "
-            f"not appear to engage with this specific theme. Per source spec §25.1, an answer that does "
-            f"not engage the substance of a direction is a risk flag, not a finding."
+            f"not appear to engage with this specific theme. An answer that does not engage the "
+            f"substance of a direction is a risk flag, not a finding."
         ),
         evidence=f"Direction theme: {direction_theme['label']} | reproduced text length: {len(text)} chars",
         evidence_required=["Auditor's response to this specific direction", "impact workings"],

@@ -247,7 +247,7 @@ def suppress_untraceable(observations: list[Observation]) -> list[Observation]:
                 "Downgraded from a direct finding to an audit pointer: no quoted report "
                 "text, report reference or financial-statement reference was captured for "
                 "this check, so it cannot be independently verified from this observation "
-                "alone (source spec §11)."
+                "alone."
             )
         out.append(obs)
     return out

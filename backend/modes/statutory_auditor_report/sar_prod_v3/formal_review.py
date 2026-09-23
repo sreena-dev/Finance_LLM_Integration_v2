@@ -216,14 +216,13 @@ def compute_review_status(
     if not main_text_usable:
         reasons.append(
             "The main auditor's report text could not be retrieved from the supplied "
-            "package — this is a mandatory input (source spec §5.1)."
+            "package — this is a mandatory input."
         )
 
     missing_fs = [t for t in ("balance_sheet", "profit_loss") if not (fs_tables or {}).get(t)]
     if missing_fs:
         reasons.append(
-            f"Mandatory financial statement table(s) not retrieved: {', '.join(missing_fs)} "
-            f"(source spec §5.1)."
+            f"Mandatory financial statement table(s) not retrieved: {', '.join(missing_fs)}."
         )
 
     if reasons:
@@ -232,7 +231,7 @@ def compute_review_status(
     if not formal_summary.get("udin", {}).get("all_valid"):
         reasons.append(
             "UDIN is absent, illegible or does not conform to the ICAI 18-character format "
-            "for at least one auditor — report finality is not confirmed (source spec §29.1)."
+            "for at least one auditor — report finality is not confirmed."
         )
         return "provisional", reasons
 
