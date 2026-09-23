@@ -314,7 +314,23 @@ def _keyword_text_search(doc_ids: List[str], query: str, pool: int) -> List[Dict
 
 
 def _keyword_table_search(doc_ids: List[str], query: str, pool: int) -> List[Dict]:
-    """Full-text match over `table_chunks` title/description for the query."""
+    """Full-text match over `table_chunks` title/description for the query.
+
+    BUG FIX (found against real ingested data): this used to order by
+    `page_pdf_start ASC` with the same recall-oriented OR-tsquery the text
+    search uses. Confirmed on Coal_India_2024_2025: a query for "Key Audit
+    Matters" matches 52 tables doc-wide (any table whose title/description
+    contains "report", "audit" or "matters" — all common words), and with
+    `LIMIT 12` ordered by page, the cutoff landed at page ~201 — well before
+    the real KAM tables at pages 215-219, which were silently excluded
+    while unrelated tables (BRSR stakeholder-engagement tables, a Rajya
+    Sabha committee report, CSR annexures) filled every slot. Switched to
+    `ts_rank` so a table whose title/description densely matches the query
+    terms (e.g. "Key Audit Matters" repeated across the title and column
+    headers) outranks a table that only coincidentally contains one common
+    word — confirmed this correctly surfaces the real KAM tables in the
+    top 6 instead of excluding them entirely.
+    """
     if not doc_ids:
         return []
     tsq = _to_tsquery(query)
@@ -324,21 +340,25 @@ def _keyword_table_search(doc_ids: List[str], query: str, pool: int) -> List[Dic
     try:
         ph = ",".join(["%s"] * len(doc_ids))
         sql = f"""
-            SELECT table_title, table_description, table_md, page_pdf_start, table_id, unit, currency
+            SELECT table_title, table_description, table_md, page_pdf_start, table_id, unit, currency,
+                   ts_rank(
+                       to_tsvector('english', COALESCE(table_title, '') || ' ' || COALESCE(table_description, '')),
+                       to_tsquery('english', %s)
+                   ) AS rank
             FROM table_chunks
             WHERE doc_id IN ({ph})
               AND to_tsvector(
                     'english',
                     COALESCE(table_title, '') || ' ' || COALESCE(table_description, '')
                   ) @@ to_tsquery('english', %s)
-            ORDER BY page_pdf_start ASC
+            ORDER BY rank DESC
             LIMIT %s
         """
         with conn.cursor() as cur:
-            cur.execute(sql, list(doc_ids) + [tsq, pool])
+            cur.execute(sql, [tsq] + list(doc_ids) + [tsq, pool])
             rows = cur.fetchall()
         out: List[Dict] = []
-        for title, description, table_md, page, table_id, unit, currency in rows:
+        for title, description, table_md, page, table_id, unit, currency, rank in rows:
             body = (table_md or description or "").strip()
             if not body:
                 continue
@@ -348,7 +368,14 @@ def _keyword_table_search(doc_ids: List[str], query: str, pool: int) -> List[Dic
                     "page": page or 0,
                     "kind": "table",
                     "content": body,
-                    "score": 0.45,
+                    # Scaled so a strong keyword match (dense title/description
+                    # overlap, like a table literally titled "Key Audit
+                    # Matters") can outrank a weak one when both compete for
+                    # the table budget in retrieve_sar_context — previously
+                    # every table hit got the same flat 0.45 regardless of
+                    # relevance, so the budget was effectively random among
+                    # matches once ts_rank stopped being the limiting factor.
+                    "score": round(min(0.35 + float(rank or 0) * 8, 0.6), 4),
                     "table_id": table_id,
                     "unit": unit or "",
                     "currency": currency or "",
@@ -360,6 +387,16 @@ def _keyword_table_search(doc_ids: List[str], query: str, pool: int) -> List[Dic
         return []
     finally:
         conn.close()
+
+
+_TABLE_PLACEHOLDER_RE = re.compile(r"^Table:\s*.*\[[^\[\]]+\]\s*$", re.IGNORECASE)
+
+
+def _is_bare_table_placeholder(content: str) -> bool:
+    """True when `content` is nothing but ingestion's "Table: <title>
+    [<table_id>]" caption line — no other text. See retrieve_sar_context's
+    comment above where this is used."""
+    return bool(_TABLE_PLACEHOLDER_RE.fullmatch((content or "").strip()))
 
 
 def _dedupe(chunks: List[Dict]) -> List[Dict]:
@@ -509,6 +546,18 @@ class SARQATools:
             semantic = _semantic_text_search(doc_ids, enriched_query, _RETRIEVAL_POOL)
             keyword = _keyword_text_search(doc_ids, enriched_query, _RETRIEVAL_POOL)
             tables = _keyword_table_search(doc_ids, enriched_query, _RETRIEVAL_POOL)
+
+            # Ingestion leaves a bare "Table: <title> [<table_id>]" caption in
+            # text_chunks at a table's position in the main text flow, with
+            # none of the table's actual content — confirmed on
+            # Coal_India_2024_2025: a 56-character chunk that is nothing but
+            # this caption. Now that _keyword_table_search correctly retrieves
+            # the real table content via its own path (see that function's
+            # docstring), a caption-only text hit is pure waste — it takes a
+            # text slot while contributing nothing a reader couldn't already
+            # get from the "section" label everything already carries.
+            semantic = [c for c in semantic if not _is_bare_table_placeholder(c.get("content", ""))]
+            keyword = [c for c in keyword if not _is_bare_table_placeholder(c.get("content", ""))]
 
             text_hits = _dedupe(semantic + keyword)
             table_hits = _dedupe(tables)
