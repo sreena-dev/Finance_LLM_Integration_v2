@@ -6,7 +6,7 @@ this layer DB/LLM-free and testable in isolation.
 """
 
 from sar_prod_v3.cag_directions_engine import (
-    _DIRECTION_THEMES,
+    _DIRECTION_THEMES_BY_DOC,
     check_direction_addressed,
     resolve_applicable_directions,
     run_cag_directions_checks,
@@ -24,7 +24,14 @@ class _FakeTables:
         return self._rows
 
 
-ONE_ROW = [{"chunk_id": 1, "doc_name": "x", "page_no": 1, "txt": "...", "effective_from": "2025-05-23", "effective_to": None}]
+# doc_name must match a real key in _DIRECTION_THEMES_BY_DOC — run_cag_
+# directions_checks looks themes up per-document now (Gap-closure: a
+# document that date-matches but isn't this one must not be tested against
+# this one's themes), so a made-up name like the old "x" placeholder would
+# silently match nothing and every "run_..." test below would go quiet.
+_REAL_DOC_NAME = "CAG's Revised Directions for Statutory Auditors"
+_DIRECTION_THEMES = _DIRECTION_THEMES_BY_DOC[_REAL_DOC_NAME]
+ONE_ROW = [{"chunk_id": 1, "doc_name": _REAL_DOC_NAME, "page_no": 1, "txt": "...", "effective_from": "2025-05-23", "effective_to": None}]
 
 
 def test_resolve_applicable_directions_empty_without_report_date():
@@ -100,3 +107,21 @@ def test_run_raises_high_findings_for_all_themes_when_text_is_empty():
     obs = run_cag_directions_checks(merged, "2025-06-01", tables=_FakeTables(ONE_ROW))
     assert len(obs) == 5
     assert all(o.tag == "FINDING" and o.risk_rating == "High" for o in obs)
+
+
+def test_run_skips_a_date_matched_document_with_no_curated_theme_set():
+    """A document that date-matches (resolve_applicable_directions found it)
+    but has no entry in _DIRECTION_THEMES_BY_DOC — e.g. an older standing-
+    directions document ingested for its date coverage before its own
+    themes were curated — must be skipped, not silently tested against a
+    different, unrelated document's themes. This is the exact bug found in
+    production: a report whose applicable directions were an un-curated
+    document was still being checked against this module's one hardcoded
+    5-point theme set."""
+    uncurated_row = [{
+        "chunk_id": 99, "doc_name": "Some Other Standing Directions Document",
+        "page_no": 1, "txt": "...", "effective_from": "2015-04-01", "effective_to": "2025-05-22",
+    }]
+    merged = {"cag_directions": {"text": ""}}
+    obs = run_cag_directions_checks(merged, "2020-01-01", tables=_FakeTables(uncurated_row))
+    assert obs == []
