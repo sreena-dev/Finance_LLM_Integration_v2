@@ -102,13 +102,32 @@ function downloadWord(report, bodyHtml) {
 </xml>
 <![endif]-->
 <style>
-  body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; line-height: 1.5; }
+  /* Matches src/styles/index.css's --font-sans/--font-serif/--font-mono and
+     ReportDocument.css's .doc__md rules (headings/body default to sans,
+     paragraphs/list items to serif, tables to sans, code/pre to mono) — a
+     Word document can't read CSS custom properties from another file, so
+     each stack is restated here with the same fallback chain. Word only
+     renders whichever of these is actually installed on the reader's
+     machine and falls back through the chain, same as a browser would. */
+  body {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 11pt; line-height: 1.5;
+  }
+  p, li {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  }
   h1 { font-size: 20pt; }
   h2 { font-size: 16pt; margin-top: 20pt; }
   h3 { font-size: 13pt; }
-  table { border-collapse: collapse; width: 100%; }
+  table {
+    border-collapse: collapse; width: 100%;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
   table, th, td { border: 1px solid #999; padding: 4pt 8pt; }
   th { background: #f0f0f0; text-align: left; }
+  code, pre {
+    font-family: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+  }
 </style>
 </head>
 <body>${bodyHtml || '<p>The pipeline returned an empty detailed report.</p>'}</body>
