@@ -444,6 +444,60 @@ def run_query(
     user_id: str | None = None,
     conversation_id: str | None = None,
 ) -> dict:
+    """Run one FS query and record a telemetry event for it, success or failure.
+
+    A thin wrapper: the pipeline itself is `_run_query`, unchanged apart from
+    filling `_probe` with the numbers (`llm_stats`, tool-call count) that do not
+    survive into its return value. Recording is non-blocking and can never raise
+    (`app/telemetry.py`), so this cannot alter or delay the answer.
+    """
+    from app import telemetry
+
+    started = time.perf_counter()
+    probe: dict = {}
+    try:
+        response = _run_query(
+            query, history=history, user_id=user_id,
+            conversation_id=conversation_id, _probe=probe,
+        )
+    except Exception as exc:  # noqa: BLE001 - re-raised below, only observed here
+        telemetry.record_query_event(
+            user_id=user_id, conversation_id=conversation_id, mode=MODE_ID,
+            query_text=query,
+            status="unavailable" if isinstance(exc, ModeUnavailableError) else "error",
+            elapsed_seconds=round(time.perf_counter() - started, 2),
+            has_upload=probe.get("has_upload"),
+            error_stage=type(exc).__name__,
+            error_message=str(exc),
+        )
+        raise
+
+    checks = response.get("checks") or {}
+    telemetry.record_query_event(
+        user_id=user_id, conversation_id=conversation_id, mode=MODE_ID,
+        query_text=query, status="ok",
+        elapsed_seconds=response.get("elapsed_seconds"),
+        prompt_tokens=probe.get("prompt_tokens"),
+        completion_tokens=probe.get("completion_tokens"),
+        tool_calls=probe.get("tool_calls"),
+        tools_used=checks.get("tools_used"),
+        confidence=checks.get("confidence"),
+        unsourced=checks.get("unsourced"),
+        has_upload=probe.get("has_upload"),
+        num_chunks_retrieved=response.get("num_chunks_retrieved"),
+        rewritten=bool(response.get("rewritten_query")),
+    )
+    return response
+
+
+def _run_query(
+    query: str,
+    *,
+    history: list[dict] | None = None,
+    user_id: str | None = None,
+    conversation_id: str | None = None,
+    _probe: dict | None = None,
+) -> dict:
     """Run the full FS RAG pipeline for one query. Blocking — call in a thread.
 
     `history` is the earlier turns of this conversation, read server-side from
@@ -595,6 +649,15 @@ def run_query(
         result.get("num_chunks_retrieved", 0),
         bool(scope and scope.documents),
     )
+
+    if _probe is not None:
+        stats = result.get("llm_stats") or {}
+        _probe.update(
+            prompt_tokens=stats.get("prompt_tokens"),
+            completion_tokens=stats.get("completion_tokens"),
+            tool_calls=len(result.get("tool_calls_made") or []),
+            has_upload=bool(scope and scope.documents),
+        )
 
     return {
         "mode": MODE_ID,

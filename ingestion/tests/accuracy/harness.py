@@ -57,10 +57,7 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from app.numbers import parse_cell                       # noqa: E402
-from app.tables import parse_markdown_tables             # noqa: E402
-from app.verify import _tolerance                        # noqa: E402
-from app.vlm_read import _normalise_label                # noqa: E402
+from tests.accuracy._parse import parse_cell, parse_markdown_tables, _tolerance, _normalise_label  # noqa: E402
 
 
 class Outcome(str, Enum):

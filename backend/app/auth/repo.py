@@ -9,9 +9,23 @@ from __future__ import annotations
 import uuid
 
 from . import db as auth_db
+from . import schema
 from . import security
 
-_COLUMNS = "user_id, username, email, display_name, created_at, last_login_at"
+_BASE_COLUMNS = "user_id, username, email, display_name, created_at, last_login_at"
+
+
+def _columns() -> str:
+    """The column list, with `is_super_admin` only when it really exists.
+
+    Authentication reads this table on every request, so a database where the
+    admin column could not be created (see schema.py's CORE VS OPTIONAL) must
+    not make every SELECT here fail. It reads as a constant `false` instead:
+    nobody is an admin, and nobody is locked out.
+    """
+    if schema.admin_column_ready():
+        return _BASE_COLUMNS + ", is_super_admin"
+    return _BASE_COLUMNS + ", false AS is_super_admin"
 
 
 class UsernameTaken(ValueError):
@@ -24,6 +38,7 @@ def _row_to_user(row: dict) -> dict:
         "username": row["username"],
         "email": row["email"],
         "display_name": row.get("display_name"),
+        "is_super_admin": bool(row.get("is_super_admin", False)),
     }
 
 
@@ -39,6 +54,7 @@ def create_user(username: str, email: str, password: str,
 
     user_id = uuid.uuid4()
     password_hash = security.hash_password(password)
+    cols = _columns()  # before the cursor: it may open its own connection
 
     try:
         with auth_db.db_cursor() as cur:
@@ -46,7 +62,7 @@ def create_user(username: str, email: str, password: str,
                 "INSERT INTO public.artha_users "
                 "(user_id, username, email, password_hash, display_name) "
                 "VALUES (%s, %s, %s, %s, %s) "
-                f"RETURNING {_COLUMNS}",
+                f"RETURNING {cols}",
                 (str(user_id), username, email, password_hash, display_name),
             )
             return _row_to_user(cur.fetchone())
@@ -65,9 +81,10 @@ def get_by_login(login: str) -> dict | None:
     Returns the row including `password_hash` — this is the only function that
     exposes it, and only `authenticate` below calls it.
     """
+    cols = _columns()
     with auth_db.db_cursor() as cur:
         cur.execute(
-            f"SELECT {_COLUMNS}, password_hash FROM public.artha_users "
+            f"SELECT {cols}, password_hash FROM public.artha_users "
             "WHERE lower(username) = lower(%s) OR lower(email) = lower(%s) "
             "LIMIT 1",
             (login, login),
@@ -77,10 +94,11 @@ def get_by_login(login: str) -> dict | None:
 
 
 def get_by_id(user_id: str) -> dict | None:
+    cols = _columns()
     with auth_db.db_cursor() as cur:
         try:
             cur.execute(
-                f"SELECT {_COLUMNS} FROM public.artha_users WHERE user_id = %s",
+                f"SELECT {cols} FROM public.artha_users WHERE user_id = %s",
                 (str(user_id),),
             )
         except Exception:

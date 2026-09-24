@@ -1,17 +1,28 @@
 """The ingestion pipeline, start to finish.
 
-    render -> precheck -> preprocess -> convert -> vlm second read
-           -> verify -> identify -> emit
+    render -> precheck -> preprocess                       (unchanged)
+           -> layout + OCR          docling reads text and locates tables;
+                                    RapidOCR reads every word of every table
+           -> structure + 2nd read  Gemma describes each table's structure and
+                                    independently re-reads each row
+           -> reconcile / validate / export
+           -> identify
 
-Each stage is a separate module and none of them import each other; this is the
-only place that knows the order. That matters because the order is a design
-decision rather than an accident -- preprocessing has to happen before docling
-sees the page, and verification has to happen before anything is emitted -- and
-keeping it in one readable function is what stops it drifting.
+Where the digits come from: OCR, and only OCR. Gemma is used for structure and
+as a second reader whose answer is *compared* with OCR's, never substituted for
+it. A figure the two readers disagree on is flagged, not fixed.
 
-Progress is reported through a callback rather than returned, because the whole
-run takes minutes on a scanned filing and the gateway streams these events to
-the browser as they happen.
+**Concurrency.** The stages after preprocessing are not run one after another
+over the whole document. Each page flows through them as soon as the stage
+before has finished with it, so the wait for the vision model on page 1's
+tables overlaps with docling working through page 2. Layout stays strictly
+single-file (two docling conversions at once run out of memory); OCR runs on a
+small pool; structure and second-read calls run on their own pools, sized to
+the model endpoint's per-kind caps. Output order never depends on completion
+order: tables are numbered as layout finds them, top to bottom, page by page.
+
+Progress is reported through a callback because the whole run takes minutes on
+a scanned filing and the gateway streams these events to the browser.
 """
 
 from __future__ import annotations
@@ -20,264 +31,375 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from typing import Callable
 
-from . import convert as convert_mod
 from . import (
-    emit, identify as identify_mod, precheck, preprocess, render, structure_repair,
-    verify, vlm_read,
+    emit, export, identify as identify_mod, layout as layout_mod, ocr, orient, precheck, preprocess,
+    reconcile, render, second_read, structure, validate,
 )
 from .config import Config
-from .models import IngestResult, PageQuality, RecoveryStats, StageDuration
-from .tables import parse_markdown_tables
+from .llm_client import CLIENT
+from .models import IngestResult, PageImage, PageQuality, StageDuration, TableRecord
+from .tabletypes import CellResult, TablePlan, TableRegion, Token
 
 logger = logging.getLogger(__name__)
 
 Progress = Callable[[str, str, float], None]
-#: `doc_id`, the table records verified SO FAR (already `.as_dict()`-shaped,
-#: matching `IngestResult.tables`'s own serialization) -- see `run()`'s
-#: `on_partial` parameter and `Config.PARTIAL_RESULT_INTERVAL_SECONDS`.
+#: `doc_id`, the table records finished SO FAR (already `.as_dict()`-shaped,
+#: matching `IngestResult.tables`'s own serialization).
 OnPartial = Callable[[str, list], None]
 
-#: Stage weights for the progress bar, summing to 1.0. Taken from measured
-#: proportions on a 25-page scan: OCR and table structure dominate everything
-#: else by an order of magnitude, and a bar that gives each stage equal width
-#: sits at 60% for four minutes and reads as a hang.
+#: Progress weights, summing to 1.0. The three stages that overlap
+#: (convert / vlm / verify) advance by pages completed, so the bar moves as
+#: real work finishes instead of sitting on an estimate.
 _STAGE_WEIGHTS = {
     "render": 0.05,
     "precheck": 0.05,
     "preprocess": 0.10,
-    "convert": 0.55,
-    "vlm": 0.15,
-    "verify": 0.05,
+    "convert": 0.30,
+    "vlm": 0.30,
+    "verify": 0.15,
     "identify": 0.05,
 }
+_CONCURRENT_STAGES = ("convert", "vlm", "verify")
+_EARLY_DONE = _STAGE_WEIGHTS["render"] + _STAGE_WEIGHTS["precheck"] + _STAGE_WEIGHTS["preprocess"]
+#: Until identification starts, the bar stays below the point where the UI
+#: treats the job as finished.
+_PRE_IDENTIFY_CAP = 1.0 - _STAGE_WEIGHTS["identify"] - 0.001
+
+#: 20 characters mirrors the threshold `render.has_text_layer` uses: a handful
+#: of stray characters is noise, not content.
+_MIN_PAGE_CHARS = 20
 
 
 def _noop(stage: str, message: str, fraction: float) -> None:
     return None
 
 
-#: Seconds/page used ONLY to ESTIMATE progress display during the single,
-#: unavoidably blocking `convert_mod.convert()` call below -- the same
-#: measurement `Config.DOCUMENT_TIMEOUT`'s own comment cites ("~8s/page with
-#: full-page OCR"). This is a display estimate, not a promise, and never
-#: drives real behaviour (the timeout itself is `Config.DOCUMENT_TIMEOUT`,
-#: untouched). Checked directly against the installed docling API before
-#: writing this, not assumed: `DocumentConverter.convert()` takes no
-#: progress callback and exposes no per-page hook, so real per-page
-#: confirmation genuinely is not available from outside that one call --
-#: this is the honest alternative to leaving the bar frozen on one message
-#: for the 10-20+ minutes `convert()` can take on a 100-200 page filing.
-_CONVERT_SECONDS_PER_PAGE_ESTIMATE = 8.0
+# ---------------------------------------------------------------------------
+# progress
+# ---------------------------------------------------------------------------
 
+class _Progress:
+    """Monotonic progress over stages that overlap in time.
 
-def _convert_with_progress(
-    kept_images: list, kept_qualities: list["PageQuality"], report_within_stage: Callable,
-) -> "convert_mod.Converted":
-    """Run `convert_mod.convert()` while ticking an ESTIMATED progress signal.
-
-    A background thread reports elapsed-time-based progress against
-    `_CONVERT_SECONDS_PER_PAGE_ESTIMATE` every 2 seconds while the main
-    thread blocks on the one real `convert()` call; stopped the moment that
-    call returns (or raises), whichever comes first, so it can never keep
-    reporting past the stage's actual end. Every message this emits says
-    "estimated" -- it is not a claim about which page docling is actually
-    on, only a clock converted into words so the connection doesn't look
-    dead.
+    The reported stage is the earliest of convert/vlm/verify that still has
+    unfinished pages, so the UI's steps only ever move forward; the fraction
+    is the weighted share of (page, stage) units completed and is clamped so it
+    never goes backwards. Also records each stage's wall span for
+    `stage_durations` -- overlapping stages' spans overlap, so they do not sum
+    to the run's total.
     """
-    page_count = max(1, len(kept_images))
-    estimated_total_seconds = page_count * _CONVERT_SECONDS_PER_PAGE_ESTIMATE
-    stop = threading.Event()
-    start = time.monotonic()
 
-    def _tick() -> None:
-        while not stop.wait(2.0):
-            elapsed = time.monotonic() - start
-            fraction = (elapsed / estimated_total_seconds) if estimated_total_seconds else 0.0
-            fraction = max(0.0, min(0.97, fraction))
-            estimated_page = min(page_count, int(fraction * page_count) + 1)
-            report_within_stage(
-                "convert",
-                f"Detecting layout and reading tables (page ~{estimated_page} of "
-                f"{page_count}, estimated)",
-                fraction,
-            )
+    def __init__(self, report: Progress, n_pages: int) -> None:
+        self._report = report
+        self._n = max(1, n_pages)
+        self._done = {s: 0 for s in _CONCURRENT_STAGES}
+        self._last = _EARLY_DONE
+        self._lock = threading.Lock()
+        self.spans: dict[str, list[float]] = {}
 
-    ticker = threading.Thread(target=_tick, daemon=True)
-    ticker.start()
-    try:
-        return convert_mod.convert(kept_images, kept_qualities)
-    finally:
-        stop.set()
-        ticker.join(timeout=1.0)
+    def start(self, stage: str) -> None:
+        with self._lock:
+            self.spans.setdefault(stage, [time.monotonic(), time.monotonic()])
 
+    def page_done(self, stage: str) -> None:
+        with self._lock:
+            self._done[stage] += 1
+            now = time.monotonic()
+            self.spans.setdefault(stage, [now, now])[1] = now
+            self._emit()
 
-#: 20 characters mirrors the threshold `render.has_text_layer` uses for the
-#: SOURCE pdf's own text layer -- not literally the same measurement (this one
-#: is post-OCR markdown, not embedded PDF text), but the same intent: a
-#: handful of stray characters is noise, not content.
-_MIN_PAGE_CHARS = 20
-
-
-def _empty_page_note(kept_qualities: list[PageQuality], converted: "convert_mod.Converted") -> str | None:
-    """Name any KEPT page that produced neither a table nor readable text.
-
-    This is exactly the silent-loss shape Phase 1 exists to catch: a document
-    that hit it used to report a clean conversion with 0 tables, 0 chunks and
-    no note anywhere to explain why. Checked against `kept_qualities`, not the
-    full page list -- a blank or duplicate page is SUPPOSED to contribute
-    nothing, so only a page that survived that filter and still came back
-    empty is worth naming.
-    """
-    tabled_pages = {t.page_no for t in converted.tables}
-    empty_pages = [
-        q.page_no for q in kept_qualities
-        if q.page_no not in tabled_pages
-        and len((converted.page_markdown.get(q.page_no) or "").strip()) < _MIN_PAGE_CHARS
-    ]
-    if not empty_pages:
-        return None
-    return (
-        f"Page(s) {', '.join(str(p) for p in empty_pages)} produced no table and "
-        "no readable text at all. This is an extraction failure worth checking "
-        "against the original scan -- conversion may have failed outright on "
-        "that page, or its content may have merged into a neighbouring page's read."
-    )
-
-
-def _vlm_cap_note(prepared: list[dict], vlm_available: bool) -> str | None:
-    """Say so when Config.VLM_MAX_TABLES silently left tables unverified.
-
-    Verified concretely: a 78-page annual report exceeds the cap (60) with
-    nothing in the quality report to say so. Table INDEX is assembly order,
-    not importance order -- a schedule note near the end of a filing is not
-    less material than the balance sheet -- so this must not silently degrade
-    whichever tables happen to be read last. Prioritising by actual
-    importance is real future work (the escalation ladder); naming the
-    truncation here is the honest minimum until then.
-    """
-    capped = [
-        p for p in prepared
-        if p["crop"] is not None and vlm_available and p["index"] > Config.VLM_MAX_TABLES
-    ]
-    if not capped:
-        return None
-    return (
-        f"{len(capped)} table(s) past the {Config.VLM_MAX_TABLES}-table cap "
-        "(INGEST_VLM_MAX_TABLES) did not get a second read from the vision "
-        "model, so their figures rest on their own arithmetic only. Table "
-        "order in a filing is not importance order, so this may include "
-        "tables that mattered."
-    )
-
-
-def _place_confirmed_gap_fills(
-    prepared: list[dict], vlm_available: bool, image_by_number: dict, notes: list[str],
-) -> RecoveryStats:
-    """Place proposed gap fills -- but ONLY those a second reader confirms.
-
-    One bounded, DOCUMENT-WIDE wave (one shared budget, one bounded pool), for
-    the same cross-table batching reason as the escape hatch after it: a
-    synchronous per-table callback would serialise every network call inside
-    the table loop.
-
-    **With no second reader reachable, nothing is placed** -- there is
-    deliberately no fallback to position alone. Mutates each prepared entry's
-    table and re-binds it, so ``binding`` reflects the table as it now stands
-    (without that a filled cell would still read as unbound/leftover and be
-    both re-read and reported as unaccounted-for).
-    """
-    all_fills = [
-        (p_index, r, c, tok)
-        for p_index, p in enumerate(prepared)
-        for (r, c, tok) in p.get("gap_fills", [])
-    ]
-    fill_budget = all_fills[: Config.VLM_MAX_GAP_FILL_CONFIRMS]
-    if len(all_fills) > len(fill_budget):
-        notes.append(
-            f"{len(all_fills) - len(fill_budget)} figure(s) OCR read inside a table "
-            "but the extracted grid left blank were NOT placed for BUDGET reasons "
-            f"(the {Config.VLM_MAX_GAP_FILL_CONFIRMS}-confirmation-per-document cap, "
-            "INGEST_VLM_MAX_GAP_FILL_CONFIRMS) rather than for lack of evidence."
+    def _emit(self) -> None:
+        stage = next((s for s in _CONCURRENT_STAGES if self._done[s] < self._n), "identify")
+        fraction = _EARLY_DONE + sum(
+            _STAGE_WEIGHTS[s] * self._done[s] / self._n for s in _CONCURRENT_STAGES
         )
+        fraction = min(_PRE_IDENTIFY_CAP, max(self._last, fraction))
+        self._last = fraction
+        n, d = self._n, self._done
+        message = {
+            "convert": f"Reading layout, text and figures (page {min(n, d['convert'] + 1)} of {n})",
+            "vlm": f"Understanding table structure and re-reading rows ({d['vlm']} of {n} pages done)",
+            "verify": f"Checking totals and assembling tables ({d['verify']} of {n} pages done)",
+            "identify": "Working out the entity, year and framework",
+        }[stage]
+        self._report(stage, message, fraction)
 
-    def _run_fill_confirm(p_index: int, row: int, col: int, tok):
-        p = prepared[p_index]
-        page_image = image_by_number.get(p["converted_table"].page_no)
-        ok = vlm_read.confirm_gap_fill(
-            p["table"], row, col, tok, page_image, p["converted_table"],
-        )
-        return p_index, row, col, tok, ok
+    def announce(self) -> None:
+        with self._lock:
+            self._emit()
 
-    confirmed_by_table: dict[int, list] = {}
-    if fill_budget and vlm_available:
-        with ThreadPoolExecutor(max_workers=Config.VLM_RESCUE_CONCURRENCY) as pool:
-            futures = [pool.submit(_run_fill_confirm, *req) for req in fill_budget]
-            for future in futures:
+
+# ---------------------------------------------------------------------------
+# per-table state
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _TableJob:
+    table_no: int
+    region: TableRegion
+    tokens: list[Token] = field(default_factory=list)
+    plan: TablePlan | None = None
+    #: Stages this table has already been counted as finished in. Each table is
+    #: only ever handled by one thread at a time, so no lock is needed.
+    completed: set[str] = field(default_factory=set)
+
+
+class _Extraction:
+    """Everything that happens between preprocessing and identification."""
+
+    def __init__(self, doc_id: str, filename: str, images: dict[int, "np.ndarray"],
+                 vlm_available: bool, progress: _Progress, on_partial: OnPartial | None,
+                 notes: list[str]) -> None:
+        self.doc_id, self.filename = doc_id, filename
+        self.images = images
+        self.vlm = vlm_available
+        self.progress = progress
+        self.on_partial = on_partial
+        self.notes = notes
+
+        self.lock = threading.Lock()
+        self.records: dict[int, TableRecord] = {}
+        self.infos: dict[int, export.TableInfo] = {}
+        self.page_markdown: dict[int, str] = {}
+        self.page_images: dict[int, PageImage] = {}
+        self.page_tables: dict[int, int] = {}
+        self.remaining = {s: {} for s in _CONCURRENT_STAGES}
+        self.outstanding = 0
+        self.layout_finished = False
+        self.all_done = threading.Event()
+        self._last_partial = time.monotonic()
+        self.rows_read = 0
+        self.rows_skipped = 0
+        self.rows_failed = 0
+
+        self.ocr_pool = ThreadPoolExecutor(max(1, Config.OCR_WORKERS), thread_name_prefix="ocr")
+        self.structure_pool = ThreadPoolExecutor(max(1, Config.LLM_STRUCTURE_CONCURRENCY), thread_name_prefix="structure")
+        self.finish_pool = ThreadPoolExecutor(max(2, Config.LLM_VISION_CONCURRENCY), thread_name_prefix="finish")
+        self.vision_pool = ThreadPoolExecutor(max(1, Config.LLM_VISION_CONCURRENCY), thread_name_prefix="vision")
+
+    # -- driving ---------------------------------------------------------
+
+    def run(self, page_nos: list[int]) -> None:
+        """Layout each page in order, feeding tables into the rest as they appear."""
+        table_no = 0
+        self.progress.start("convert")
+        self.progress.announce()
+        try:
+            for page_no in page_nos:
+                image = self.images[page_no]
                 try:
-                    p_index, row, col, tok, ok = future.result()
-                except Exception:
-                    logger.exception("VLM gap-fill confirmation failed")
+                    page = layout_mod.ENGINE.analyse(image, page_no)
+                except Exception as exc:
+                    logger.exception("layout failed on page %s", page_no)
+                    self.notes.append(
+                        f"Page {page_no}: layout analysis failed ({type(exc).__name__}: {exc}). Text and "
+                        "tables on this page are absent from this extraction, which is not evidence "
+                        "that the filing omitted them."
+                    )
+                    page = layout_mod.PageLayout(page_no=page_no, markdown="")
+                self.notes.extend(page.notes)
+                with self.lock:
+                    self.page_markdown[page_no] = page.markdown
+                    count = len(page.regions)
+                    self.page_tables[page_no] = count
+                    for stage in _CONCURRENT_STAGES:
+                        self.remaining[stage][page_no] = count
+                    self.outstanding += count
+
+                if count == 0:
+                    for stage in _CONCURRENT_STAGES:
+                        self.progress.page_done(stage)
+                    self._finish_page(page_no)
                     continue
-                if ok:
-                    confirmed_by_table.setdefault(p_index, []).append((row, col, tok))
-    elif fill_budget:
-        notes.append(
-            f"{len(fill_budget)} figure(s) OCR read inside a table but the "
-            "extracted grid left blank were NOT placed: placing a figure "
-            "requires a second reader to agree, and the vision model was "
-            "unavailable."
+                for region in page.regions:
+                    table_no += 1
+                    self._start_table(_TableJob(table_no, region), page_no)
+        finally:
+            with self.lock:
+                self.layout_finished = True
+                if self.outstanding == 0:
+                    self.all_done.set()
+
+        if not self.all_done.wait(timeout=Config.DOCUMENT_TIMEOUT):
+            self.notes.append(
+                "Extraction hit the time limit; tables still being processed were left out. "
+                "Re-upload the missing pages on their own."
+            )
+        for pool in (self.ocr_pool, self.structure_pool, self.finish_pool, self.vision_pool):
+            pool.shutdown(wait=False, cancel_futures=True)
+        self._publish_partial(force=True)
+
+    # -- chaining ----------------------------------------------------------
+
+    def _chain(self, pool, fn, job: _TableJob, page_no: int, stage: str, nxt) -> None:
+        future = pool.submit(fn, job, page_no)
+
+        def done(fut) -> None:
+            try:
+                fut.result()
+            except Exception as exc:
+                self._fail(job, page_no, stage, exc)
+                return
+            try:
+                nxt(job, page_no)
+            except Exception as exc:  # a broken hand-off must never strand the job
+                self._fail(job, page_no, stage, exc)
+
+        future.add_done_callback(done)
+
+    def _start_table(self, job: _TableJob, page_no: int) -> None:
+        self._chain(self.ocr_pool, self._do_ocr, job, page_no, "convert", self._after_ocr)
+
+    def _after_ocr(self, job: _TableJob, page_no: int) -> None:
+        self._stage_done(job, page_no, "convert")
+        self.progress.start("vlm")
+        self._chain(self.structure_pool, self._do_structure, job, page_no, "vlm", self._after_structure)
+
+    def _after_structure(self, job: _TableJob, page_no: int) -> None:
+        self.progress.start("verify")
+        self._chain(self.finish_pool, self._do_finish, job, page_no, "verify", self._after_finish)
+
+    def _after_finish(self, job: _TableJob, page_no: int) -> None:
+        self._stage_done(job, page_no, "verify")
+        self._table_finished()
+        self._publish_partial(force=False)
+
+    def _fail(self, job: _TableJob, page_no: int, stage: str, exc: Exception) -> None:
+        logger.exception("table %s on page %s failed in %s", job.table_no, page_no, stage)
+        with self.lock:
+            self.notes.append(
+                f"Table {job.table_no} on page {page_no} could not be processed "
+                f"({type(exc).__name__}: {exc}) and is absent from this extraction."
+            )
+        # Whatever this table had not yet been counted in, count it in now:
+        # a failed table must not leave its page's progress waiting forever.
+        for pending in _CONCURRENT_STAGES:
+            self._stage_done(job, page_no, pending)
+        self._table_finished()
+
+    def _stage_done(self, job: _TableJob, page_no: int, stage: str) -> None:
+        if stage in job.completed:
+            return
+        job.completed.add(stage)
+        with self.lock:
+            self.remaining[stage][page_no] -= 1
+            finished = self.remaining[stage][page_no] == 0
+        if finished:
+            self.progress.page_done(stage)
+            if stage == "verify":
+                self._finish_page(page_no)
+
+    def _table_finished(self) -> None:
+        with self.lock:
+            self.outstanding -= 1
+            if self.outstanding == 0 and self.layout_finished:
+                self.all_done.set()
+
+    def _finish_page(self, page_no: int) -> None:
+        """Encode the page image for the document pane, then let go of the bitmap."""
+        image = self.images.pop(page_no, None)
+        if image is not None:
+            self.page_images[page_no] = emit.build_page_image(page_no, image)
+
+    # -- the work ------------------------------------------------------------
+
+    def _do_ocr(self, job: _TableJob, page_no: int) -> None:
+        job.tokens = ocr.read_region(self.images[page_no], job.region.bbox, page_no, job.table_no)
+
+    def _crop(self, job: _TableJob, page_no: int):
+        image = self.images[page_no]
+        h, w = image.shape[:2]
+        x0, y0, x1, y1 = job.region.bbox
+        pad = 12
+        box = (max(0, int(x0 - pad)), max(0, int(y0 - pad)), min(w, int(x1 + pad)), min(h, int(y1 + pad)))
+        return image[box[1]:box[3], box[0]:box[2]], box
+
+    def _do_structure(self, job: _TableJob, page_no: int) -> None:
+        crop, box = self._crop(job, page_no)
+        job.plan = structure.build_plan(
+            job.tokens, job.region, job.table_no, crop, tuple(float(v) for v in box),
+            use_llm=self.vlm, doc_id=self.doc_id,
         )
+        job.plan.notes.extend(structure.header_notes(job.plan))
 
-    for p_index, fills in confirmed_by_table.items():
-        p = prepared[p_index]
-        converted_table = p["converted_table"]
-        if not structure_repair.apply_gap_fills(p["table"], fills):
-            continue
-        header_count = max(
-            [len(p["table"].header)] + [len(r) for r in p["table"].rows]
+    def _take_read_budget(self) -> bool:
+        with self.lock:
+            if self.rows_read >= Config.SECOND_READ_MAX_ROWS:
+                self.rows_skipped += 1
+                return False
+            self.rows_read += 1
+            return True
+
+    def _do_finish(self, job: _TableJob, page_no: int) -> None:
+        plan = job.plan
+        assert plan is not None
+        image = self.images[page_no]
+        value_cols = [c.index for c in plan.value_columns]
+        x0, x1 = job.region.bbox[0], job.region.bbox[2]
+
+        reads: dict[int, second_read.RowRead | None] = {}
+        if self.vlm:
+            pending = {}
+            for row in plan.rows:
+                if not any(row.cells.get(c) for c in value_cols):
+                    continue
+                if not self._take_read_budget():
+                    continue
+                # Tight: a generous margin pulls a neighbouring line into the
+                # strip and the model then reads the wrong line (seen on a real
+                # "Total (B)" row, read as the row beneath it).
+                pad = max(4.0, 0.15 * (row.y1 - row.y0))
+                pending[row.index] = self.vision_pool.submit(
+                    second_read.read_row, image, row.y0, row.y1, x0, x1, pad,
+                    self.doc_id, f"t{job.table_no}_r{row.index}", row.label,
+                )
+            for index, future in pending.items():
+                try:
+                    reads[index] = future.result()
+                except Exception:
+                    reads[index] = None
+                if reads[index] is None:
+                    with self.lock:
+                        self.rows_failed += 1
+
+        self._stage_done(job, page_no, "vlm")
+
+        results: dict[int, dict[int, CellResult]] = {}
+        for row in plan.rows:
+            cells, row_notes = reconcile.reconcile_row(row, value_cols, reads.get(row.index))
+            results[row.index] = cells
+            plan.notes.extend(row_notes)
+
+        crop, _ = self._crop(job, page_no)
+        record, info = export.build_table_record(
+            plan, results, self.doc_id, self.page_markdown.get(page_no, ""),
+            emit.jpeg_b64(crop), self.filename,
         )
-        col_bands = structure_repair._column_ranges(converted_table.cells, header_count)
-        header_bottom = structure_repair._header_bottom(converted_table.cells)
-        ledger = structure_repair.build_number_ledger(
-            converted_table.ocr_lines, header_bottom,
-        )
-        p["binding"] = structure_repair.bind_table(
-            p["table"], ledger, col_bands, converted_table.ocr_lines, header_bottom,
-        )
+        with self.lock:
+            self.records[job.table_no] = record
+            self.infos[job.table_no] = info
+            self.notes.extend(plan.notes)
 
-    return RecoveryStats(
-        requested=len(all_fills),
-        attempted=len(fill_budget) if vlm_available else 0,
-        succeeded=sum(len(fills) for fills in confirmed_by_table.values()),
-    )
+    def _publish_partial(self, force: bool) -> None:
+        if self.on_partial is None:
+            return
+        with self.lock:
+            now = time.monotonic()
+            if not force and now - self._last_partial < Config.PARTIAL_RESULT_INTERVAL_SECONDS:
+                return
+            if not self.records:
+                return
+            self._last_partial = now
+            snapshot = [self.records[n].as_dict() for n in sorted(self.records)]
+        self.on_partial(self.doc_id, snapshot)
 
 
-def _stage_progress(done: float, stage: str, stage_fraction: float) -> float:
-    """The overall fraction to report for a tick WITHIN `stage`, given
-    `done` -- the running total `run()`'s `advance()` closure maintains --
-    and `stage_fraction` (0..1, how much of THIS stage's own work is done,
-    not a fraction of the whole document). Pure function so the arithmetic
-    is directly unit-testable; `run()`'s `report_within_stage` closure below
-    is this plus the actual `report()` call.
-
-    `done` already includes THIS stage's own weight by the time any caller
-    can reach here: `advance(stage, ...)` reports the stage-start message
-    and THEN immediately adds the stage's weight to `done`, in preparation
-    for the NEXT `advance()` call -- so `done` is really "cumulative weight
-    through and including the current stage", not "weight of everything
-    before it". Subtracting the current stage's own weight back out
-    recovers its true starting baseline. Verified empirically, not just
-    derived: an earlier version without this subtraction reported 76.9% at
-    the very first tick inside `convert` (a stage that starts at 20% and is
-    capped at 75%) -- see `tests/test_pipeline_notes.py`.
-    """
-    weight = _STAGE_WEIGHTS.get(stage, 0.0)
-    stage_start = done - weight
-    fraction = max(0.0, min(1.0, stage_fraction))
-    return min(0.99, stage_start + weight * fraction)
-
+# ---------------------------------------------------------------------------
+# run
+# ---------------------------------------------------------------------------
 
 def run(
     data: bytes, filename: str, progress: Progress | None = None,
@@ -286,25 +408,15 @@ def run(
     """Ingest one uploaded PDF and return everything known about it.
 
     `on_partial`, if given, is called periodically (at most every
-    `Config.PARTIAL_RESULT_INTERVAL_SECONDS`, plus always once more for the
-    final table) with `(doc_id, tables_so_far)` while table records are
-    being verified -- `tables_so_far` is already `.as_dict()`-shaped,
-    matching `IngestResult.as_dict()["tables"]`. Deliberately TABLES ONLY:
-    a document's identification (entity, financial year, framework) and its
-    narrative text chunks are computed later, in the `identify` stage,
-    which runs AFTER every table -- there is no cheap way to know "what
-    company is this" any earlier, so a partial snapshot genuinely cannot
-    carry it. See `jobs.PartialResult`'s own docstring for the consumer
-    side of this.
+    `Config.PARTIAL_RESULT_INTERVAL_SECONDS`, plus once more when the last
+    table finishes) with `(doc_id, tables_so_far)`, tables only -- the
+    document's identification and narrative text are computed after every
+    table, so a partial snapshot genuinely cannot carry them.
     """
     report = progress or _noop
+    started = time.monotonic()
     done = 0.0
-    # Structured observability (Config-free, always on -- pure bookkeeping,
-    # never gates anything): how long each stage actually took, timed from
-    # the SAME `advance()` transitions already driving the SSE progress bar,
-    # so this can never drift out of sync with what a caller was shown. See
-    # models.StageDuration.
-    stage_durations: list["StageDuration"] = []
+    stage_durations: list[StageDuration] = []
     _stage_start = time.monotonic()
     _current_stage: str | None = None
 
@@ -318,45 +430,19 @@ def run(
         report(stage, message, min(0.99, done))
         done += _STAGE_WEIGHTS.get(stage, 0.0)
 
-    def report_within_stage(stage: str, message: str, stage_fraction: float) -> None:
-        """A progress tick WITHIN the stage `advance(stage, ...)` most recently
-        entered -- see `_stage_progress` for the arithmetic.
-
-        `advance()` alone gives one tick per stage, called at the stage's
-        START -- fine for the five short stages, dishonest for the two long
-        ones: `convert` (55% of the bar) and the whole-table VLM pass inside
-        the `vlm` stage below, each multi-minute, each otherwise a SINGLE
-        call from this function's point of view. Left as `advance()` alone,
-        the bar sits frozen at one message for the entire multi-minute
-        duration of either -- not wrong, but indistinguishable from a hang
-        to whoever is watching it, with nothing but a 15s SSE heartbeat
-        (`main.py`) to prove otherwise. This adds ticks WITHOUT moving
-        `done` past the current stage's own start -- `advance()` to the
-        NEXT stage still adds the FULL stage weight once, exactly as
-        before; this only fills in what happens between one `advance()`
-        call and the next.
-        """
-        report(stage, message, _stage_progress(done, stage, stage_fraction))
-
     # ---- render ----------------------------------------------------------
     advance("render", "Reading the PDF")
     pages = render.render(data)
     doc_id = emit.doc_id_for(filename, data)
     notes: list[str] = []
 
-    # Purely descriptive now -- see convert._pipeline_options for why this no
-    # longer gates whether OCR runs. `pages_to_pdf` rasterises every page
-    # before docling ever sees it, so OCR is not optional regardless of what
-    # the source PDF had; this stays only to word the note honestly and to
-    # flag a source text layer for a later phase that could read it directly.
     has_text_layer = render.document_has_text_layer(pages)
     if has_text_layer:
         notes.append(
             "This document carries an extractable text layer, but every page is "
-            "rasterised and re-OCR'd before conversion regardless -- the same "
-            "quality corrections (deskew, contrast) apply uniformly whatever the "
-            "source, and OCR of a clean, computer-set page is reliable. Every "
-            "figure below was still read by OCR, not taken from the file's own text."
+            "rasterised and read by OCR regardless -- the same quality corrections "
+            "(deskew, contrast) apply uniformly whatever the source. Every figure "
+            "below was read by OCR from the page image, not taken from the file's own text."
         )
     else:
         notes.append(
@@ -394,865 +480,109 @@ def run(
     kept_images = [images[i] for i in keep]
     kept_qualities = [qualities[i] for i in keep]
 
-    # Release the bitmaps nothing reads again, BEFORE docling loads its models
-    # and allocates its own copies -- the peak is what has to fit, not the
-    # average.
-    #
-    # `pages` holds one raw greyscale render per page and is dead from here:
-    # its last reader was `preprocess` above. At 300 DPI an A4 page is ~8.7 MB,
-    # so a 22-page filing is ~190 MB of arrays kept alive for the rest of the
-    # run purely by the name still being bound. `images` likewise still
-    # references the blank and duplicate pages that `keep` just excluded; the
-    # kept ones survive in `kept_images`, which is what everything downstream
-    # actually uses.
+    # Release the bitmaps nothing reads again before layout loads its models:
+    # the peak is what has to fit, not the average.
     del pages
     del images
 
-    # ---- convert ---------------------------------------------------------
-    advance("convert", "Detecting layout and reading tables")
-    converted = _convert_with_progress(kept_images, kept_qualities, report_within_stage)
-    notes.extend(converted.errors)
-    notes.extend(converted.notes)
-
-    empty_note = _empty_page_note(kept_qualities, converted)
-    if empty_note:
-        notes.append(empty_note)
-
-    # ---- VLM second read -------------------------------------------------
-    vlm_available = Config.vlm_configured() and vlm_read.probe()
-    if vlm_available and not vlm_read.perceives():
-        # The endpoint ACCEPTS images but the model does not perceive them.
-        # Measured on the live deployment: it read an image printing "HELLO
-        # 12345 TOTAL" as "text", said "no image was provided" for a full
-        # balance sheet, and invented a complete income statement when pushed.
-        # probe() cannot see this -- it only checks the request is accepted --
-        # and a second reader that cannot see is worse than none, because what
-        # it invents looks like evidence.
-        vlm_available = False
+    # ---- sideways pages ------------------------------------------------------------
+    # A wide schedule scanned with the paper turned arrives with its text running
+    # bottom-to-top. Turn it upright now, so layout, OCR and the page shown to the
+    # reader all see it the right way up.
+    kept_images, turned = orient.correct_pages(kept_images)
+    for index, degrees in sorted(turned.items()):
+        kept_qualities[index].orientation_quadrant = degrees
         notes.append(
-            "The vision model accepted page images but failed a check that it "
-            "can actually read them (it could not read back a number printed "
-            "in a test image), so its second read was not used. Figures here "
-            "are corroborated by their own arithmetic only. This is a problem "
-            "with how the vision model is being served, not with this document."
+            f"Page {kept_qualities[index].page_no} was scanned sideways; it was turned {degrees} degrees "
+            "clockwise so its text reads upright before it was read."
         )
-    elif not vlm_available:
+
+    # ---- the second reader -------------------------------------------------
+    vlm_available = CLIENT.configured() and CLIENT.perceives(doc_id)
+    if not CLIENT.configured() or not vlm_available:
+        if CLIENT.configured():
+            notes.append(
+                "The vision model accepted page images but failed a check that it can actually read "
+                "them (it could not read back a number printed in a test image), so it was not used. "
+                "Table structure was worked out from positions and figures are read by OCR alone, "
+                "unconfirmed by a second read. This is a problem with how the vision model is being "
+                "served, not with this document."
+            )
+        else:
+            notes.append(
+                "A second independent read by the vision model was not available, so table structure "
+                "was worked out from positions and figures are read by OCR alone, unconfirmed by a second read."
+            )
+
+    # ---- layout, OCR, structure, second read, reconcile, export -------------
+    if _current_stage is not None:
+        stage_durations.append(StageDuration(_current_stage, round(time.monotonic() - _stage_start, 3)))
+        _current_stage = None
+    page_nos = [q.page_no for q in kept_qualities]
+    images_by_page = {q.page_no: img for q, img in zip(kept_qualities, kept_images)}
+    del kept_images
+
+    tracker = _Progress(report, len(page_nos))
+    extraction = _Extraction(doc_id, filename, images_by_page, vlm_available, tracker, on_partial, notes)
+    extraction.run(page_nos)
+
+    for stage, (t0, t1) in tracker.spans.items():
+        stage_durations.append(StageDuration(stage, round(t1 - t0, 3)))
+
+    if extraction.rows_skipped:
         notes.append(
-            "A second independent read by the vision model was not available, so "
-            "figures here are corroborated by their own arithmetic only."
+            f"{extraction.rows_skipped} row(s) were not given a second read because the per-document "
+            "limit was reached; their figures are read by OCR alone."
         )
-    advance("vlm", "Re-reading tables with the vision model" if vlm_available else "Skipping the second read")
-
-    # `advance("verify", ...)` is called LATER, after the whole-table VLM
-    # pass below (Pass 2) actually runs -- it used to fire here, before any
-    # of that ran, which meant the single biggest remaining chunk of real
-    # wall-clock time in the whole pipeline (measured: 5-10 minutes on a
-    # filing with 40+ tables) executed silently under the "verify" stage's
-    # label and 5% budget while still SHOWING "Re-reading tables with the
-    # vision model" from the `advance("vlm", ...)` above -- the progress bar
-    # would sit still through the vlm stage's own share, jump to ~verify's
-    # starting point, then sit still AGAIN for the whole VLM wave under the
-    # wrong label. Moved so the stage a user sees matches the work actually
-    # running underneath it.
-    records = []
-    page_by_number = {q.page_no: q for q in kept_qualities}
-    image_by_number = {q.page_no: img for q, img in zip(kept_qualities, kept_images)}
-
-    # Titles, recovered from the page rather than from the table.
-    #
-    # docling supplies a caption only where the document marks one up, and a
-    # scanned filing marks up nothing -- every table came back with title=None
-    # on the real corpus. That matters more than it looks: `financial_stmt_type`
-    # is derived from the title, and without it `_find_statement_tables` matches
-    # nothing and every downstream tool reports the document as having no
-    # financial statements at all.
-    #
-    # So each page's own markdown is parsed too, where `parse_markdown_tables`
-    # captures the prose line immediately above each table as its title, and the
-    # titles are matched to docling's tables by their order on the page.
-    titles_by_page: dict[int, list[str | None]] = {}
-    for page_no, page_md in converted.page_markdown.items():
-        titles_by_page[page_no] = [t.title for t in parse_markdown_tables(page_md, page_no)]
-    seen_on_page: dict[int, int] = {}
-
-    # Pass 1: parse every table and prepare its crop/snippet. Cheap, local,
-    # CPU-only work -- collected rather than acted on immediately, because the
-    # one genuinely slow step below, the VLM round trip, is network I/O and
-    # completely independent from one table to the next. Running it serially
-    # here used to mean the total wait was (table count) x (one VLM call);
-    # measured on a real filing, ~15-20s per call, and a document with 40+
-    # tables spent most of a 5-10 minute conversion in this loop alone, while
-    # docling's own layout+OCR pass over the same pages took a fraction of
-    # that. See Pass 2.
-    prepared = []
-    for index, converted_table in enumerate(converted.tables, 1):
-        parsed = parse_markdown_tables(
-            converted_table.markdown, converted_table.page_no, prefix=f"t{index}_"
-        )
-        if not parsed:
-            continue
-        table = parsed[0]
-
-        nth = seen_on_page.get(converted_table.page_no, 0)
-        seen_on_page[converted_table.page_no] = nth + 1
-        from_page = titles_by_page.get(converted_table.page_no) or []
-        table.title = (
-            converted_table.title
-            or table.title
-            or (from_page[nth] if nth < len(from_page) else None)
+    if extraction.rows_failed:
+        notes.append(
+            f"The second read failed for {extraction.rows_failed} row(s); their figures are read by OCR alone."
         )
 
-        snippet = None
-        crop = None
-        page_image = image_by_number.get(converted_table.page_no)
-        if page_image is not None:
-            # No page height passed: crop() derives it from the image and
-            # RENDER_DPI, which is the only correct answer here. It used to be
-            # passed as None against a required parameter, which silently
-            # cropped in the wrong coordinate space -- see crop()'s docstring.
-            crop = vlm_read.crop(page_image, converted_table.bbox)
-            # The citation snippet is produced whether or not the vision model
-            # is reachable: showing the reader the scan a figure came from is
-            # not contingent on a second model having read it.
-            snippet = vlm_read.snippet(crop)
+    order = sorted(extraction.records)
+    records = [extraction.records[n] for n in order]
+    infos = [extraction.infos[n] for n in order]
 
-        prepared.append({
-            "index": index,
-            "converted_table": converted_table,
-            "table": table,
-            "crop": crop,
-            "snippet": snippet,
-            "needs_vlm": crop is not None and vlm_available and index <= Config.VLM_MAX_TABLES,
-            # Whether THIS table's own row/column grid looks unreliable --
-            # computed now, independent of whether a VLM call is even
-            # available, so the note it produces (see Pass 3a) is honest
-            # about the grid even when structure re-read itself is disabled.
-            "structural_risk": vlm_read.assess_structural_risk(table, converted_table),
-        })
-
-    cap_note = _vlm_cap_note(prepared, vlm_available)
-    if cap_note:
-        notes.append(cap_note)
-
-    # Pass 2: fire every table's second read at once, bounded by
-    # Config.VLM_CONCURRENCY rather than left unbounded, because this hits the
-    # SAME vLLM endpoint the live chat agent generates against -- a large
-    # ingestion job must not be able to flood it and starve every other user's
-    # chat latency while it runs.
-    vlm_results: dict[int, str | None] = {}
-    to_transcribe = [p for p in prepared if p["needs_vlm"]]
-    if to_transcribe:
-        with ThreadPoolExecutor(max_workers=Config.VLM_CONCURRENCY) as pool:
-            futures = {
-                pool.submit(
-                    vlm_read.transcribe,
-                    p["crop"],
-                    # Blind by default (Config.VLM_BLIND_READ): no seed, no
-                    # column pinning to docling's grid, so the read is
-                    # independent evidence rather than a corrected echo.
-                    None if Config.VLM_BLIND_READ else p["table"].to_markdown(),
-                ): p["index"]
-                for p in to_transcribe
-            }
-            # REAL progress here, not estimated -- unlike `convert()`, this
-            # loop is this function's own code, so each `future.result()`
-            # returning is a genuine completion event, not a guess. `.items()`
-            # order is submission order, not completion order, so a slow
-            # early table can hold this loop at N-1/N for a while when a
-            # later one already finished -- the count is still exact at every
-            # point it's reported, just not evenly paced against wall time.
-            for completed, (future, index) in enumerate(futures.items(), 1):
-                try:
-                    vlm_results[index] = future.result()
-                except Exception:
-                    # transcribe() already catches its own request/parse
-                    # errors and returns None -- this is a second net, not the
-                    # expected path, so it is logged rather than silently
-                    # swallowed. Either way one table's read failing must not
-                    # take the rest of the document down with it.
-                    logger.exception("VLM transcription failed for table %d", index)
-                    vlm_results[index] = None
-                report_within_stage(
-                    "vlm",
-                    f"Re-reading tables with the vision model ({completed} of "
-                    f"{len(to_transcribe)})",
-                    completed / len(to_transcribe),
-                )
-
-    # ---- verify ------------------------------------------------------
-    # Real work starts here, not at the earlier `advance("vlm", ...)` --
-    # see that call site's own comment for why the boundary moved.
-    advance("verify", "Checking that the figures add up")
-
-    # Pass 2a: rejoin captions that wrapped onto a second printed line.
-    # Deterministic and geometry-only -- it needs neither the vision model
-    # nor number binding -- so it runs unconditionally, and BEFORE anything
-    # below holds a row index: `alignment`, `disagreements`, `unmatched`,
-    # `vlm_only` and `binding` are all built later, which makes this the one
-    # insertion point where the row-index remap obligation `merge_wrapped_
-    # labels` and `insert_unclaimed_rows` both carry is a no-op. Running it
-    # before `select_structure` also lets docling's table compete in its
-    # repaired form. See `structure_repair.join_wrapped_labels` for the five
-    # guards, and why a joined row is never one whose figures moved.
-    if Config.WRAPPED_LABEL_JOIN:
-        for p in prepared:
-            converted_table = p["converted_table"]
-            joined, _ = structure_repair.join_wrapped_labels(
-                p["table"], converted_table.ocr_lines,
-                structure_repair._header_bottom(converted_table.cells),
-            )
-            if joined:
-                notes.append(
-                    f"Table {p['index']} on page {converted_table.page_no}: "
-                    f"{len(joined)} row(s) whose printed label wrapped onto a "
-                    "second line were rejoined with the row carrying their "
-                    "figures, confirmed by the label's own indentation in the "
-                    "page's OCR text. No figure changed."
-                )
-
-    # Pass 2b: OCR number binding -- "the VLM proposes, OCR disposes" (see
-    # structure_repair.py's module docstring for the full architecture).
-    # For every table, bind BOTH docling's own reading and the vision
-    # model's independent read (already fetched in Pass 2 above, at zero
-    # extra API cost when Config.VLM_BLIND_READ is on, its default) against
-    # the SAME ledger of numbers OCR actually read off the page, and keep
-    # whichever structure accounts for more of them. Replaces an earlier
-    # design that compared the two structures by footing strength
-    # (`vlm_read.select_structure`'s own docstring records the real-document
-    # measurement that broke it: footing rewards fragmentation).
-    #
-    # Runs even when the vision model is unreachable: `select_structure`
-    # degrades to binding docling's OWN table against the ledger with no
-    # candidate to compare against, which still powers gap filling and the
-    # half-read report from OCR geometry alone.
-    gap_fill_stats = RecoveryStats()
-    if Config.NUMBER_BINDING_ENABLED:
-        for p in prepared:
-            index = p["index"]
-            converted_table = p["converted_table"]
-            blind_markdown = (
-                vlm_results.get(index) if Config.VLM_BLIND_READ
-                else (vlm_read.transcribe(p["crop"], None) if p["crop"] is not None else None)
-            )
-            chosen, binding, replaced, reason = vlm_read.select_structure(
-                blind_markdown, converted_table, p["table"], prefix=f"t{index}_",
-            )
-            if chosen is not p["table"]:
-                # select_structure's candidate is parsed fresh from the
-                # VLM's own markdown, which carries no caption -- without
-                # this the table loses its title (and so its searchability
-                # by title in get_schedule_note/review_account_area/etc.)
-                # the moment its structure is replaced.
-                chosen.title = p["table"].title
-            p["table"] = chosen
-            p["structure_replaced"] = replaced
-
-            if binding.refused:
-                notes.append(
-                    f"Table {index} on page {converted_table.page_no}: its figures "
-                    "could not be checked against the page's own OCR numbers "
-                    f"({binding.refused})."
-                )
-                p["binding"] = None
-                continue
-
-            if replaced:
-                notes.append(
-                    f"Table {index} on page {converted_table.page_no}: TableFormer's "
-                    "own row/column grid accounted for fewer of the figures actually "
-                    f"printed in this table than an independent read of the same "
-                    f"region did ({reason}), so the independent read was used. "
-                    f"{len(binding.bound)} of its figures were matched to a number "
-                    "the OCR engine independently read at the same position on the page."
-                )
-
-            p["binding"] = binding
-            # A gap fill is only ever PROPOSED here. It is placed later, and
-            # only if a second reader independently reads the same figure --
-            # see the confirmation wave below. Position alone never places
-            # a number.
-            p["gap_fills"] = (
-                structure_repair.propose_gap_fills(p["table"], binding)
-                if Config.NUMBER_BINDING_GAP_FILL else []
-            )
-
-        gap_fill_stats = _place_confirmed_gap_fills(prepared, vlm_available, image_by_number, notes)
-
-        # The half-read report, computed AFTER any fills so it describes the
-        # table as it now stands.
-        for p in prepared:
-            binding = p.get("binding")
-            if binding is None:
-                continue
-            index = p["index"]
-            converted_table = p["converted_table"]
-            # The half-read report: a figure printed inside this table's
-            # region that no row or column of the CHOSEN structure accounts
-            # for. Emitted regardless of whether the table was replaced -- a
-            # docling table that "won" the coverage comparison and still
-            # leaves figures on the floor is exactly as half-read as one
-            # that lost it.
-            value_bands = set(binding.col_map.values())
-            unaccounted = [
-                t for t in binding.leftover
-                if t.column in value_bands and not t.interpolated
-                and (t.confidence is None or t.confidence >= 0.60)
-            ]
-            if unaccounted:
-                sample = ", ".join(t.text for t in unaccounted[:3])
-                more = f", and {len(unaccounted) - 3} more" if len(unaccounted) > 3 else ""
-                notes.append(
-                    f"Table {index} on page {converted_table.page_no}: "
-                    f"{len(unaccounted)} figure(s) printed inside this table's region "
-                    f"({sample}{more}) are not accounted for by any row or column of "
-                    "the extracted table. This table may be only partly read -- check "
-                    "it against the original scan."
-                )
-            if binding.unanchored_rows:
-                notes.append(
-                    f"Table {index} on page {converted_table.page_no}: "
-                    f"{len(binding.unanchored_rows)} row(s) could not be located in "
-                    "the page's own OCR text, so their figures had no independent "
-                    "position to check against; each is re-read individually and "
-                    "shown only where that re-read agreed."
-                )
-
-        # One bounded, DOCUMENT-WIDE wave of targeted re-reads for every
-        # UNBOUND cell that claims a number -- the escape hatch for a figure
-        # the chosen structure states but no OCR token backs at that
-        # position. Same cross-table batching reasoning as Pass 3b below:
-        # one shared budget and one bounded pool for the whole document.
-        all_unbound = [
-            (p_index, r, c)
-            for p_index, p in enumerate(prepared)
-            if p.get("binding") is not None
-            for (r, c) in p["binding"].unbound
-            if p["table"].cell(r, c).value is not None
-        ]
-        binding_budget = all_unbound[: Config.VLM_MAX_BINDING_REREADS]
-        if len(all_unbound) > len(binding_budget):
-            notes.append(
-                f"{len(all_unbound) - len(binding_budget)} cell(s) with a figure the "
-                "page's own OCR text did not confirm were left withheld for BUDGET "
-                f"reasons (the {Config.VLM_MAX_BINDING_REREADS}-re-read-per-document "
-                "cap, INGEST_VLM_MAX_BINDING_REREADS) rather than for lack of evidence."
-            )
-
-        def _run_binding_reread(p_index: int, row: int, col: int):
-            p = prepared[p_index]
-            page_image = image_by_number.get(p["converted_table"].page_no)
-            confirmed = vlm_read.resolve_unbound_cell(
-                p["table"], row, col, page_image, p["converted_table"],
-            )
-            return p_index, row, col, confirmed
-
-        for p in prepared:
-            p["unsupported"] = set()
-        if binding_budget and vlm_available:
-            with ThreadPoolExecutor(max_workers=Config.VLM_RESCUE_CONCURRENCY) as pool:
-                futures = [pool.submit(_run_binding_reread, *req) for req in binding_budget]
-                for future in futures:
-                    try:
-                        p_index, row, col, confirmed = future.result()
-                    except Exception:
-                        logger.exception("VLM number-binding escape-hatch read failed")
-                        continue
-                    if not confirmed:
-                        prepared[p_index]["unsupported"].add((row, col))
-        elif binding_budget:
-            # The VLM is unreachable, so the escape hatch cannot run at all
-            # -- every unbound cell it would have tried stays withheld for
-            # lack of a second opinion, same degradation as everywhere else
-            # a missing VLM narrows what this pipeline will vouch for.
-            for p_index, row, col in binding_budget:
-                prepared[p_index]["unsupported"].add((row, col))
-    else:
-        for p in prepared:
-            p["structure_replaced"] = False
-            p["unsupported"] = set()
-
-    # Pass 3a: draft every table's verification -- baseline footings plus
-    # every doubtful cell classified, but NOTHING emitted yet (see
-    # verify.draft_table). Kept separate from resolving so a targeted rescue
-    # call for a cell nothing else can recover (Pass 3b, next) can still run
-    # BEFORE any finding or marker is built, exactly like the whole-table VLM
-    # pass above is separated from parsing for the same reason: the slow,
-    # independent network calls should not force the document to be processed
-    # one table at a time.
-    drafts: list[dict] = []
-    # Shared per-DOCUMENT budget for band rescues (Config.VLM_MAX_BAND_RESCUES)
-    # -- a different, more expensive call than the per-cell rescue below, so
-    # it gets its own running total across every table in this document.
-    band_rescue_budget = Config.VLM_MAX_BAND_RESCUES if Config.VLM_BAND_RESCUE_ENABLED else 0
-    for p in prepared:
-        index = p["index"]
-        converted_table = p["converted_table"]
-        table = p["table"]
-
-        agreement = None
-        alignment_grounded = False
-        disagreements: set[tuple[int, int]] = set()
-        unmatched: set[int] = set()
-        vlm_only: set[int] = set()
-        # The VLM's own text for each disagreeing cell, keyed exactly as
-        # verify.py's readers_disagree tier needs it -- this is what lets
-        # that tier try the VLM's candidate in the footing arithmetic
-        # instead of only withholding docling's disagreeing figure.
-        vlm_cell_text: dict[tuple[int, int], str] = {}
-
-        # Whether Pass 2b (above) already replaced this table's grid with an
-        # independently-bound structure. If so, every later step in this
-        # loop (compare/merge/insert-unclaimed/band-rescue) must be skipped
-        # for it -- they all reason about docling's grid, which binding has
-        # just discarded in favour of one bound against the page's own OCR
-        # numbers. Deliberately NOT marked `vlm_only`: unlike an ordinary
-        # whole-table VLM splice, every figure in a bound table is either
-        # bound to an OCR token at a consistent position, deterministically
-        # gap-filled from OCR geometry, or confirmed by an agreeing targeted
-        # re-read (Pass 2b's escape hatch) -- strictly stronger evidence
-        # than `vlm_only_row` implies, and marking it that way made
-        # arithmetic promotion structurally impossible (see
-        # verify.py's Phase C: the overlay candidate for a vlm_only cell IS
-        # its own text, so the overlay footing signature always equals the
-        # baseline one and is skipped). Anything in this table that is NOT
-        # one of those three is in `unsupported_cells` instead.
-        structure_replaced = p.get("structure_replaced", False)
-
-        if p["needs_vlm"] and not structure_replaced:
-            second = vlm_results.get(index)
-            if second:
-                alignment = vlm_read.compare(table, second)
-                # An unusable alignment is NOT a table full of disagreements.
-                # Absent, truncated or structurally incomparable reads leave
-                # both sets empty so the table is verified on arithmetic
-                # alone -- the same degradation as an unreachable model.
-                # Treating it as disagreement would blank a whole schedule
-                # over a dropped connection.
-                if alignment.usable:
-                    agreement = alignment.agreement
-                    alignment_grounded = alignment.grounded
-                    disagreements = alignment.disagreements
-                    unmatched = alignment.unmatched_rows
-
-                    # Rejoin a wrapped label with the row carrying its
-                    # figures FIRST. Both this and insert_unclaimed_rows
-                    # below MUTATE table.rows and shift row indices, and
-                    # insert_unclaimed_rows reads alignment.pairs /
-                    # alignment.unmatched_rows DIRECTLY -- so those have to be
-                    # remapped here too, not just the pipeline's own copies,
-                    # or the second call would build its own map against rows
-                    # that no longer exist.
-                    merged, merge_remap = vlm_read.merge_wrapped_labels(
-                        table, alignment, converted_table.ocr_lines,
-                        structure_repair._header_bottom(converted_table.cells),
-                    )
-                    if merged:
-                        alignment.pairs = {
-                            merge_remap[r]: j for r, j in alignment.pairs.items()
-                        }
-                        alignment.unmatched_rows = {
-                            merge_remap[r] for r in alignment.unmatched_rows
-                        }
-                        disagreements = {(merge_remap[r], c) for r, c in disagreements}
-                        unmatched = {merge_remap[r] for r in unmatched}
-                        notes.append(
-                            f"Table {index} on page {converted_table.page_no}: "
-                            f"{len(merged)} row(s) whose printed label wrapped "
-                            "onto a second line were rejoined with the row "
-                            "carrying their figures, confirmed against the "
-                            "vision model's independent read. No figure changed."
-                        )
-
-                    # Splice in any row the vision model found that docling
-                    # never emitted at all -- see insert_unclaimed_rows. Same
-                    # index-shifting obligation as above.
-                    inserted, remap = vlm_read.insert_unclaimed_rows(table, alignment)
-                    if inserted:
-                        disagreements = {(remap[r], c) for r, c in disagreements}
-                        unmatched = {remap[r] for r in unmatched}
-                        vlm_only = set(inserted)
-                        notes.append(
-                            f"Table {index} on page {converted_table.page_no}: "
-                            f"{len(inserted)} row(s) found only by the vision "
-                            "model's independent read were added; their figures "
-                            "show only where the column's own arithmetic "
-                            "confirms them."
-                        )
-
-                    for (r, c) in disagreements:
-                        j = alignment.pairs.get(r)
-                        vc = alignment.col_map.get(c)
-                        if (j is not None and vc is not None
-                                and j < len(alignment.vlm_body) and vc < len(alignment.vlm_body[j])):
-                            vlm_cell_text[(r, c)] = alignment.vlm_body[j][vc]
-                else:
-                    notes.append(
-                        f"Table {index} on page {converted_table.page_no}: the "
-                        f"second read could not be compared ({alignment.reason}), "
-                        "so its figures rest on their own arithmetic only."
-                    )
-
-        # Split any row that looks like SEVERAL real line items TableFormer
-        # merged into one (see vlm_read._looks_merged) -- a different defect
-        # from a single unreadable cell, and one a whole-table Alignment
-        # cannot fix even when it succeeded above (a garbled multi-item
-        # label practically never pairs cleanly in compare() anyway).
-        # Independent of whether the whole-table read above ran or
-        # succeeded: this is its own targeted call, on its own budget.
-        # Deliberately LAST of the three structural repairs -- like
-        # insert_unclaimed_rows above, it shifts row indices, so every set
-        # built against `table` before this point must be remapped through
-        # it or dropped.
-        if (
-            Config.VLM_BAND_RESCUE_ENABLED
-            and vlm_available
-            and band_rescue_budget > 0
-            and not structure_replaced
-        ):
-            page_image_for_band = image_by_number.get(converted_table.page_no)
-            split_rows, split_remap, split_notes, attempted = vlm_read.split_merged_rows(
-                table, converted_table, page_image_for_band, max_attempts=band_rescue_budget,
-            )
-            band_rescue_budget -= attempted
-            if split_rows:
-                disagreements = {
-                    (split_remap[r], c) for r, c in disagreements if r in split_remap
-                }
-                unmatched = {split_remap[r] for r in unmatched if r in split_remap}
-                vlm_only = {split_remap[r] for r in vlm_only if r in split_remap} | split_rows
-                vlm_cell_text = {
-                    (split_remap[r], c): text
-                    for (r, c), text in vlm_cell_text.items() if r in split_remap
-                }
-                notes.extend(split_notes)
-
-        # Empty cells the page proves held a figure. Computed HERE, on the
-        # FINAL table, because everything above (the wrapped-label joins,
-        # inserted VLM rows, band splits) shifts row indices -- the
-        # classifier reads the table as it now stands, so its cell
-        # coordinates are valid for `draft_table` with no remap.
-        lost_cells: set[tuple[int, int]] = set()
-        if Config.LABEL_ONLY_ROW_REPORTING:
-            _, lost_cells = structure_repair.classify_label_only_rows(table, converted_table)
-            if lost_cells:
-                notes.append(
-                    f"Table {index} on page {converted_table.page_no}: "
-                    f"{len(lost_cells)} cell(s) whose figure the page's own OCR "
-                    "text shows but the extracted grid left empty. They are "
-                    "withheld and re-read rather than shown as blank -- a "
-                    "blank reads as a nil balance."
-                )
-
-        page_quality = page_by_number.get(converted_table.page_no)
-        draft = verify.draft_table(
-            table,
-            converted_table.page_no,
-            vlm_disagreements=disagreements,
-            ocr_score=page_quality.ocr_score if page_quality else None,
-            unmatched_rows=unmatched,
-            vlm_only_rows=vlm_only,
-            vlm_cell_text=vlm_cell_text,
-            unsupported_cells=p.get("unsupported", set()),
-            lost_figure_cells=lost_cells,
-        )
-        drafts.append({
-            "index": index,
-            "converted_table": converted_table,
-            "table": table,
-            "agreement": agreement,
-            "alignment_grounded": alignment_grounded,
-            "vlm_cell_text": vlm_cell_text,
-            "draft": draft,
-        })
-
-    # Pass 3b: one bounded, DOCUMENT-WIDE batch of targeted rescue calls for
-    # every cell Pass 3a could not already resolve (unreadable_text,
-    # low_ocr_confidence, no_second_read_for_row -- see verify.draft_table's
-    # rescue_requests). Batched across every table, not per table, for the
-    # same reason the whole-table pass above is: one shared budget and one
-    # bounded pool for the whole document, rather than N independent pools
-    # each able to spike the shared endpoint.
-    rescued_by_draft: dict[int, dict[tuple[int, int], "vlm_read.RescueResult"]] = {}
-    if vlm_available and Config.VLM_RESCUE_ENABLED:
-        all_requests: list[tuple[int, int, int, str, str]] = [
-            (d_index, row, col, row_label, column_name)
-            for d_index, d in enumerate(drafts)
-            for (row, col, row_label, column_name) in d["draft"].rescue_requests
-        ]
-        budget = all_requests[: Config.VLM_MAX_RESCUES]
-        if len(all_requests) > len(budget):
-            notes.append(
-                f"{len(all_requests) - len(budget)} cell(s) needing a targeted "
-                f"second-chance read were left withheld for BUDGET reasons (the "
-                f"{Config.VLM_MAX_RESCUES}-rescue-per-document cap, "
-                "INGEST_VLM_MAX_RESCUES) rather than for lack of evidence."
-            )
-
-        def _run_rescue(d_index: int, row: int, col: int, row_label: str, column_name: str):
-            d = drafts[d_index]
-            converted_table = d["converted_table"]
-            table = d["table"]
-            page_image = image_by_number.get(converted_table.page_no)
-            no_candidate = vlm_read.RescueResult(text=None, anchored=False)
-            if page_image is None:
-                return d_index, row, col, no_candidate
-
-            image = vlm_read.row_band(page_image, converted_table, row_label)
-            if image is None:
-                # Fall back to the same whole-table crop the table-level pass
-                # already prepared, with the same targeted instruction naming
-                # the row/column -- weaker (more for the model to search
-                # within) but better than no rescue attempt at all.
-                image = next(
-                    (p["crop"] for p in prepared if p["index"] == d["index"]), None,
-                )
-            if image is None:
-                return d_index, row, col, no_candidate
-
-            reply = vlm_read.transcribe_row(image, row_label, column_name)
-            if not reply:
-                return d_index, row, col, no_candidate
-            cells = vlm_read.parse_rescue_row(reply)
-            if not cells:
-                return d_index, row, col, no_candidate
-
-            # ANCHOR the read against the row's OTHER already-trusted figures
-            # -- never shown to the model -- before accepting anything it
-            # said about the cell actually asked about. Not accepted at all
-            # (text stays None) when anchoring fails, INCLUDING when there
-            # was no anchor to check against: honest degradation, not blind
-            # trust. See check_rescue_anchors's docstring.
-            anchored = vlm_read.check_rescue_anchors(table, row, col, cells)
-            if not anchored:
-                return d_index, row, col, no_candidate
-            text = vlm_read.rescue_cell_text(table, row, col, cells)
-            return d_index, row, col, vlm_read.RescueResult(text=text, anchored=True)
-
-        if budget:
-            with ThreadPoolExecutor(max_workers=Config.VLM_RESCUE_CONCURRENCY) as pool:
-                futures = [pool.submit(_run_rescue, *request) for request in budget]
-                for future in futures:
-                    try:
-                        d_index, row, col, result = future.result()
-                    except Exception:
-                        logger.exception("VLM targeted rescue read failed")
-                        continue
-                    rescued_by_draft.setdefault(d_index, {})[(row, col)] = result
-
-    rescue_stats = RecoveryStats(
-        requested=len(all_requests) if vlm_available and Config.VLM_RESCUE_ENABLED else 0,
-        attempted=len(budget) if vlm_available and Config.VLM_RESCUE_ENABLED else 0,
-        succeeded=sum(
-            1 for by_cell in rescued_by_draft.values()
-            for result in by_cell.values() if result.text is not None
-        ),
-    )
-
-    # Pass 3b-2: closed-world resolution for every `readers_disagree` cell
-    # that already has two candidates (see verify.draft_table's
-    # disagreement_requests) -- force a choice between EXACTLY those two
-    # readings rather than trusting the VLM's reading directly. Same
-    # document-wide batching reasoning as Pass 3b: one shared budget, one
-    # bounded pool, not N independent pools each hitting the shared endpoint.
-    closed_world_by_draft: dict[int, dict[tuple[int, int], str | None]] = {}
-    if vlm_available and Config.VLM_DISAGREEMENT_RESOLUTION_ENABLED:
-        all_disagreements: list[tuple[int, int, int, str, str, str, str]] = [
-            (d_index, row, col, row_label, column_name, candidate_a, candidate_b)
-            for d_index, d in enumerate(drafts)
-            for (row, col, row_label, column_name, candidate_a, candidate_b)
-            in d["draft"].disagreement_requests
-        ]
-        disagreement_budget = all_disagreements[:Config.VLM_MAX_DISAGREEMENT_RESOLUTIONS]
-        if len(all_disagreements) > len(disagreement_budget):
-            notes.append(
-                f"{len(all_disagreements) - len(disagreement_budget)} cell(s) where two "
-                "readers disagreed were left with the vision model's own reading, "
-                "unconfirmed, for BUDGET reasons (the "
-                f"{Config.VLM_MAX_DISAGREEMENT_RESOLUTIONS}-per-document cap, "
-                "INGEST_VLM_MAX_DISAGREEMENT_RESOLUTIONS)."
-            )
-
-        def _run_disagreement(
-            d_index: int, row: int, col: int, row_label: str, column_name: str,
-            candidate_a: str, candidate_b: str,
-        ):
-            d = drafts[d_index]
-            image = next((p["crop"] for p in prepared if p["index"] == d["index"]), None)
-            if image is None:
-                return d_index, row, col, None
-            choice = vlm_read.resolve_disagreement(
-                image, row_label, column_name, [candidate_a, candidate_b],
-            )
-            return d_index, row, col, choice
-
-        if disagreement_budget:
-            with ThreadPoolExecutor(max_workers=Config.VLM_RESCUE_CONCURRENCY) as pool:
-                futures = [pool.submit(_run_disagreement, *request) for request in disagreement_budget]
-                for future in futures:
-                    try:
-                        d_index, row, col, choice = future.result()
-                    except Exception:
-                        logger.exception("VLM closed-world disagreement resolution failed")
-                        continue
-                    closed_world_by_draft.setdefault(d_index, {})[(row, col)] = choice
-
-    disagreement_stats = RecoveryStats(
-        requested=(
-            len(all_disagreements)
-            if vlm_available and Config.VLM_DISAGREEMENT_RESOLUTION_ENABLED else 0
-        ),
-        attempted=(
-            len(disagreement_budget)
-            if vlm_available and Config.VLM_DISAGREEMENT_RESOLUTION_ENABLED else 0
-        ),
-        succeeded=sum(
-            1 for by_cell in closed_world_by_draft.values()
-            for choice in by_cell.values() if choice is not None
-        ),
-    )
-
-    # Pass 3c: resolve every table's recovery (arithmetic promotion first,
-    # then whatever stays display-only), apply what got promoted, redact
-    # what did not, and assemble records -- in ORIGINAL TABLE ORDER, not in
-    # whatever order Pass 3b's futures happened to finish, since notes and
-    # the eventual table list both need to read top-to-bottom the way the
-    # document does.
-    last_partial_at = time.monotonic()
-    for d_index, d in enumerate(drafts):
-        index = d["index"]
-        converted_table = d["converted_table"]
-        table = d["table"]
-
-        checks, findings, recovered = verify.resolve_recoveries(
-            d["draft"],
-            vlm_cell_text=d["vlm_cell_text"],
-            alignment_grounded=d["alignment_grounded"],
-            alignment_agreement=d["agreement"],
-            rescued=rescued_by_draft.get(d_index, {}),
-            closed_world_choice=closed_world_by_draft.get(d_index, {}),
-        )
-        # Promoted figures' own text must be in the table BEFORE redact,
-        # which only ever touches cells named in `findings` -- a promoted
-        # cell is never in that list, by construction.
-        verify.apply_recoveries(table, recovered)
-        # Redact BEFORE building the record: the record carries the markdown the
-        # model will eventually read, and an unverified figure must not be in it.
-        verify.redact(table, findings)
-
-        if recovered:
-            notes.append(
-                f"Table {index} on page {converted_table.page_no}: "
-                f"{len(recovered)} figure(s) recovered from a second read and "
-                "CONFIRMED by the column's own arithmetic -- shown as plain "
-                "numbers, exactly like a cleanly-read figure."
-            )
-
-        # Current/Previous-year column-order check -- a SIGNAL, never a fix
-        # (see structure_repair.detect_year_column_order's own docstring for
-        # why this refuses to reorder anything itself). Run after redact, not
-        # before: the check reads the table's own header text as it stands in
-        # the FINAL emitted record, not an intermediate draft that redaction
-        # might still change the shape of.
-        year_order_warning = structure_repair.detect_year_column_order(table)
-        if year_order_warning:
-            notes.append(
-                f"Table {index} on page {converted_table.page_no}: {year_order_warning}. "
-                "Figures are shown as extracted; verify the year columns against the "
-                "original scan before relying on this table's current/previous-year split."
-            )
-
-        p = next((p for p in prepared if p["index"] == index), None)
-        records.append(emit.build_table_record(
-            table=table,
-            doc_id=doc_id,
-            page_no=converted_table.page_no,
-            surrounding_text=converted.page_markdown.get(converted_table.page_no, ""),
-            footings=checks,
-            findings=findings,
-            bbox=converted_table.bbox,
-            vlm_agreement=d["agreement"],
-            snippet_jpeg_b64=p["snippet"] if p else None,
-            source_file=filename,
-            recovered=recovered,
-        ))
-
-        # Throttled, not per-table: on a 60+ table filing this loop does no
-        # network I/O (the VLM/rescue calls that do already ran earlier), so
-        # WITHOUT a throttle this would fire an SSE frame per table -- needless
-        # traffic for a consumer that only wants "roughly how much is ready".
-        # The final table always fires regardless of the interval (`is_last`),
-        # so a caller never waits past the loop's own end for the complete set.
-        if on_partial is not None:
-            now = time.monotonic()
-            is_last = d_index == len(drafts) - 1
-            if is_last or (now - last_partial_at) >= Config.PARTIAL_RESULT_INTERVAL_SECONDS:
-                on_partial(doc_id, [r.as_dict() for r in records])
-                last_partial_at = now
-
-    # Cross-page continuation check -- a SIGNAL, never a merge (see
-    # structure_repair.detect_cross_page_continuation's own docstring). Run
-    # over `drafts` in document order, after every table's own redact/apply
-    # above, so it reads each table's FINAL shape. Adjacent in `drafts`
-    # means adjacent in reading order; the function itself refuses unless
-    # the two tables' page numbers are exactly consecutive.
-    for prev_d, next_d in zip(drafts, drafts[1:]):
-        continuation_warning = structure_repair.detect_cross_page_continuation(
-            prev_d["table"], next_d["table"],
-        )
-        if continuation_warning:
-            notes.append(
-                f"Table {prev_d['index']} on page {prev_d['converted_table'].page_no} / "
-                f"Table {next_d['index']} on page {next_d['converted_table'].page_no}: "
-                f"{continuation_warning}. Shown as two separate tables; verify any closing "
-                "total against both before relying on either one alone."
-            )
-
-    # ---- page images -------------------------------------------------------
-    #
-    # One JPEG per kept page (blank/duplicate pages are already excluded from
-    # `kept_qualities`), so the document pane can show the reader exactly what
-    # OCR/docling saw. Built from `image_by_number` -- the already-corrected
-    # `kept_images` bitmaps, in hand above at zero extra rendering cost --
-    # rather than asking docling for its own `document.pages[n].image` (enabled
-    # via `generate_page_images=True` in convert.py but read nowhere today).
-    # `image_by_number` is exactly what OCR/docling actually looked at and is
-    # keyed by the same `page_no` tables and texts already use; docling's own
-    # page images would be a second, redundant re-rasterisation of that same
-    # bitmap and would reintroduce the page-numbering ambiguity
-    # `_absorb_confidence` above already has to work around.
-    page_images = [
-        emit.build_page_image(q.page_no, image_by_number.get(q.page_no))
-        for q in kept_qualities
-        if image_by_number.get(q.page_no) is not None
+    empty = [
+        q.page_no for q in kept_qualities
+        if not any(r.page_ocr_start == q.page_no for r in records)
+        and len((extraction.page_markdown.get(q.page_no) or "").strip()) < _MIN_PAGE_CHARS
     ]
+    if empty:
+        notes.append(
+            f"Page(s) {', '.join(str(p) for p in empty)} produced neither a table nor readable text. "
+            "That is not evidence the filing omitted anything on them; check them against the original."
+        )
+
+    # ---- verify: checks that span tables --------------------------------------
+    if validate.RULES.get("cross_table", {}).get("enabled", True):
+        by_table: dict[str, list] = {}
+        for check in validate.check_cross_table(export.cross_table_links(infos)):
+            by_table.setdefault(check.table_id, []).append(check)
+        for record in records:
+            extra = by_table.get(record.table_id)
+            if extra:
+                export.add_footings(record, extra)
 
     # ---- identify --------------------------------------------------------
-    #
-    # Runs BEFORE the narrative chunks are built, not after: the chunk builder
-    # needs the statement flavour to root each breadcrumb (standalone vs
-    # consolidated is a sort key on every narrative query) and the entity name
-    # to recognise the running page header and not mistake it for a section.
-    advance("identify", "Working out the entity, year and framework")
-    pages_text = [converted.page_markdown[p] for p in sorted(converted.page_markdown)]
-    if not pages_text:
-        pages_text = [converted.markdown]
-    identification = identify_mod.identify(pages_text)
+    _current_stage = "identify"
+    _stage_start = time.monotonic()
+    report("identify", "Working out the entity, year and framework", 1.0 - _STAGE_WEIGHTS["identify"])
+    pages_text = [extraction.page_markdown[p] for p in sorted(extraction.page_markdown)]
+    identification = identify_mod.identify(pages_text or [""])
 
     texts = emit.build_text_records(
         doc_id,
-        converted.page_markdown,
+        extraction.page_markdown,
         flavour=identification.statement_flavour,
         entity_name=identification.entity_name,
         source_file=filename,
     )
+    page_images = [extraction.page_images[p] for p in sorted(extraction.page_images)]
 
-    # Close out the LAST stage's own duration -- `advance()` only records
-    # the PREVIOUS stage's duration when the NEXT one starts, so "identify"
-    # (the final stage) never gets one from `advance()` alone.
     if _current_stage is not None:
-        stage_durations.append(
-            StageDuration(_current_stage, round(time.monotonic() - _stage_start, 3))
-        )
+        stage_durations.append(StageDuration(_current_stage, round(time.monotonic() - _stage_start, 3)))
+    stage_durations.append(StageDuration("total", round(time.monotonic() - started, 3)))
 
     report("done", "Finished", 1.0)
     return emit.build_result(
@@ -1267,7 +597,4 @@ def run(
         notes=notes,
         page_images=page_images,
         stage_durations=stage_durations,
-        rescue_stats=rescue_stats,
-        disagreement_stats=disagreement_stats,
-        gap_fill_stats=gap_fill_stats,
     )

@@ -1,0 +1,11 @@
+{
+  "kind": "vision",
+  "label": "t3_r12",
+  "images": 1,
+  "prompt": "The description printed on this line starts with: \"Other Current Assets-(increase)\". Read only the amounts on THAT line; ignore any part of a neighbouring line visible above or below it.\n\nThis image is one printed line of a financial statement table.\n\nList every amount printed on this line, in order from LEFT to RIGHT, exactly as printed: keep commas, brackets and decimal points. Ignore the description text on the left and any small note-reference number beside it. If a cell shows only a dash, write \"-\". If an amount is too unclear to read, write \"?\". Never guess or complete a number.\n\nReply with JSON only:\n{\"amounts\": [\"1,20,000\", \"(95,000)\"], \"handwritten\": false, \"struck_through\": false}\n\n\"handwritten\" is true only if an amount on this line is handwritten rather than printed. \"struck_through\" is true only if a printed amount is crossed out.",
+  "ok": true,
+  "error": null,
+  "finish_reason": "stop",
+  "seconds": 2.22,
+  "response": "```json\n{\"amounts\": [\"(1,275.26)\", \"(1,761.32)\"], \"handwritten\": false, \"struck_through\": false}\n```"
+}

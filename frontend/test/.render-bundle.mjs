@@ -1075,7 +1075,7 @@ var require_react_is_development = __commonJS({
         var ContextProvider = REACT_PROVIDER_TYPE;
         var Element2 = REACT_ELEMENT_TYPE;
         var ForwardRef = REACT_FORWARD_REF_TYPE;
-        var Fragment6 = REACT_FRAGMENT_TYPE;
+        var Fragment7 = REACT_FRAGMENT_TYPE;
         var Lazy = REACT_LAZY_TYPE;
         var Memo = REACT_MEMO_TYPE;
         var Portal = REACT_PORTAL_TYPE;
@@ -1143,7 +1143,7 @@ var require_react_is_development = __commonJS({
         exports.ContextProvider = ContextProvider;
         exports.Element = Element2;
         exports.ForwardRef = ForwardRef;
-        exports.Fragment = Fragment6;
+        exports.Fragment = Fragment7;
         exports.Lazy = Lazy;
         exports.Memo = Memo;
         exports.Portal = Portal;
@@ -7572,22 +7572,22 @@ var require_Legend = __commonJS({
       return /* @__PURE__ */ _react["default"].createElement(_DefaultLegendContent.DefaultLegendContent, otherProps);
     }
     var EPS = 1;
-    var Legend = exports.Legend = /* @__PURE__ */ function(_PureComponent) {
-      function Legend2() {
+    var Legend2 = exports.Legend = /* @__PURE__ */ function(_PureComponent) {
+      function Legend3() {
         var _this;
-        _classCallCheck(this, Legend2);
+        _classCallCheck(this, Legend3);
         for (var _len = arguments.length, args = new Array(_len), _key = 0; _key < _len; _key++) {
           args[_key] = arguments[_key];
         }
-        _this = _callSuper(this, Legend2, [].concat(args));
+        _this = _callSuper(this, Legend3, [].concat(args));
         _defineProperty(_this, "lastBoundingBox", {
           width: -1,
           height: -1
         });
         return _this;
       }
-      _inherits(Legend2, _PureComponent);
-      return _createClass(Legend2, [{
+      _inherits(Legend3, _PureComponent);
+      return _createClass(Legend3, [{
         key: "componentDidMount",
         value: function componentDidMount() {
           this.updateBBox();
@@ -7713,8 +7713,8 @@ var require_Legend = __commonJS({
         }
       }]);
     }(_react.PureComponent);
-    _defineProperty(Legend, "displayName", "Legend");
-    _defineProperty(Legend, "defaultProps", {
+    _defineProperty(Legend2, "displayName", "Legend");
+    _defineProperty(Legend2, "defaultProps", {
       iconSize: 14,
       layout: "horizontal",
       align: "center",
@@ -8954,13 +8954,13 @@ var require_Tooltip = __commonJS({
       }
       return /* @__PURE__ */ _react["default"].createElement(_DefaultTooltipContent.DefaultTooltipContent, props);
     }
-    var Tooltip2 = exports.Tooltip = /* @__PURE__ */ function(_PureComponent) {
-      function Tooltip3() {
-        _classCallCheck(this, Tooltip3);
-        return _callSuper(this, Tooltip3, arguments);
+    var Tooltip3 = exports.Tooltip = /* @__PURE__ */ function(_PureComponent) {
+      function Tooltip4() {
+        _classCallCheck(this, Tooltip4);
+        return _callSuper(this, Tooltip4, arguments);
       }
-      _inherits(Tooltip3, _PureComponent);
-      return _createClass(Tooltip3, [{
+      _inherits(Tooltip4, _PureComponent);
+      return _createClass(Tooltip4, [{
         key: "render",
         value: function render() {
           var _this = this;
@@ -8992,8 +8992,8 @@ var require_Tooltip = __commonJS({
         }
       }]);
     }(_react.PureComponent);
-    _defineProperty(Tooltip2, "displayName", "Tooltip");
-    _defineProperty(Tooltip2, "defaultProps", {
+    _defineProperty(Tooltip3, "displayName", "Tooltip");
+    _defineProperty(Tooltip3, "defaultProps", {
       accessibilityLayer: false,
       allowEscapeViewBox: {
         x: false,
@@ -9351,7 +9351,7 @@ var require_ResponsiveContainer = __commonJS({
     function _arrayWithHoles(arr) {
       if (Array.isArray(arr)) return arr;
     }
-    var ResponsiveContainer2 = exports.ResponsiveContainer = /* @__PURE__ */ (0, _react.forwardRef)(function(_ref, ref) {
+    var ResponsiveContainer3 = exports.ResponsiveContainer = /* @__PURE__ */ (0, _react.forwardRef)(function(_ref, ref) {
       var aspect = _ref.aspect, _ref$initialDimension = _ref.initialDimension, initialDimension = _ref$initialDimension === void 0 ? {
         width: -1,
         height: -1
@@ -23266,7 +23266,7 @@ var require_react_is_development2 = __commonJS({
         var ContextProvider = REACT_PROVIDER_TYPE;
         var Element2 = REACT_ELEMENT_TYPE;
         var ForwardRef = REACT_FORWARD_REF_TYPE;
-        var Fragment6 = REACT_FRAGMENT_TYPE;
+        var Fragment7 = REACT_FRAGMENT_TYPE;
         var Lazy = REACT_LAZY_TYPE;
         var Memo = REACT_MEMO_TYPE;
         var Portal = REACT_PORTAL_TYPE;
@@ -23325,7 +23325,7 @@ var require_react_is_development2 = __commonJS({
         exports.ContextProvider = ContextProvider;
         exports.Element = Element2;
         exports.ForwardRef = ForwardRef;
-        exports.Fragment = Fragment6;
+        exports.Fragment = Fragment7;
         exports.Lazy = Lazy;
         exports.Memo = Memo;
         exports.Portal = Portal;
@@ -32769,14 +32769,14 @@ var require_Bar = __commonJS({
       }
       return ("string" === r ? String : Number)(t);
     }
-    var Bar = exports.Bar = /* @__PURE__ */ function(_PureComponent) {
-      function Bar2() {
+    var Bar2 = exports.Bar = /* @__PURE__ */ function(_PureComponent) {
+      function Bar3() {
         var _this;
-        _classCallCheck(this, Bar2);
+        _classCallCheck(this, Bar3);
         for (var _len = arguments.length, args = new Array(_len), _key = 0; _key < _len; _key++) {
           args[_key] = arguments[_key];
         }
-        _this = _callSuper(this, Bar2, [].concat(args));
+        _this = _callSuper(this, Bar3, [].concat(args));
         _defineProperty(_this, "state", {
           isAnimationFinished: false
         });
@@ -32801,8 +32801,8 @@ var require_Bar = __commonJS({
         });
         return _this;
       }
-      _inherits(Bar2, _PureComponent);
-      return _createClass(Bar2, [{
+      _inherits(Bar3, _PureComponent);
+      return _createClass(Bar3, [{
         key: "renderRectanglesStatically",
         value: function renderRectanglesStatically(data) {
           var _this2 = this;
@@ -33000,9 +33000,9 @@ var require_Bar = __commonJS({
         }
       }]);
     }(_react.PureComponent);
-    _Bar = Bar;
-    _defineProperty(Bar, "displayName", "Bar");
-    _defineProperty(Bar, "defaultProps", {
+    _Bar = Bar2;
+    _defineProperty(Bar2, "displayName", "Bar");
+    _defineProperty(Bar2, "defaultProps", {
       xAxisId: 0,
       yAxisId: 0,
       legendType: "rect",
@@ -33016,7 +33016,7 @@ var require_Bar = __commonJS({
       animationDuration: 400,
       animationEasing: "ease"
     });
-    _defineProperty(Bar, "getComposedData", function(_ref2) {
+    _defineProperty(Bar2, "getComposedData", function(_ref2) {
       var props = _ref2.props, item = _ref2.item, barPosition = _ref2.barPosition, bandSize = _ref2.bandSize, xAxis = _ref2.xAxis, yAxis = _ref2.yAxis, xAxisTicks = _ref2.xAxisTicks, yAxisTicks = _ref2.yAxisTicks, stackedData = _ref2.stackedData, dataStartIndex = _ref2.dataStartIndex, displayedData = _ref2.displayedData, offset = _ref2.offset;
       var pos = (0, _ChartUtils.findPositionOfBar)(barPosition, item);
       if (!pos) {
@@ -35283,7 +35283,7 @@ var require_CartesianGrid = __commonJS({
     Object.defineProperty(exports, "__esModule", {
       value: true
     });
-    exports.CartesianGrid = CartesianGrid2;
+    exports.CartesianGrid = CartesianGrid3;
     var _react = _interopRequireDefault(__require("react"));
     var _isFunction = _interopRequireDefault(require_isFunction());
     var _LogUtils = require_LogUtils();
@@ -35577,7 +35577,7 @@ var require_CartesianGrid = __commonJS({
       verticalFill: [],
       horizontalFill: []
     };
-    function CartesianGrid2(props) {
+    function CartesianGrid3(props) {
       var _props$stroke, _props$fill, _props$horizontal3, _props$horizontalFill, _props$vertical3, _props$verticalFill;
       var chartWidth = (0, _chartLayoutContext.useChartWidth)();
       var chartHeight = (0, _chartLayoutContext.useChartHeight)();
@@ -35659,7 +35659,7 @@ var require_CartesianGrid = __commonJS({
         verticalPoints
       })));
     }
-    CartesianGrid2.displayName = "CartesianGrid";
+    CartesianGrid3.displayName = "CartesianGrid";
   }
 });
 
@@ -35895,14 +35895,14 @@ var require_Line = __commonJS({
       }
       return ("string" === r ? String : Number)(t);
     }
-    var Line2 = exports.Line = /* @__PURE__ */ function(_PureComponent) {
-      function Line3() {
+    var Line3 = exports.Line = /* @__PURE__ */ function(_PureComponent) {
+      function Line4() {
         var _this;
-        _classCallCheck(this, Line3);
+        _classCallCheck(this, Line4);
         for (var _len = arguments.length, args = new Array(_len), _key = 0; _key < _len; _key++) {
           args[_key] = arguments[_key];
         }
-        _this = _callSuper(this, Line3, [].concat(args));
+        _this = _callSuper(this, Line4, [].concat(args));
         _defineProperty(_this, "state", {
           isAnimationFinished: true,
           totalLength: 0
@@ -35928,7 +35928,7 @@ var require_Line = __commonJS({
             }
           }
           var emptyLines = remainLines.length % 2 === 0 ? [0, restLength] : [restLength];
-          return [].concat(_toConsumableArray(Line3.repeat(lines, count)), _toConsumableArray(remainLines), emptyLines).map(function(line) {
+          return [].concat(_toConsumableArray(Line4.repeat(lines, count)), _toConsumableArray(remainLines), emptyLines).map(function(line) {
             return "".concat(line, "px");
           }).join(", ");
         });
@@ -35954,8 +35954,8 @@ var require_Line = __commonJS({
         });
         return _this;
       }
-      _inherits(Line3, _PureComponent);
-      return _createClass(Line3, [{
+      _inherits(Line4, _PureComponent);
+      return _createClass(Line4, [{
         key: "componentDidMount",
         value: function componentDidMount() {
           if (!this.props.isAnimationActive) {
@@ -36045,7 +36045,7 @@ var require_Line = __commonJS({
               payload: entry.payload,
               points
             });
-            return Line3.renderDotItem(dot, dotProps);
+            return Line4.renderDotItem(dot, dotProps);
           });
           var dotsProps = {
             clipPath: needClip ? "url(#clipPath-".concat(clipDot ? "" : "dots-").concat(clipPathId, ")") : null
@@ -36236,8 +36236,8 @@ var require_Line = __commonJS({
         }
       }]);
     }(_react.PureComponent);
-    _defineProperty(Line2, "displayName", "Line");
-    _defineProperty(Line2, "defaultProps", {
+    _defineProperty(Line3, "displayName", "Line");
+    _defineProperty(Line3, "defaultProps", {
       xAxisId: 0,
       yAxisId: 0,
       connectNulls: false,
@@ -36256,7 +36256,7 @@ var require_Line = __commonJS({
       hide: false,
       label: false
     });
-    _defineProperty(Line2, "getComposedData", function(_ref4) {
+    _defineProperty(Line3, "getComposedData", function(_ref4) {
       var props = _ref4.props, xAxis = _ref4.xAxis, yAxis = _ref4.yAxis, xAxisTicks = _ref4.xAxisTicks, yAxisTicks = _ref4.yAxisTicks, dataKey = _ref4.dataKey, bandSize = _ref4.bandSize, displayedData = _ref4.displayedData, offset = _ref4.offset;
       var layout = props.layout;
       var points = displayedData.map(function(entry, index) {
@@ -37875,21 +37875,21 @@ var require_XAxis = __commonJS({
         }))
       );
     }
-    var XAxis2 = exports.XAxis = /* @__PURE__ */ function(_React$Component) {
-      function XAxis3() {
-        _classCallCheck(this, XAxis3);
-        return _callSuper(this, XAxis3, arguments);
+    var XAxis3 = exports.XAxis = /* @__PURE__ */ function(_React$Component) {
+      function XAxis4() {
+        _classCallCheck(this, XAxis4);
+        return _callSuper(this, XAxis4, arguments);
       }
-      _inherits(XAxis3, _React$Component);
-      return _createClass(XAxis3, [{
+      _inherits(XAxis4, _React$Component);
+      return _createClass(XAxis4, [{
         key: "render",
         value: function render() {
           return /* @__PURE__ */ React.createElement(XAxisImpl, this.props);
         }
       }]);
     }(React.Component);
-    _defineProperty(XAxis2, "displayName", "XAxis");
-    _defineProperty(XAxis2, "defaultProps", {
+    _defineProperty(XAxis3, "displayName", "XAxis");
+    _defineProperty(XAxis3, "defaultProps", {
       allowDecimals: true,
       hide: false,
       orientation: "bottom",
@@ -38083,21 +38083,21 @@ var require_YAxis = __commonJS({
         }))
       );
     };
-    var YAxis2 = exports.YAxis = /* @__PURE__ */ function(_React$Component) {
-      function YAxis3() {
-        _classCallCheck(this, YAxis3);
-        return _callSuper(this, YAxis3, arguments);
+    var YAxis3 = exports.YAxis = /* @__PURE__ */ function(_React$Component) {
+      function YAxis4() {
+        _classCallCheck(this, YAxis4);
+        return _callSuper(this, YAxis4, arguments);
       }
-      _inherits(YAxis3, _React$Component);
-      return _createClass(YAxis3, [{
+      _inherits(YAxis4, _React$Component);
+      return _createClass(YAxis4, [{
         key: "render",
         value: function render() {
           return /* @__PURE__ */ React.createElement(YAxisImpl, this.props);
         }
       }]);
     }(React.Component);
-    _defineProperty(YAxis2, "displayName", "YAxis");
-    _defineProperty(YAxis2, "defaultProps", {
+    _defineProperty(YAxis3, "displayName", "YAxis");
+    _defineProperty(YAxis3, "defaultProps", {
       allowDuplicatedCategory: true,
       allowDecimals: true,
       hide: false,
@@ -40659,7 +40659,7 @@ var require_LineChart = __commonJS({
     var _XAxis = require_XAxis();
     var _YAxis = require_YAxis();
     var _CartesianUtils = require_CartesianUtils();
-    var LineChart2 = exports.LineChart = (0, _generateCategoricalChart.generateCategoricalChart)({
+    var LineChart3 = exports.LineChart = (0, _generateCategoricalChart.generateCategoricalChart)({
       chartName: "LineChart",
       GraphicalChild: _Line.Line,
       axisComponents: [{
@@ -40687,7 +40687,7 @@ var require_BarChart = __commonJS({
     var _XAxis = require_XAxis();
     var _YAxis = require_YAxis();
     var _CartesianUtils = require_CartesianUtils();
-    var BarChart = exports.BarChart = (0, _generateCategoricalChart.generateCategoricalChart)({
+    var BarChart2 = exports.BarChart = (0, _generateCategoricalChart.generateCategoricalChart)({
       chartName: "BarChart",
       GraphicalChild: _Bar.Bar,
       defaultTooltipEventType: "axis",
@@ -44855,6 +44855,18 @@ function post(path, payload) {
     body: JSON.stringify(payload)
   });
 }
+var enc = encodeURIComponent;
+var adminUsers = () => request("/api/admin/users");
+var adminUser = (userId) => request(`/api/admin/users/${enc(userId)}`);
+var adminInsights = (days = 30) => request(`/api/admin/insights?days=${enc(days)}`);
+var adminAudit = (limit = 100) => request(`/api/admin/audit?limit=${enc(limit)}`);
+var adminUserConversations = (userId, mode = "fs") => request(`/api/admin/users/${enc(userId)}/conversations?mode=${enc(mode)}`);
+var adminConversation = (mode, conversationId) => request(`/api/admin/conversations/${enc(mode)}/${enc(conversationId)}`);
+function adminUserEvents(userId, { status = "", limit = 100, offset = 0 } = {}) {
+  const q = new URLSearchParams({ limit, offset });
+  if (status) q.set("status", status);
+  return request(`/api/admin/users/${enc(userId)}/events?${q}`);
+}
 function runQuery(mode, query, conversationId = null) {
   return post(`${mode.base_path}/query`, {
     query,
@@ -45682,7 +45694,7 @@ function IngestProgress({
   }, [open]);
   const index = stageIndex(stage, fraction);
   const current = STAGES[Math.max(0, Math.min(index, STAGES.length - 1))];
-  const pct = Math.round((done ? 1 : fraction || 0) * 100);
+  const pct2 = Math.round((done ? 1 : fraction || 0) * 100);
   if (failed2) {
     return /* @__PURE__ */ jsxs12("div", { className: "ingest is-error", role: "alert", children: [
       /* @__PURE__ */ jsx13(Icon, { name: "alert", size: 16, className: "ingest__erricon" }),
@@ -45730,15 +45742,15 @@ function IngestProgress({
             {
               className: "ingest__track",
               role: "progressbar",
-              "aria-valuenow": pct,
+              "aria-valuenow": pct2,
               "aria-valuemin": 0,
               "aria-valuemax": 100,
               children: /* @__PURE__ */ jsx13(
                 motion4.span,
                 {
-                  className: `ingest__fill ${pct >= 100 ? "is-done" : ""}`,
+                  className: `ingest__fill ${pct2 >= 100 ? "is-done" : ""}`,
                   initial: false,
-                  animate: { width: `${pct}%` },
+                  animate: { width: `${pct2}%` },
                   transition: { duration: 0.4, ease: "easeOut" }
                 }
               )
@@ -47660,6 +47672,7 @@ var MODE_ICONS = {
   "trial-balance": "scales",
   "financial-diagnostic-report": "pulse"
 };
+var ADMIN_VIEW = "__admin";
 function StatusDot({ status }) {
   const title = {
     checking: "Checking availability\u2026",
@@ -47669,7 +47682,7 @@ function StatusDot({ status }) {
   }[status];
   return /* @__PURE__ */ jsx23("span", { className: `side__status side__status--${status}`, title });
 }
-function Sidebar({ modes, activeId, onSelect, health, children, rail = false, retentionDays = 30 }) {
+function Sidebar({ modes, activeId, onSelect, health, children, rail = false, retentionDays = 30, showAdmin = false }) {
   const { user, signOut } = useAuth();
   return /* @__PURE__ */ jsxs21("aside", { className: `side ${rail ? "is-rail" : ""}`, children: [
     /* @__PURE__ */ jsxs21("div", { className: "side__brand", children: [
@@ -47697,21 +47710,54 @@ function Sidebar({ modes, activeId, onSelect, health, children, rail = false, re
       ] })
     ] }),
     /* @__PURE__ */ jsxs21("div", { className: "side__scroll", children: [
-      /* @__PURE__ */ jsx23("nav", { className: "side__nav", "aria-label": "Modes", children: modes.map((mode, i) => {
-        const isActive = mode.id === activeId;
-        const state = !mode.integrated ? "pending" : health[mode.id] === void 0 ? "checking" : health[mode.id]?.available ? "ready" : "down";
-        return /* @__PURE__ */ jsxs21(
+      /* @__PURE__ */ jsxs21("nav", { className: "side__nav", "aria-label": "Modes", children: [
+        modes.map((mode, i) => {
+          const isActive = mode.id === activeId;
+          const state = !mode.integrated ? "pending" : health[mode.id] === void 0 ? "checking" : health[mode.id]?.available ? "ready" : "down";
+          return /* @__PURE__ */ jsxs21(
+            motion10.button,
+            {
+              type: "button",
+              className: `side__item ${isActive ? "is-active" : ""}`,
+              onClick: () => onSelect(mode.id),
+              initial: { opacity: 0, x: -10 },
+              animate: { opacity: 1, x: 0 },
+              transition: { delay: 0.05 + i * 0.05, duration: 0.34, ease: [0.22, 1, 0.36, 1] },
+              "aria-current": isActive ? "page" : void 0,
+              children: [
+                isActive && /* @__PURE__ */ jsx23(
+                  motion10.span,
+                  {
+                    className: "side__active-bg",
+                    layoutId: "side-active",
+                    transition: { type: "spring", stiffness: 420, damping: 34 }
+                  }
+                ),
+                /* @__PURE__ */ jsxs21("span", { className: "side__item-inner", children: [
+                  /* @__PURE__ */ jsx23(Icon, { name: MODE_ICONS[mode.id] || "doc", size: 18, className: "side__item-icon" }),
+                  /* @__PURE__ */ jsxs21("span", { className: "side__item-label", children: [
+                    mode.short_label,
+                    state === "down" && /* @__PURE__ */ jsx23("span", { className: "side__item-sub", children: "Unavailable" })
+                  ] }),
+                  /* @__PURE__ */ jsx23(StatusDot, { status: state })
+                ] })
+              ]
+            },
+            mode.id
+          );
+        }),
+        showAdmin && /* @__PURE__ */ jsxs21(
           motion10.button,
           {
             type: "button",
-            className: `side__item ${isActive ? "is-active" : ""}`,
-            onClick: () => onSelect(mode.id),
+            className: `side__item side__item--admin ${activeId === ADMIN_VIEW ? "is-active" : ""}`,
+            onClick: () => onSelect(ADMIN_VIEW),
             initial: { opacity: 0, x: -10 },
             animate: { opacity: 1, x: 0 },
-            transition: { delay: 0.05 + i * 0.05, duration: 0.34, ease: [0.22, 1, 0.36, 1] },
-            "aria-current": isActive ? "page" : void 0,
+            transition: { delay: 0.05 + modes.length * 0.05, duration: 0.34, ease: [0.22, 1, 0.36, 1] },
+            "aria-current": activeId === ADMIN_VIEW ? "page" : void 0,
             children: [
-              isActive && /* @__PURE__ */ jsx23(
+              activeId === ADMIN_VIEW && /* @__PURE__ */ jsx23(
                 motion10.span,
                 {
                   className: "side__active-bg",
@@ -47720,18 +47766,16 @@ function Sidebar({ modes, activeId, onSelect, health, children, rail = false, re
                 }
               ),
               /* @__PURE__ */ jsxs21("span", { className: "side__item-inner", children: [
-                /* @__PURE__ */ jsx23(Icon, { name: MODE_ICONS[mode.id] || "doc", size: 18, className: "side__item-icon" }),
+                /* @__PURE__ */ jsx23(Icon, { name: "shield", size: 18, className: "side__item-icon" }),
                 /* @__PURE__ */ jsxs21("span", { className: "side__item-label", children: [
-                  mode.short_label,
-                  state === "down" && /* @__PURE__ */ jsx23("span", { className: "side__item-sub", children: "Unavailable" })
-                ] }),
-                /* @__PURE__ */ jsx23(StatusDot, { status: state })
+                  "Admin",
+                  /* @__PURE__ */ jsx23("span", { className: "side__item-sub", children: "Users, chats & insights" })
+                ] })
               ] })
             ]
-          },
-          mode.id
-        );
-      }) }),
+          }
+        )
+      ] }),
       children
     ] }),
     retentionDays ? /* @__PURE__ */ jsxs21("p", { className: "side__retention", children: [
@@ -47762,8 +47806,906 @@ function Sidebar({ modes, activeId, onSelect, health, children, rail = false, re
   ] });
 }
 
+// src/components/admin/AdminDashboard.jsx
+import { useCallback as useCallback6, useEffect as useEffect11, useState as useState15 } from "react";
+
+// src/components/admin/format.js
+var fmtNum = (n, digits = 0) => n === null || n === void 0 || Number.isNaN(Number(n)) ? "\u2014" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: digits });
+function fmtSecs(s) {
+  if (s === null || s === void 0 || Number.isNaN(Number(s))) return "\u2014";
+  const n = Number(s);
+  if (n >= 60) return `${Math.floor(n / 60)}m ${Math.round(n % 60)}s`;
+  return `${n.toFixed(n < 10 ? 1 : 0)}s`;
+}
+function fmtDateTime(iso) {
+  if (!iso) return "\u2014";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "\u2014";
+  return d.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+function fmtDay(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso).slice(5, 10);
+  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+}
+function relTime(iso) {
+  if (!iso) return "never";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "\u2014";
+  const s = Math.max(0, (Date.now() - then) / 1e3);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  if (s < 86400 * 30) return `${Math.floor(s / 86400)}d ago`;
+  return fmtDay(iso);
+}
+var pct = (part, total) => total ? Number(part || 0) / Number(total) * 100 : null;
+var fmtPct = (p, digits = 0) => p === null || p === void 0 ? "\u2014" : `${p.toFixed(digits)}%`;
+function clip(text, n = 90) {
+  const t = (text || "").replace(/\s+/g, " ").trim();
+  return t.length > n ? `${t.slice(0, n)}\u2026` : t || "\u2014";
+}
+
+// src/components/admin/ConversationViewer.jsx
+import { jsx as jsx24, jsxs as jsxs22 } from "react/jsx-runtime";
+function ConversationViewer({ conversation, onBack }) {
+  if (!conversation) return null;
+  const { mode, username, messages = [] } = conversation;
+  return /* @__PURE__ */ jsxs22("div", { className: "adm-viewer", children: [
+    /* @__PURE__ */ jsxs22("button", { type: "button", className: "adm-back", onClick: onBack, children: [
+      /* @__PURE__ */ jsx24(Icon, { name: "chevron", size: 14, className: "adm-back__icon" }),
+      " Back"
+    ] }),
+    /* @__PURE__ */ jsxs22("header", { className: "adm-viewer__head", children: [
+      /* @__PURE__ */ jsxs22("h2", { className: "adm-detail__name", children: [
+        mode === "tb" ? "Trial Balance" : "Financial Statement",
+        " conversation"
+      ] }),
+      /* @__PURE__ */ jsxs22("p", { className: "adm-detail__sub", children: [
+        username || "Unknown user",
+        " \xB7 ",
+        messages.length,
+        " message",
+        messages.length === 1 ? "" : "s",
+        " \xB7 read-only"
+      ] })
+    ] }),
+    /* @__PURE__ */ jsx24("div", { className: "adm-thread", children: messages.map((m, i) => /* @__PURE__ */ jsxs22("div", { className: `adm-msg adm-msg--${m.role}`, children: [
+      /* @__PURE__ */ jsxs22("div", { className: "adm-msg__meta", children: [
+        m.role === "user" ? username || "User" : "Artha.AI",
+        " \xB7 ",
+        fmtDateTime(m.created_at),
+        m.rewritten_query ? /* @__PURE__ */ jsxs22("span", { className: "adm-msg__rewrite", children: [
+          " \xB7 read as \u201C",
+          m.rewritten_query,
+          "\u201D"
+        ] }) : null
+      ] }),
+      m.role === "user" ? /* @__PURE__ */ jsx24("div", { className: "adm-msg__bubble", children: m.content }) : mode === "fs" ? /* @__PURE__ */ jsx24(AnswerCard, { result: m.payload || { final_answer: m.content } }) : /* @__PURE__ */ jsx24("div", { className: "adm-msg__bubble adm-msg__bubble--md", children: /* @__PURE__ */ jsx24(Markdown, { children: m.content || "" }) })
+    ] }, `${m.seq}-${i}`)) })
+  ] });
+}
+
+// src/components/admin/InsightsPanel.jsx
+var import_recharts2 = __toESM(require_lib3(), 1);
+
+// src/components/admin/insightsLogic.js
+var MIN_QUERIES = 5;
+var T = {
+  slowP90: 30,
+  // seconds
+  bigPrompt: 2e4,
+  // average prompt tokens per answered query
+  errorRate: 5,
+  // % of queries failing
+  unsourcedRate: 10,
+  // % answered with no tool call
+  lowConfidenceRate: 25,
+  // % rated Low
+  handEditedRate: 20,
+  // % of uploads a user had to correct by hand
+  unreadableAvg: 3,
+  // average unreadable cells per uploaded document
+  repeatedTimes: 3
+  // times the same question was asked
+};
+function deriveObservations(ins) {
+  if (!ins || !ins.telemetry_available) return [];
+  const out = [];
+  const add = (tone, title, detail) => out.push({ tone, title, detail });
+  const total = ins.usage?.available ? Number(ins.usage.queries || 0) : 0;
+  const enough = total >= MIN_QUERIES;
+  const perf = ins.performance;
+  if (perf?.available && enough && perf.percentiles?.n >= MIN_QUERIES) {
+    const { p50, p90 } = perf.percentiles;
+    if (p90 > T.slowP90) {
+      add(
+        "warn",
+        `Slow tail: 1 in 10 answers takes over ${fmtSecs(p90)}`,
+        `Median is ${fmtSecs(p50)}. The slowest queries below usually share a heavy tool or an oversized context.`
+      );
+    }
+    const slow = (perf.latency_by_tool || [])[0];
+    if (slow && perf.percentiles.mean && slow.avg_elapsed > perf.percentiles.mean * 1.3) {
+      add(
+        "info",
+        `Answers that call ${slow.tool} are the slowest (avg ${fmtSecs(slow.avg_elapsed)})`,
+        `Across ${fmtNum(slow.calls)} answers this window, against an overall mean of ${fmtSecs(perf.percentiles.mean)}. Worth profiling that tool first.`
+      );
+    }
+  }
+  const cost = ins.cost;
+  if (cost?.available && enough && cost.averages?.avg_prompt > T.bigPrompt) {
+    add(
+      "warn",
+      `Prompts are large: ${fmtNum(cost.averages.avg_prompt)} tokens on average`,
+      "Most of it is retrieved context and tool output. Trimming what is passed to the model is the biggest lever on both cost and latency."
+    );
+  }
+  const rel = ins.reliability;
+  if (rel?.available && enough) {
+    const failed2 = (rel.status || []).filter((s) => s.status !== "ok").reduce((n, s) => n + Number(s.n || 0), 0);
+    const rate = pct(failed2, total);
+    if (rate !== null && rate > T.errorRate) {
+      const top2 = (rel.by_stage || [])[0];
+      add(
+        "err",
+        `${fmtPct(rate, 1)} of queries failed (${fmtNum(failed2)} of ${fmtNum(total)})`,
+        top2 ? `Most common cause: ${top2.stage} (${fmtNum(top2.n)}). These failures were previously invisible: a failed turn is never saved to history.` : ""
+      );
+    }
+  }
+  const q = ins.quality;
+  if (q?.available && enough) {
+    const unsRate = pct(q.unsourced?.unsourced, q.unsourced?.total);
+    if (unsRate !== null && unsRate > T.unsourcedRate) {
+      add(
+        "warn",
+        `${fmtPct(unsRate)} of answers used no tool (unsourced)`,
+        "These are answered from the model's general knowledge, not from a document, which is the main hallucination risk. Review the examples below."
+      );
+    }
+    const conf = q.confidence || [];
+    const confTotal = conf.reduce((n, c) => n + Number(c.n || 0), 0);
+    const low = conf.find((c) => String(c.confidence).toLowerCase() === "low");
+    const lowRate = pct(low?.n, confTotal);
+    if (lowRate !== null && lowRate > T.lowConfidenceRate) {
+      add(
+        "warn",
+        `${fmtPct(lowRate)} of answers are rated Low confidence`,
+        (q.lowered_reasons || [])[0]?.reason ? `Most common reason confidence was lowered: "${q.lowered_reasons[0].reason}".` : "Check which questions and tools these come from."
+      );
+    }
+    if ((q.no_data_answers || []).length >= 3) {
+      add(
+        "info",
+        `${q.no_data_answers.length}+ answers reported that nothing was found`,
+        "Questions the corpus or tools could not answer. Each is a candidate for a new tool, better retrieval, or an ingestion gap. (Detected by phrase match.)"
+      );
+    }
+  }
+  const tools = ins.tools;
+  if (tools?.available && enough && (tools.unused_in_window || []).length > 0) {
+    add(
+      "info",
+      `${tools.unused_in_window.length} tool(s) seen before but unused this window`,
+      `${tools.unused_in_window.slice(0, 4).join(", ")}${tools.unused_in_window.length > 4 ? "\u2026" : ""}. Unused tools still cost prompt tokens on every query. (Only tools seen at least once can be listed.)`
+    );
+  }
+  const top = (ins.repeats?.questions || [])[0];
+  if (ins.repeats?.available && top && Number(top.asked) >= T.repeatedTimes) {
+    add(
+      "info",
+      `One question was asked ${fmtNum(top.asked)} times`,
+      `"${top.question.slice(0, 80)}". Repeated questions are candidates for a suggested prompt, a cached answer or a dedicated tool.`
+    );
+  }
+  const ing = ins.ingestion;
+  if (ing?.available && Number(ing.documents) >= 3) {
+    const edited = pct(ing.hand_edited, ing.documents);
+    if (edited !== null && edited > T.handEditedRate) {
+      add(
+        "warn",
+        `${fmtPct(edited)} of uploaded documents needed hand corrections`,
+        "Users are fixing extraction by hand. The documents listed under Live ingestion show where the reader needs work."
+      );
+    }
+    if (Number(ing.avg_unreadable) > T.unreadableAvg) {
+      add(
+        "warn",
+        `Uploads average ${Number(ing.avg_unreadable).toFixed(1)} unreadable cells each`,
+        "Withheld figures are safe but reduce what can be analysed. Compare ingest versions below to see whether it is improving."
+      );
+    }
+  }
+  if (out.length === 0 && enough) {
+    add(
+      "ok",
+      "Nothing stands out in this window",
+      "Latency, cost, failures, sourcing and extraction quality are all within the usual ranges."
+    );
+  }
+  if (!enough) {
+    add(
+      "info",
+      "Not enough data yet",
+      `Only ${fmtNum(total)} queries recorded in this window (need ${MIN_QUERIES}+). Telemetry started when this feature shipped, so earlier history is not included.`
+    );
+  }
+  return out;
+}
+
+// src/components/admin/InsightsPanel.jsx
+import { Fragment as Fragment6, jsx as jsx25, jsxs as jsxs23 } from "react/jsx-runtime";
+var AXIS = { fontSize: 11, fill: "var(--ink-500)" };
+var TOOLTIP = {
+  contentStyle: {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    fontSize: 12
+  }
+};
+function Tile({ label, value, sub, tone }) {
+  return /* @__PURE__ */ jsxs23("div", { className: `adm-tile ${tone ? `adm-tile--${tone}` : ""}`, children: [
+    /* @__PURE__ */ jsx25("span", { className: "adm-tile__label", children: label }),
+    /* @__PURE__ */ jsx25("span", { className: "adm-tile__value num", children: value }),
+    sub ? /* @__PURE__ */ jsx25("span", { className: "adm-tile__sub", children: sub }) : null
+  ] });
+}
+function Panel({ title, note, children, wide }) {
+  return /* @__PURE__ */ jsxs23("section", { className: `adm-panel card ${wide ? "adm-panel--wide" : ""}`, children: [
+    /* @__PURE__ */ jsxs23("header", { className: "adm-panel__head", children: [
+      /* @__PURE__ */ jsx25("h3", { className: "adm-panel__title", children: title }),
+      note ? /* @__PURE__ */ jsx25("span", { className: "adm-panel__note", children: note }) : null
+    ] }),
+    children
+  ] });
+}
+function Unavailable({ section }) {
+  return /* @__PURE__ */ jsx25("p", { className: "adm-empty", children: section?.reason || "Not available." });
+}
+function Empty({ children = "Nothing in this window." }) {
+  return /* @__PURE__ */ jsx25("p", { className: "adm-empty", children });
+}
+function ChartBox({ children, height = 200 }) {
+  return /* @__PURE__ */ jsx25("div", { style: { width: "100%", height }, children });
+}
+function LinkCell({ row, onOpen, children }) {
+  if (!row.conversation_id || !onOpen) return /* @__PURE__ */ jsx25(Fragment6, { children });
+  return /* @__PURE__ */ jsx25(
+    "button",
+    {
+      type: "button",
+      className: "adm-link",
+      onClick: () => onOpen({ mode: "fs", conversationId: row.conversation_id, userId: row.user_id }),
+      title: "Open this conversation",
+      children
+    }
+  );
+}
+function QueryTable({ rows, cols, onOpen }) {
+  if (!rows?.length) return /* @__PURE__ */ jsx25(Empty, {});
+  return /* @__PURE__ */ jsx25("div", { className: "adm-scroll", children: /* @__PURE__ */ jsxs23("table", { className: "adm-table", children: [
+    /* @__PURE__ */ jsx25("thead", { children: /* @__PURE__ */ jsx25("tr", { children: cols.map((c) => /* @__PURE__ */ jsx25("th", { className: c.num ? "is-num" : "", children: c.label }, c.key)) }) }),
+    /* @__PURE__ */ jsx25("tbody", { children: rows.map((r, i) => /* @__PURE__ */ jsx25("tr", { children: cols.map((c) => /* @__PURE__ */ jsx25("td", { className: c.num ? "is-num num" : "", children: c.key === "query_text" || c.key === "question" ? /* @__PURE__ */ jsx25(LinkCell, { row: r, onOpen, children: clip(r[c.key], 80) }) : c.render ? c.render(r) : r[c.key] ?? "\u2014" }, c.key)) }, r.event_id || `${r.conversation_id}-${i}`)) })
+  ] }) });
+}
+var TONE_ICON = { warn: "alert", err: "alert", info: "info", ok: "check" };
+function InsightsPanel({ insights, onOpenConversation }) {
+  if (!insights) return null;
+  if (!insights.telemetry_available) {
+    return /* @__PURE__ */ jsxs23("div", { className: "adm-notice adm-notice--warn", children: [
+      /* @__PURE__ */ jsx25(Icon, { name: "alert", size: 16 }),
+      /* @__PURE__ */ jsxs23("div", { children: [
+        /* @__PURE__ */ jsx25("strong", { children: "Query telemetry is not recording on this database." }),
+        /* @__PURE__ */ jsxs23("p", { children: [
+          "Usage, latency, cost and reliability insights need the",
+          " ",
+          /* @__PURE__ */ jsx25("code", { children: "artha_query_events" }),
+          " table. It is created automatically when the database user is allowed to create tables; check the backend log for \u201CCould not create artha_query_events\u201D. Live-ingestion quality is shown below regardless."
+        ] })
+      ] })
+    ] });
+  }
+  const { usage, performance: perf, cost, reliability: rel, quality, tools, repeats, ingestion } = insights;
+  const observations = deriveObservations(insights);
+  const total = usage?.available ? Number(usage.queries || 0) : 0;
+  const failed2 = rel?.available ? (rel.status || []).filter((s) => s.status !== "ok").reduce((n, s) => n + Number(s.n || 0), 0) : 0;
+  const unsRate = quality?.available ? pct(quality.unsourced?.unsourced, quality.unsourced?.total) : null;
+  const usageDaily = (usage?.daily || []).map((d) => ({ ...d, label: fmtDay(d.day) }));
+  const perfDaily = (perf?.daily || []).map((d) => ({
+    label: fmtDay(d.day),
+    p50: Number(d.p50),
+    p90: Number(d.p90)
+  }));
+  const costDaily = (cost?.daily || []).map((d) => ({
+    label: fmtDay(d.day),
+    Prompt: Number(d.prompt_tokens),
+    Completion: Number(d.completion_tokens)
+  }));
+  return /* @__PURE__ */ jsxs23("div", { className: "adm-insights", children: [
+    observations.length > 0 && /* @__PURE__ */ jsx25(Panel, { title: "Where to look first", note: "Rules of thumb, ranked by attention needed", wide: true, children: /* @__PURE__ */ jsx25("ul", { className: "adm-obs", children: observations.map((o) => /* @__PURE__ */ jsxs23("li", { className: `adm-obs__item adm-obs__item--${o.tone}`, children: [
+      /* @__PURE__ */ jsx25(Icon, { name: TONE_ICON[o.tone] || "info", size: 16, className: "adm-obs__icon" }),
+      /* @__PURE__ */ jsxs23("div", { children: [
+        /* @__PURE__ */ jsx25("strong", { children: o.title }),
+        o.detail ? /* @__PURE__ */ jsx25("p", { children: o.detail }) : null
+      ] })
+    ] }, o.title)) }) }),
+    /* @__PURE__ */ jsxs23("div", { className: "adm-tiles", children: [
+      /* @__PURE__ */ jsx25(Tile, { label: "Queries", value: fmtNum(total), sub: usage?.available ? `${fmtNum(usage.active_users)} active users` : null }),
+      /* @__PURE__ */ jsx25(Tile, { label: "Median answer", value: fmtSecs(perf?.percentiles?.p50), sub: `p90 ${fmtSecs(perf?.percentiles?.p90)}` }),
+      /* @__PURE__ */ jsx25(
+        Tile,
+        {
+          label: "Failed",
+          value: fmtNum(failed2),
+          sub: total ? fmtPct(pct(failed2, total), 1) : null,
+          tone: failed2 && pct(failed2, total) > 5 ? "err" : void 0
+        }
+      ),
+      /* @__PURE__ */ jsx25(
+        Tile,
+        {
+          label: "Unsourced",
+          value: fmtPct(unsRate),
+          sub: "answered with no tool",
+          tone: unsRate > 10 ? "warn" : void 0
+        }
+      ),
+      /* @__PURE__ */ jsx25(Tile, { label: "Avg prompt", value: fmtNum(cost?.averages?.avg_prompt), sub: "tokens / query" }),
+      /* @__PURE__ */ jsx25(Tile, { label: "Uploads", value: fmtNum(ingestion?.documents), sub: ingestion?.available ? `${fmtNum(ingestion.hand_edited)} hand-edited` : null })
+    ] }),
+    /* @__PURE__ */ jsxs23("div", { className: "adm-grid", children: [
+      /* @__PURE__ */ jsx25(Panel, { title: "Queries per day", children: usage?.available && usageDaily.length ? /* @__PURE__ */ jsx25(ChartBox, { children: /* @__PURE__ */ jsx25(import_recharts2.ResponsiveContainer, { children: /* @__PURE__ */ jsxs23(import_recharts2.BarChart, { data: usageDaily, margin: { top: 6, right: 8, left: -14, bottom: 0 }, children: [
+        /* @__PURE__ */ jsx25(import_recharts2.CartesianGrid, { strokeDasharray: "3 3", stroke: "var(--ink-200)", vertical: false }),
+        /* @__PURE__ */ jsx25(import_recharts2.XAxis, { dataKey: "label", tick: AXIS, tickLine: false, axisLine: { stroke: "var(--ink-200)" } }),
+        /* @__PURE__ */ jsx25(import_recharts2.YAxis, { tick: AXIS, tickLine: false, axisLine: false, allowDecimals: false }),
+        /* @__PURE__ */ jsx25(import_recharts2.Tooltip, { ...TOOLTIP }),
+        /* @__PURE__ */ jsx25(import_recharts2.Bar, { dataKey: "queries", fill: "var(--navy-700)", radius: [3, 3, 0, 0] })
+      ] }) }) }) : usage?.available ? /* @__PURE__ */ jsx25(Empty, {}) : /* @__PURE__ */ jsx25(Unavailable, { section: usage }) }),
+      /* @__PURE__ */ jsx25(Panel, { title: "Answer time", note: "median and slowest 10%", children: perf?.available && perfDaily.length ? /* @__PURE__ */ jsx25(ChartBox, { children: /* @__PURE__ */ jsx25(import_recharts2.ResponsiveContainer, { children: /* @__PURE__ */ jsxs23(import_recharts2.LineChart, { data: perfDaily, margin: { top: 6, right: 8, left: -14, bottom: 0 }, children: [
+        /* @__PURE__ */ jsx25(import_recharts2.CartesianGrid, { strokeDasharray: "3 3", stroke: "var(--ink-200)" }),
+        /* @__PURE__ */ jsx25(import_recharts2.XAxis, { dataKey: "label", tick: AXIS, tickLine: false, axisLine: { stroke: "var(--ink-200)" } }),
+        /* @__PURE__ */ jsx25(import_recharts2.YAxis, { tick: AXIS, tickLine: false, axisLine: false, unit: "s" }),
+        /* @__PURE__ */ jsx25(import_recharts2.Tooltip, { ...TOOLTIP, formatter: (v) => `${Number(v).toFixed(1)}s` }),
+        /* @__PURE__ */ jsx25(import_recharts2.Legend, { wrapperStyle: { fontSize: 11 } }),
+        /* @__PURE__ */ jsx25(import_recharts2.Line, { type: "monotone", dataKey: "p50", name: "median", stroke: "var(--navy-700)", strokeWidth: 2, dot: { r: 2 } }),
+        /* @__PURE__ */ jsx25(import_recharts2.Line, { type: "monotone", dataKey: "p90", name: "p90", stroke: "var(--warn-600)", strokeWidth: 2, dot: { r: 2 } })
+      ] }) }) }) : perf?.available ? /* @__PURE__ */ jsx25(Empty, {}) : /* @__PURE__ */ jsx25(Unavailable, { section: perf }) }),
+      /* @__PURE__ */ jsx25(Panel, { title: "Tokens per day", note: "cost proxy", children: cost?.available && costDaily.length ? /* @__PURE__ */ jsx25(ChartBox, { children: /* @__PURE__ */ jsx25(import_recharts2.ResponsiveContainer, { children: /* @__PURE__ */ jsxs23(import_recharts2.BarChart, { data: costDaily, margin: { top: 6, right: 8, left: -6, bottom: 0 }, children: [
+        /* @__PURE__ */ jsx25(import_recharts2.CartesianGrid, { strokeDasharray: "3 3", stroke: "var(--ink-200)", vertical: false }),
+        /* @__PURE__ */ jsx25(import_recharts2.XAxis, { dataKey: "label", tick: AXIS, tickLine: false, axisLine: { stroke: "var(--ink-200)" } }),
+        /* @__PURE__ */ jsx25(
+          import_recharts2.YAxis,
+          {
+            tick: AXIS,
+            tickLine: false,
+            axisLine: false,
+            tickFormatter: (v) => v >= 1e3 ? `${Math.round(v / 1e3)}k` : v
+          }
+        ),
+        /* @__PURE__ */ jsx25(import_recharts2.Tooltip, { ...TOOLTIP, formatter: (v) => fmtNum(v) }),
+        /* @__PURE__ */ jsx25(import_recharts2.Legend, { wrapperStyle: { fontSize: 11 } }),
+        /* @__PURE__ */ jsx25(import_recharts2.Bar, { dataKey: "Prompt", stackId: "t", fill: "var(--navy-600)" }),
+        /* @__PURE__ */ jsx25(import_recharts2.Bar, { dataKey: "Completion", stackId: "t", fill: "var(--gold-600)", radius: [3, 3, 0, 0] })
+      ] }) }) }) : cost?.available ? /* @__PURE__ */ jsx25(Empty, {}) : /* @__PURE__ */ jsx25(Unavailable, { section: cost }) }),
+      /* @__PURE__ */ jsx25(Panel, { title: "Confidence of answers", children: quality?.available ? (quality.confidence || []).length ? /* @__PURE__ */ jsx25("ul", { className: "adm-bars", children: quality.confidence.map((c) => {
+        const sum = quality.confidence.reduce((n, x) => n + Number(x.n), 0);
+        const p = pct(c.n, sum);
+        return /* @__PURE__ */ jsxs23("li", { children: [
+          /* @__PURE__ */ jsx25("span", { className: "adm-bars__label", children: c.confidence }),
+          /* @__PURE__ */ jsx25("span", { className: "adm-bars__track", children: /* @__PURE__ */ jsx25("span", { className: "adm-bars__fill", style: { width: `${p}%` } }) }),
+          /* @__PURE__ */ jsxs23("span", { className: "adm-bars__val num", children: [
+            fmtNum(c.n),
+            " \xB7 ",
+            fmtPct(p)
+          ] })
+        ] }, c.confidence);
+      }) }) : /* @__PURE__ */ jsx25(Empty, {}) : /* @__PURE__ */ jsx25(Unavailable, { section: quality }) })
+    ] }),
+    /* @__PURE__ */ jsxs23("div", { className: "adm-grid adm-grid--tables", children: [
+      /* @__PURE__ */ jsx25(Panel, { title: "Slowest answers", note: "click a question to read it", wide: true, children: perf?.available ? /* @__PURE__ */ jsx25(QueryTable, { rows: perf.slowest, onOpen: onOpenConversation, cols: [
+        { key: "query_text", label: "Question" },
+        { key: "username", label: "User" },
+        { key: "elapsed_seconds", label: "Time", num: true, render: (r) => fmtSecs(r.elapsed_seconds) },
+        { key: "tool_calls", label: "Tools", num: true },
+        { key: "prompt_tokens", label: "Prompt tok", num: true, render: (r) => fmtNum(r.prompt_tokens) }
+      ] }) : /* @__PURE__ */ jsx25(Unavailable, { section: perf }) }),
+      /* @__PURE__ */ jsx25(Panel, { title: "Heaviest prompts", note: "where context is bloated", wide: true, children: cost?.available ? /* @__PURE__ */ jsx25(QueryTable, { rows: cost.heaviest_queries, onOpen: onOpenConversation, cols: [
+        { key: "query_text", label: "Question" },
+        { key: "username", label: "User" },
+        { key: "prompt_tokens", label: "Prompt tok", num: true, render: (r) => fmtNum(r.prompt_tokens) },
+        { key: "completion_tokens", label: "Completion", num: true, render: (r) => fmtNum(r.completion_tokens) },
+        { key: "tool_calls", label: "Tools", num: true }
+      ] }) : /* @__PURE__ */ jsx25(Unavailable, { section: cost }) }),
+      /* @__PURE__ */ jsx25(Panel, { title: "Recent failures", note: "never stored in chat history", wide: true, children: rel?.available ? /* @__PURE__ */ jsx25(QueryTable, { rows: rel.recent_failures, cols: [
+        { key: "created_at", label: "When", render: (r) => fmtDateTime(r.created_at) },
+        { key: "username", label: "User" },
+        { key: "query_text", label: "Question" },
+        { key: "status", label: "Status" },
+        { key: "error_stage", label: "Stage" },
+        { key: "error_message", label: "Message", render: (r) => clip(r.error_message, 70) }
+      ] }) : /* @__PURE__ */ jsx25(Unavailable, { section: rel }) }),
+      /* @__PURE__ */ jsx25(Panel, { title: "Unsourced answers", note: "no tool was called", wide: true, children: quality?.available ? /* @__PURE__ */ jsx25(QueryTable, { rows: quality.unsourced_recent, onOpen: onOpenConversation, cols: [
+        { key: "created_at", label: "When", render: (r) => fmtDateTime(r.created_at) },
+        { key: "username", label: "User" },
+        { key: "query_text", label: "Question" }
+      ] }) : /* @__PURE__ */ jsx25(Unavailable, { section: quality }) }),
+      /* @__PURE__ */ jsx25(Panel, { title: "Questions that found nothing", note: "detected by phrase \u2014 a hint, not a measurement", wide: true, children: quality?.available ? /* @__PURE__ */ jsx25(QueryTable, { rows: quality.no_data_answers, onOpen: onOpenConversation, cols: [
+        { key: "created_at", label: "When", render: (r) => fmtDateTime(r.created_at) },
+        { key: "username", label: "User" },
+        { key: "question", label: "Question" }
+      ] }) : /* @__PURE__ */ jsx25(Unavailable, { section: quality }) }),
+      /* @__PURE__ */ jsx25(Panel, { title: "Repeated questions", note: "candidates for a suggestion or cache", children: repeats?.available ? (repeats.questions || []).length ? /* @__PURE__ */ jsx25("ul", { className: "adm-list", children: repeats.questions.map((q) => /* @__PURE__ */ jsxs23("li", { children: [
+        /* @__PURE__ */ jsx25("span", { className: "adm-list__main", children: clip(q.question, 90) }),
+        /* @__PURE__ */ jsxs23("span", { className: "adm-list__meta num", children: [
+          fmtNum(q.asked),
+          "\xD7 \xB7 ",
+          fmtNum(q.users),
+          " user(s)"
+        ] })
+      ] }, q.question)) }) : /* @__PURE__ */ jsx25(Empty, { children: "No question was asked more than once." }) : /* @__PURE__ */ jsx25(Unavailable, { section: repeats }) }),
+      /* @__PURE__ */ jsx25(Panel, { title: "Tool usage", note: tools?.available ? `${(tools.unused_in_window || []).length} unused this window` : null, children: tools?.available ? /* @__PURE__ */ jsxs23(Fragment6, { children: [
+        (tools.used || []).length ? /* @__PURE__ */ jsx25("ul", { className: "adm-bars", children: tools.used.slice(0, 12).map((t) => {
+          const max = Number(tools.used[0].calls) || 1;
+          return /* @__PURE__ */ jsxs23("li", { children: [
+            /* @__PURE__ */ jsx25("span", { className: "adm-bars__label adm-bars__label--wide", title: t.tool, children: t.tool }),
+            /* @__PURE__ */ jsx25("span", { className: "adm-bars__track", children: /* @__PURE__ */ jsx25("span", { className: "adm-bars__fill", style: { width: `${Number(t.calls) / max * 100}%` } }) }),
+            /* @__PURE__ */ jsx25("span", { className: "adm-bars__val num", children: fmtNum(t.calls) })
+          ] }, t.tool);
+        }) }) : /* @__PURE__ */ jsx25(Empty, {}),
+        (tools.unused_in_window || []).length > 0 && /* @__PURE__ */ jsxs23("p", { className: "adm-foot", children: [
+          "Seen before, unused now: ",
+          tools.unused_in_window.join(", ")
+        ] })
+      ] }) : /* @__PURE__ */ jsx25(Unavailable, { section: tools }) }),
+      /* @__PURE__ */ jsx25(Panel, { title: "Live ingestion quality", note: "how well uploaded scans were read", wide: true, children: ingestion?.available ? Number(ingestion.documents) === 0 ? /* @__PURE__ */ jsx25(Empty, { children: "No uploads in this window." }) : /* @__PURE__ */ jsxs23("div", { className: "adm-ingest", children: [
+        /* @__PURE__ */ jsxs23("div", { className: "adm-ingest__stats", children: [
+          /* @__PURE__ */ jsx25(Tile, { label: "Documents", value: fmtNum(ingestion.documents) }),
+          /* @__PURE__ */ jsx25(Tile, { label: "Avg unreadable cells", value: fmtNum(ingestion.avg_unreadable, 1) }),
+          /* @__PURE__ */ jsx25(Tile, { label: "Avg recovered", value: fmtNum(ingestion.avg_recovered, 1) }),
+          /* @__PURE__ */ jsx25(Tile, { label: "Hand-edited", value: fmtNum(ingestion.hand_edited), sub: "user corrected extraction" })
+        ] }),
+        /* @__PURE__ */ jsxs23("div", { className: "adm-ingest__cols", children: [
+          /* @__PURE__ */ jsxs23("div", { children: [
+            /* @__PURE__ */ jsx25("h4", { className: "adm-sub", children: "By grade" }),
+            /* @__PURE__ */ jsx25("ul", { className: "adm-list", children: (ingestion.by_grade || []).map((g) => /* @__PURE__ */ jsxs23("li", { children: [
+              /* @__PURE__ */ jsx25("span", { className: "adm-list__main", children: g.grade }),
+              /* @__PURE__ */ jsx25("span", { className: "adm-list__meta num", children: fmtNum(g.n) })
+            ] }, g.grade)) })
+          ] }),
+          /* @__PURE__ */ jsxs23("div", { children: [
+            /* @__PURE__ */ jsx25("h4", { className: "adm-sub", children: "By ingest version" }),
+            /* @__PURE__ */ jsx25("ul", { className: "adm-list", children: (ingestion.by_version || []).map((v) => /* @__PURE__ */ jsxs23("li", { children: [
+              /* @__PURE__ */ jsx25("span", { className: "adm-list__main", children: v.version }),
+              /* @__PURE__ */ jsxs23("span", { className: "adm-list__meta num", children: [
+                fmtNum(v.n),
+                " docs \xB7 ",
+                fmtNum(v.avg_unreadable, 1),
+                " unreadable avg"
+              ] })
+            ] }, v.version)) })
+          ] })
+        ] }),
+        /* @__PURE__ */ jsx25("h4", { className: "adm-sub", children: "Documents with the most unreadable cells" }),
+        /* @__PURE__ */ jsx25(QueryTable, { rows: ingestion.worst_documents, cols: [
+          { key: "filename", label: "File", render: (r) => clip(r.filename, 44) },
+          { key: "company", label: "Company", render: (r) => clip(r.company, 30) },
+          { key: "financial_year", label: "FY" },
+          { key: "grade", label: "Grade" },
+          { key: "unreadable", label: "Unreadable", num: true },
+          { key: "failed_footings", label: "Failed footings", num: true }
+        ] })
+      ] }) : /* @__PURE__ */ jsx25(Unavailable, { section: ingestion }) })
+    ] })
+  ] });
+}
+
+// src/components/admin/UserDetail.jsx
+import { jsx as jsx26, jsxs as jsxs24 } from "react/jsx-runtime";
+function Stat({ label, value }) {
+  return /* @__PURE__ */ jsxs24("div", { className: "adm-tile", children: [
+    /* @__PURE__ */ jsx26("span", { className: "adm-tile__label", children: label }),
+    /* @__PURE__ */ jsx26("span", { className: "adm-tile__value num", children: value })
+  ] });
+}
+function UserDetail({
+  user,
+  conversations,
+  convosState,
+  mode,
+  onMode,
+  events,
+  eventsState,
+  statusFilter,
+  onStatusFilter,
+  onOpenConversation,
+  onBack
+}) {
+  if (!user) return null;
+  return /* @__PURE__ */ jsxs24("div", { className: "adm-detail", children: [
+    /* @__PURE__ */ jsxs24("button", { type: "button", className: "adm-back", onClick: onBack, children: [
+      /* @__PURE__ */ jsx26(Icon, { name: "chevron", size: 14, className: "adm-back__icon" }),
+      " All users"
+    ] }),
+    /* @__PURE__ */ jsx26("header", { className: "adm-detail__head", children: /* @__PURE__ */ jsxs24("div", { children: [
+      /* @__PURE__ */ jsxs24("h2", { className: "adm-detail__name", children: [
+        user.display_name || user.username,
+        user.is_super_admin && /* @__PURE__ */ jsx26("span", { className: "pill pill--navy", children: "admin" })
+      ] }),
+      /* @__PURE__ */ jsxs24("p", { className: "adm-detail__sub", children: [
+        user.username,
+        " \xB7 ",
+        user.email
+      ] }),
+      /* @__PURE__ */ jsxs24("p", { className: "adm-detail__sub", children: [
+        "Joined ",
+        fmtDateTime(user.created_at),
+        " \xB7 last sign-in ",
+        fmtDateTime(user.last_login_at)
+      ] })
+    ] }) }),
+    /* @__PURE__ */ jsxs24("div", { className: "adm-tiles adm-tiles--compact", children: [
+      /* @__PURE__ */ jsx26(Stat, { label: "FS conversations", value: fmtNum(user.fs_conversations) }),
+      /* @__PURE__ */ jsx26(Stat, { label: "TB conversations", value: fmtNum(user.tb_conversations) }),
+      /* @__PURE__ */ jsx26(Stat, { label: "Queries", value: fmtNum(user.queries) }),
+      /* @__PURE__ */ jsx26(Stat, { label: "Avg answer time", value: fmtSecs(user.avg_elapsed) }),
+      /* @__PURE__ */ jsx26(Stat, { label: "Failed", value: fmtNum(user.errors) }),
+      /* @__PURE__ */ jsx26(Stat, { label: "Uploads", value: fmtNum(user.uploads) })
+    ] }),
+    /* @__PURE__ */ jsxs24("section", { className: "adm-panel card", children: [
+      /* @__PURE__ */ jsxs24("header", { className: "adm-panel__head", children: [
+        /* @__PURE__ */ jsx26("h3", { className: "adm-panel__title", children: "Conversations" }),
+        /* @__PURE__ */ jsx26("div", { className: "adm-seg", role: "tablist", "aria-label": "Conversation source", children: [["fs", "Financial Statement"], ["tb", "Trial Balance"]].map(([id, label]) => /* @__PURE__ */ jsx26(
+          "button",
+          {
+            type: "button",
+            role: "tab",
+            "aria-selected": mode === id,
+            className: `adm-seg__btn ${mode === id ? "is-on" : ""}`,
+            onClick: () => onMode(id),
+            children: label
+          },
+          id
+        )) })
+      ] }),
+      convosState?.loading ? /* @__PURE__ */ jsx26("p", { className: "adm-empty", children: "Loading\u2026" }) : convosState?.error ? /* @__PURE__ */ jsx26(Notice, { tone: "warn", children: convosState.error }) : (conversations || []).length === 0 ? /* @__PURE__ */ jsx26("p", { className: "adm-empty", children: "No conversations." }) : /* @__PURE__ */ jsx26("ul", { className: "adm-convos", children: conversations.map((c) => /* @__PURE__ */ jsx26("li", { children: /* @__PURE__ */ jsxs24(
+        "button",
+        {
+          type: "button",
+          className: "adm-convo",
+          onClick: () => onOpenConversation({ mode, conversationId: c.conversation_id, userId: user.user_id }),
+          children: [
+            /* @__PURE__ */ jsx26("span", { className: "adm-convo__title", children: c.title }),
+            /* @__PURE__ */ jsxs24("span", { className: "adm-convo__meta", children: [
+              fmtNum(c.n_messages),
+              " messages \xB7 ",
+              fmtDateTime(c.last_at)
+            ] })
+          ]
+        }
+      ) }, c.conversation_id)) })
+    ] }),
+    /* @__PURE__ */ jsxs24("section", { className: "adm-panel card", children: [
+      /* @__PURE__ */ jsxs24("header", { className: "adm-panel__head", children: [
+        /* @__PURE__ */ jsx26("h3", { className: "adm-panel__title", children: "Query log" }),
+        /* @__PURE__ */ jsx26("div", { className: "adm-seg", role: "tablist", "aria-label": "Filter by status", children: [["", "All"], ["ok", "OK"], ["error", "Errors"]].map(([id, label]) => /* @__PURE__ */ jsx26(
+          "button",
+          {
+            type: "button",
+            role: "tab",
+            "aria-selected": statusFilter === id,
+            className: `adm-seg__btn ${statusFilter === id ? "is-on" : ""}`,
+            onClick: () => onStatusFilter(id),
+            children: label
+          },
+          id || "all"
+        )) })
+      ] }),
+      eventsState?.loading ? /* @__PURE__ */ jsx26("p", { className: "adm-empty", children: "Loading\u2026" }) : eventsState?.available === false ? /* @__PURE__ */ jsx26("p", { className: "adm-empty", children: eventsState.reason }) : (events || []).length === 0 ? /* @__PURE__ */ jsx26("p", { className: "adm-empty", children: "No recorded queries yet." }) : /* @__PURE__ */ jsx26("div", { className: "adm-scroll", children: /* @__PURE__ */ jsxs24("table", { className: "adm-table", children: [
+        /* @__PURE__ */ jsx26("thead", { children: /* @__PURE__ */ jsxs24("tr", { children: [
+          /* @__PURE__ */ jsx26("th", { children: "When" }),
+          /* @__PURE__ */ jsx26("th", { children: "Question" }),
+          /* @__PURE__ */ jsx26("th", { children: "Status" }),
+          /* @__PURE__ */ jsx26("th", { className: "is-num", children: "Time" }),
+          /* @__PURE__ */ jsx26("th", { className: "is-num", children: "Tools" }),
+          /* @__PURE__ */ jsx26("th", { className: "is-num", children: "Tokens" }),
+          /* @__PURE__ */ jsx26("th", { children: "Confidence" })
+        ] }) }),
+        /* @__PURE__ */ jsx26("tbody", { children: events.map((e) => /* @__PURE__ */ jsxs24("tr", { children: [
+          /* @__PURE__ */ jsx26("td", { children: fmtDateTime(e.created_at) }),
+          /* @__PURE__ */ jsxs24("td", { children: [
+            e.conversation_id ? /* @__PURE__ */ jsx26(
+              "button",
+              {
+                type: "button",
+                className: "adm-link",
+                onClick: () => onOpenConversation({ mode: "fs", conversationId: e.conversation_id, userId: user.user_id }),
+                children: clip(e.query_text, 70)
+              }
+            ) : clip(e.query_text, 70),
+            e.status !== "ok" && e.error_message ? /* @__PURE__ */ jsxs24("span", { className: "adm-bad adm-sub-line", children: [
+              e.error_stage,
+              ": ",
+              clip(e.error_message, 80)
+            ] }) : null
+          ] }),
+          /* @__PURE__ */ jsx26("td", { children: /* @__PURE__ */ jsx26("span", { className: `pill pill--${e.status === "ok" ? "ok" : "err"}`, children: e.status }) }),
+          /* @__PURE__ */ jsx26("td", { className: "is-num num", children: fmtSecs(e.elapsed_seconds) }),
+          /* @__PURE__ */ jsx26("td", { className: "is-num num", children: fmtNum(e.tool_calls) }),
+          /* @__PURE__ */ jsx26("td", { className: "is-num num", children: fmtNum((e.prompt_tokens || 0) + (e.completion_tokens || 0)) }),
+          /* @__PURE__ */ jsx26("td", { children: e.confidence || (e.unsourced ? "unsourced" : "\u2014") })
+        ] }, e.event_id)) })
+      ] }) })
+    ] })
+  ] });
+}
+
+// src/components/admin/UsersTable.jsx
+import { useMemo as useMemo2, useState as useState14 } from "react";
+import { jsx as jsx27, jsxs as jsxs25 } from "react/jsx-runtime";
+function lastSeen(u) {
+  return [u.last_login_at, u.last_message_at, u.last_query_at, u.tb_last_at].filter(Boolean).sort().pop() || null;
+}
+function UsersTable({ users = [], tb, onOpen }) {
+  const [q, setQ] = useState14("");
+  const rows = useMemo2(() => {
+    const needle = q.trim().toLowerCase();
+    return users.filter((u) => !needle || (u.username || "").toLowerCase().includes(needle) || (u.email || "").toLowerCase().includes(needle) || (u.display_name || "").toLowerCase().includes(needle)).map((u) => ({ ...u, _seen: lastSeen(u) })).sort((a, b) => String(b._seen || "").localeCompare(String(a._seen || "")));
+  }, [users, q]);
+  return /* @__PURE__ */ jsxs25("div", { className: "adm-users", children: [
+    /* @__PURE__ */ jsxs25("div", { className: "adm-users__bar", children: [
+      /* @__PURE__ */ jsx27(
+        "input",
+        {
+          type: "search",
+          className: "adm-input",
+          placeholder: "Search name or email\u2026",
+          value: q,
+          onChange: (e) => setQ(e.target.value),
+          "aria-label": "Search users"
+        }
+      ),
+      /* @__PURE__ */ jsxs25("span", { className: "adm-users__count", children: [
+        rows.length,
+        " of ",
+        users.length,
+        " users"
+      ] })
+    ] }),
+    tb && tb.available === false && /* @__PURE__ */ jsxs25("p", { className: "adm-foot", children: [
+      "Trial Balance counts are unavailable right now (",
+      tb.reason || "its database could not be reached",
+      "). Financial Statement data is unaffected."
+    ] }),
+    /* @__PURE__ */ jsx27("div", { className: "adm-scroll", children: /* @__PURE__ */ jsxs25("table", { className: "adm-table adm-table--rows", children: [
+      /* @__PURE__ */ jsx27("thead", { children: /* @__PURE__ */ jsxs25("tr", { children: [
+        /* @__PURE__ */ jsx27("th", { children: "User" }),
+        /* @__PURE__ */ jsx27("th", { className: "is-num", children: "FS chats" }),
+        /* @__PURE__ */ jsx27("th", { className: "is-num", children: "TB chats" }),
+        /* @__PURE__ */ jsx27("th", { className: "is-num", children: "Queries" }),
+        /* @__PURE__ */ jsx27("th", { className: "is-num", children: "Avg time" }),
+        /* @__PURE__ */ jsx27("th", { className: "is-num", children: "Errors" }),
+        /* @__PURE__ */ jsx27("th", { className: "is-num", children: "Uploads" }),
+        /* @__PURE__ */ jsx27("th", { children: "Last active" })
+      ] }) }),
+      /* @__PURE__ */ jsxs25("tbody", { children: [
+        rows.map((u) => /* @__PURE__ */ jsxs25(
+          "tr",
+          {
+            className: "is-clickable",
+            onClick: () => onOpen?.(u.user_id),
+            tabIndex: 0,
+            onKeyDown: (e) => {
+              if (e.key === "Enter") onOpen?.(u.user_id);
+            },
+            children: [
+              /* @__PURE__ */ jsxs25("td", { children: [
+                /* @__PURE__ */ jsxs25("span", { className: "adm-user", children: [
+                  /* @__PURE__ */ jsx27("span", { className: "adm-user__name", children: u.display_name || u.username }),
+                  u.is_super_admin && /* @__PURE__ */ jsx27("span", { className: "pill pill--navy", children: "admin" })
+                ] }),
+                /* @__PURE__ */ jsxs25("span", { className: "adm-user__email", children: [
+                  u.username,
+                  " \xB7 ",
+                  u.email
+                ] })
+              ] }),
+              /* @__PURE__ */ jsx27("td", { className: "is-num num", children: fmtNum(u.fs_conversations) }),
+              /* @__PURE__ */ jsx27("td", { className: "is-num num", children: fmtNum(u.tb_conversations) }),
+              /* @__PURE__ */ jsx27("td", { className: "is-num num", children: fmtNum(u.queries) }),
+              /* @__PURE__ */ jsx27("td", { className: "is-num num", children: fmtSecs(u.avg_elapsed) }),
+              /* @__PURE__ */ jsx27("td", { className: `is-num num ${Number(u.errors) > 0 ? "adm-bad" : ""}`, children: fmtNum(u.errors) }),
+              /* @__PURE__ */ jsx27("td", { className: "is-num num", children: fmtNum(u.uploads) }),
+              /* @__PURE__ */ jsx27("td", { title: u._seen || "", children: relTime(u._seen) })
+            ]
+          },
+          u.user_id
+        )),
+        rows.length === 0 && /* @__PURE__ */ jsx27("tr", { children: /* @__PURE__ */ jsx27("td", { colSpan: 8, className: "adm-empty", children: "No users match." }) })
+      ] })
+    ] }) })
+  ] });
+}
+
+// src/components/admin/AdminDashboard.jsx
+import { jsx as jsx28, jsxs as jsxs26 } from "react/jsx-runtime";
+var TABS = [
+  ["insights", "Insights"],
+  ["users", "Users & chats"],
+  ["audit", "Access log"]
+];
+var WINDOWS = [7, 30, 90];
+function useLoad(fn, deps, onForbidden) {
+  const [state, setState] = useState15({ data: null, loading: true, error: null });
+  useEffect11(() => {
+    let live = true;
+    setState((s) => ({ ...s, loading: true, error: null }));
+    fn().then((data) => {
+      if (live) setState({ data, loading: false, error: null });
+    }).catch((err) => {
+      if (!live) return;
+      if (err.status === 403) onForbidden?.(err);
+      else if (err.status !== 401) setState({ data: null, loading: false, error: err.message });
+    });
+    return () => {
+      live = false;
+    };
+  }, deps);
+  return state;
+}
+function AdminDashboard({ onExit }) {
+  const [tab, setTab] = useState15("insights");
+  const [days, setDays] = useState15(30);
+  const [forbidden, setForbidden] = useState15(null);
+  const [userId, setUserId] = useState15(null);
+  const [viewing, setViewing] = useState15(null);
+  const [convoMode, setConvoMode] = useState15("fs");
+  const [statusFilter, setStatusFilter] = useState15("");
+  const onForbidden = useCallback6((err) => setForbidden(err.message), []);
+  const insights = useLoad(() => adminInsights(days), [days], onForbidden);
+  const users = useLoad(() => adminUsers(), [], onForbidden);
+  const audit = useLoad(() => tab === "audit" ? adminAudit() : Promise.resolve(null), [tab], onForbidden);
+  const userState = useLoad(
+    () => userId ? adminUser(userId) : Promise.resolve(null),
+    [userId],
+    onForbidden
+  );
+  const convos = useLoad(
+    () => userId ? adminUserConversations(userId, convoMode) : Promise.resolve(null),
+    [userId, convoMode],
+    onForbidden
+  );
+  const events = useLoad(
+    () => userId ? adminUserEvents(userId, { status: statusFilter }) : Promise.resolve(null),
+    [userId, statusFilter],
+    onForbidden
+  );
+  const conversation = useLoad(
+    () => viewing ? adminConversation(viewing.mode, viewing.conversationId) : Promise.resolve(null),
+    [viewing],
+    onForbidden
+  );
+  const openConversation = useCallback6((v) => setViewing(v), []);
+  if (forbidden) {
+    return /* @__PURE__ */ jsx28("div", { className: "adm", children: /* @__PURE__ */ jsx28("div", { className: "adm__body", children: /* @__PURE__ */ jsxs26(
+      Notice,
+      {
+        tone: "warn",
+        title: "You don't have access to this area",
+        action: /* @__PURE__ */ jsx28("button", { type: "button", className: "btn btn--ghost btn--sm", onClick: onExit, children: "Go back" }),
+        children: [
+          forbidden,
+          " Your account may have had admin rights removed."
+        ]
+      }
+    ) }) });
+  }
+  const inConversation = Boolean(viewing);
+  const inUser = Boolean(userId) && !inConversation;
+  return /* @__PURE__ */ jsxs26("div", { className: "adm", children: [
+    /* @__PURE__ */ jsxs26("header", { className: "adm__head", children: [
+      /* @__PURE__ */ jsxs26("div", { children: [
+        /* @__PURE__ */ jsx28("h1", { className: "adm__title", children: "Admin" }),
+        /* @__PURE__ */ jsx28("p", { className: "adm__sub", children: "Users, their conversations and activity, and where the system can be improved." })
+      ] }),
+      /* @__PURE__ */ jsxs26("span", { className: "pill pill--navy", children: [
+        /* @__PURE__ */ jsx28(Icon, { name: "shield", size: 12 }),
+        " Super administrator"
+      ] })
+    ] }),
+    !inConversation && !inUser && /* @__PURE__ */ jsxs26("nav", { className: "adm__tabs", role: "tablist", "aria-label": "Admin sections", children: [
+      TABS.map(([id, label]) => /* @__PURE__ */ jsx28(
+        "button",
+        {
+          type: "button",
+          role: "tab",
+          "aria-selected": tab === id,
+          className: `adm__tab ${tab === id ? "is-on" : ""}`,
+          onClick: () => setTab(id),
+          children: label
+        },
+        id
+      )),
+      tab === "insights" && /* @__PURE__ */ jsx28("span", { className: "adm__window", role: "group", "aria-label": "Time window", children: WINDOWS.map((d) => /* @__PURE__ */ jsxs26(
+        "button",
+        {
+          type: "button",
+          className: `adm-seg__btn ${days === d ? "is-on" : ""}`,
+          onClick: () => setDays(d),
+          children: [
+            d,
+            "d"
+          ]
+        },
+        d
+      )) })
+    ] }),
+    /* @__PURE__ */ jsx28("div", { className: "adm__body", children: inConversation ? conversation.loading ? /* @__PURE__ */ jsx28("p", { className: "adm-empty", children: "Loading conversation\u2026" }) : conversation.error ? /* @__PURE__ */ jsx28(
+      Notice,
+      {
+        tone: "error",
+        title: "Could not open that conversation",
+        action: /* @__PURE__ */ jsx28("button", { type: "button", className: "btn btn--ghost btn--sm", onClick: () => setViewing(null), children: "Back" }),
+        children: conversation.error
+      }
+    ) : /* @__PURE__ */ jsx28(ConversationViewer, { conversation: conversation.data, onBack: () => setViewing(null) }) : inUser ? userState.loading ? /* @__PURE__ */ jsx28("p", { className: "adm-empty", children: "Loading user\u2026" }) : userState.error ? /* @__PURE__ */ jsx28(Notice, { tone: "error", children: userState.error }) : /* @__PURE__ */ jsx28(
+      UserDetail,
+      {
+        user: userState.data?.user,
+        conversations: convos.data?.conversations,
+        convosState: convos,
+        mode: convoMode,
+        onMode: setConvoMode,
+        events: events.data?.events,
+        eventsState: { loading: events.loading, available: events.data?.available, reason: events.data?.reason },
+        statusFilter,
+        onStatusFilter: setStatusFilter,
+        onOpenConversation: openConversation,
+        onBack: () => {
+          setUserId(null);
+          setStatusFilter("");
+          setConvoMode("fs");
+        }
+      }
+    ) : tab === "insights" ? insights.loading ? /* @__PURE__ */ jsxs26("p", { className: "adm-empty", children: [
+      "Crunching the last ",
+      days,
+      " days\u2026"
+    ] }) : insights.error ? /* @__PURE__ */ jsx28(Notice, { tone: "error", title: "Could not load insights", children: insights.error }) : /* @__PURE__ */ jsx28(InsightsPanel, { insights: insights.data, onOpenConversation: openConversation }) : tab === "users" ? users.loading ? /* @__PURE__ */ jsx28("p", { className: "adm-empty", children: "Loading users\u2026" }) : users.error ? /* @__PURE__ */ jsx28(Notice, { tone: "error", title: "Could not load users", children: users.error }) : /* @__PURE__ */ jsx28(UsersTable, { users: users.data?.users, tb: users.data?.tb, onOpen: setUserId }) : audit.loading ? /* @__PURE__ */ jsx28("p", { className: "adm-empty", children: "Loading\u2026" }) : audit.error ? /* @__PURE__ */ jsx28(Notice, { tone: "error", children: audit.error }) : /* @__PURE__ */ jsxs26("section", { className: "adm-panel card", children: [
+      /* @__PURE__ */ jsxs26("header", { className: "adm-panel__head", children: [
+        /* @__PURE__ */ jsx28("h3", { className: "adm-panel__title", children: "Admin access log" }),
+        /* @__PURE__ */ jsx28("span", { className: "adm-panel__note", children: "Every time an admin opens a user or a conversation" })
+      ] }),
+      (audit.data?.entries || []).length === 0 ? /* @__PURE__ */ jsx28("p", { className: "adm-empty", children: "Nothing recorded yet." }) : /* @__PURE__ */ jsx28("div", { className: "adm-scroll", children: /* @__PURE__ */ jsxs26("table", { className: "adm-table", children: [
+        /* @__PURE__ */ jsx28("thead", { children: /* @__PURE__ */ jsxs26("tr", { children: [
+          /* @__PURE__ */ jsx28("th", { children: "When" }),
+          /* @__PURE__ */ jsx28("th", { children: "Admin" }),
+          /* @__PURE__ */ jsx28("th", { children: "Action" }),
+          /* @__PURE__ */ jsx28("th", { children: "About" }),
+          /* @__PURE__ */ jsx28("th", { children: "Detail" })
+        ] }) }),
+        /* @__PURE__ */ jsx28("tbody", { children: audit.data.entries.map((a, i) => /* @__PURE__ */ jsxs26("tr", { children: [
+          /* @__PURE__ */ jsx28("td", { children: fmtDateTime(a.at) }),
+          /* @__PURE__ */ jsx28("td", { children: a.admin_username || "\u2014" }),
+          /* @__PURE__ */ jsx28("td", { children: a.action.replace(/_/g, " ") }),
+          /* @__PURE__ */ jsx28("td", { children: a.target_username || "\u2014" }),
+          /* @__PURE__ */ jsx28("td", { children: a.detail || "" })
+        ] }, `${a.at}-${i}`)) })
+      ] }) })
+    ] }) })
+  ] });
+}
+
 // test/render.jsx
-import { jsx as jsx24 } from "react/jsx-runtime";
+import { jsx as jsx29 } from "react/jsx-runtime";
 var MODE = { id: "financial-statement", base_path: "/api/financial-statement", short_label: "FS" };
 var LEGACY_RESULT = {
   summary: "Legacy summary",
@@ -47848,49 +48790,154 @@ var DOC = {
     degraded: []
   }
 };
+var ADMIN_USER = {
+  user_id: "u1",
+  username: "harish",
+  email: "h@x.io",
+  display_name: "Harish",
+  is_super_admin: true,
+  created_at: "2026-09-01T10:00:00Z",
+  last_login_at: "2026-09-24T09:00:00Z",
+  fs_conversations: 4,
+  fs_messages: 18,
+  tb_conversations: 1,
+  tb_messages: 6,
+  queries: 12,
+  avg_elapsed: 14.2,
+  errors: 1,
+  uploads: 3,
+  last_query_at: "2026-09-24T09:10:00Z"
+};
+var INSIGHTS = {
+  days: 30,
+  telemetry_available: true,
+  usage: {
+    available: true,
+    queries: 120,
+    active_users: 6,
+    daily: [{ day: "2026-09-22", queries: 10, users: 3 }, { day: "2026-09-23", queries: 22, users: 4 }],
+    top_users: [],
+    modes: []
+  },
+  performance: {
+    available: true,
+    percentiles: { n: 100, p50: 9, p90: 41, p99: 70, mean: 15 },
+    daily: [{ day: "2026-09-22", p50: 8, p90: 30 }, { day: "2026-09-23", p50: 10, p90: 44 }],
+    slowest: [{
+      event_id: "e1",
+      query_text: "Assess going concern for X",
+      username: "harish",
+      elapsed_seconds: 70,
+      tool_calls: 4,
+      prompt_tokens: 3e4,
+      conversation_id: "c1",
+      user_id: "u1"
+    }],
+    latency_by_tool: [{ tool: "assess_going_concern", calls: 9, avg_elapsed: 30 }]
+  },
+  cost: {
+    available: true,
+    averages: { avg_prompt: 24e3, avg_completion: 700 },
+    daily: [{ day: "2026-09-22", prompt_tokens: 1e5, completion_tokens: 5e3 }],
+    top_users: [],
+    heaviest_queries: []
+  },
+  reliability: {
+    available: true,
+    status: [{ status: "ok", n: 110 }, { status: "error", n: 10 }],
+    by_stage: [{ stage: "RuntimeError", status: "error", n: 10 }],
+    recent_failures: [{
+      event_id: "e2",
+      created_at: "2026-09-23T10:00:00Z",
+      query_text: "q",
+      status: "error",
+      error_stage: "RuntimeError",
+      error_message: "boom",
+      username: "harish",
+      user_id: "u1"
+    }]
+  },
+  quality: {
+    available: true,
+    confidence: [{ confidence: "High", n: 80 }, { confidence: "Low", n: 30 }],
+    unsourced: { unsourced: 15, total: 110 },
+    unsourced_recent: [],
+    lowered_reasons: [],
+    no_data_answers: []
+  },
+  tools: { available: true, used: [{ tool: "run_tie_out_checks", calls: 12 }], unused_in_window: ["scan_psu_red_flags"] },
+  repeats: { available: true, questions: [{ question: "check caro for ntpc", asked: 4, users: 2, avg_elapsed: 20 }] },
+  ingestion: {
+    available: true,
+    documents: 6,
+    avg_unreadable: 4.2,
+    avg_recovered: 1,
+    hand_edited: 3,
+    by_grade: [{ grade: "fair", n: 4 }],
+    by_version: [{ version: "v1", n: 6, avg_unreadable: 4.2 }],
+    worst_documents: [{ filename: "SFS.pdf", company: "X Ltd", financial_year: "2023-24", grade: "fair", unreadable: 9, failed_footings: 2 }],
+    daily: []
+  }
+};
+var FS_CONVERSATION = {
+  conversation_id: "c1",
+  mode: "fs",
+  user_id: "u1",
+  username: "harish",
+  messages: [
+    { seq: 1, role: "user", content: "Assess going concern", created_at: "2026-09-23T10:00:00Z" },
+    {
+      seq: 2,
+      role: "assistant",
+      content: "Answer text",
+      created_at: "2026-09-23T10:00:20Z",
+      payload: { final_answer: "Going concern indicators warrant review.", summary: "Summary", checks: { confidence: "High" } }
+    }
+  ]
+};
 var CASES = [
   // The regression: a stored payload with none of the upload fields.
-  ["AnswerCard (legacy payload)", /* @__PURE__ */ jsx24(AnswerCard, { result: LEGACY_RESULT, mode: MODE, conversationId: "c1" })],
-  ["AnswerCard (upload payload)", /* @__PURE__ */ jsx24(AnswerCard, { result: UPLOAD_RESULT, mode: MODE, conversationId: "c1" })],
-  ["AnswerCard (no mode/convo)", /* @__PURE__ */ jsx24(AnswerCard, { result: UPLOAD_RESULT })],
-  ["AnswerCard (empty result)", /* @__PURE__ */ jsx24(AnswerCard, { result: {} })],
-  ["AnswerCard (null result)", /* @__PURE__ */ jsx24(AnswerCard, { result: null })],
-  ["AnswerCard (trend chart)", /* @__PURE__ */ jsx24(AnswerCard, { result: FS_FEATURE_RESULT, mode: MODE, conversationId: "c1" })],
-  ["QualityReport (full)", /* @__PURE__ */ jsx24(QualityReport, { doc: DOC, onDelete: () => {
+  ["AnswerCard (legacy payload)", /* @__PURE__ */ jsx29(AnswerCard, { result: LEGACY_RESULT, mode: MODE, conversationId: "c1" })],
+  ["AnswerCard (upload payload)", /* @__PURE__ */ jsx29(AnswerCard, { result: UPLOAD_RESULT, mode: MODE, conversationId: "c1" })],
+  ["AnswerCard (no mode/convo)", /* @__PURE__ */ jsx29(AnswerCard, { result: UPLOAD_RESULT })],
+  ["AnswerCard (empty result)", /* @__PURE__ */ jsx29(AnswerCard, { result: {} })],
+  ["AnswerCard (null result)", /* @__PURE__ */ jsx29(AnswerCard, { result: null })],
+  ["AnswerCard (trend chart)", /* @__PURE__ */ jsx29(AnswerCard, { result: FS_FEATURE_RESULT, mode: MODE, conversationId: "c1" })],
+  ["QualityReport (full)", /* @__PURE__ */ jsx29(QualityReport, { doc: DOC, onDelete: () => {
   } })],
-  ["QualityReport (no coverage)", /* @__PURE__ */ jsx24(QualityReport, { doc: { ...DOC, coverage: void 0 } })],
-  ["QualityReport (bare doc)", /* @__PURE__ */ jsx24(QualityReport, { doc: { doc_id: "x", filename: "x.pdf" } })],
-  ["QualityReport (null doc)", /* @__PURE__ */ jsx24(QualityReport, { doc: null })],
-  ["IngestProgress (queued)", /* @__PURE__ */ jsx24(IngestProgress, { filename: "a.pdf", stage: "queued", message: "Queued\u2026", fraction: 0 })],
-  ["IngestProgress (convert)", /* @__PURE__ */ jsx24(IngestProgress, { filename: "a.pdf", stage: "convert", message: "Detecting", fraction: 0.4 })],
-  ["IngestProgress (done)", /* @__PURE__ */ jsx24(IngestProgress, { filename: "a.pdf", stage: "done", message: "Finished", fraction: 1 })],
-  ["IngestProgress (error)", /* @__PURE__ */ jsx24(IngestProgress, { filename: "a.pdf", error: "it failed" })],
-  ["IngestProgress (no props)", /* @__PURE__ */ jsx24(IngestProgress, {})],
-  ["Dropzone", /* @__PURE__ */ jsx24(Dropzone, { onFiles: () => {
+  ["QualityReport (no coverage)", /* @__PURE__ */ jsx29(QualityReport, { doc: { ...DOC, coverage: void 0 } })],
+  ["QualityReport (bare doc)", /* @__PURE__ */ jsx29(QualityReport, { doc: { doc_id: "x", filename: "x.pdf" } })],
+  ["QualityReport (null doc)", /* @__PURE__ */ jsx29(QualityReport, { doc: null })],
+  ["IngestProgress (queued)", /* @__PURE__ */ jsx29(IngestProgress, { filename: "a.pdf", stage: "queued", message: "Queued\u2026", fraction: 0 })],
+  ["IngestProgress (convert)", /* @__PURE__ */ jsx29(IngestProgress, { filename: "a.pdf", stage: "convert", message: "Detecting", fraction: 0.4 })],
+  ["IngestProgress (done)", /* @__PURE__ */ jsx29(IngestProgress, { filename: "a.pdf", stage: "done", message: "Finished", fraction: 1 })],
+  ["IngestProgress (error)", /* @__PURE__ */ jsx29(IngestProgress, { filename: "a.pdf", error: "it failed" })],
+  ["IngestProgress (no props)", /* @__PURE__ */ jsx29(IngestProgress, {})],
+  ["Dropzone", /* @__PURE__ */ jsx29(Dropzone, { onFiles: () => {
   } })],
-  ["Dropzone (busy)", /* @__PURE__ */ jsx24(Dropzone, { onFiles: () => {
+  ["Dropzone (busy)", /* @__PURE__ */ jsx29(Dropzone, { onFiles: () => {
   }, busy: true })],
-  ["CitationViewer", /* @__PURE__ */ jsx24(CitationViewer, { mode: MODE, conversationId: "c1", docId: "up_a", tableId: "t1", caption: "Note 1", onClose: () => {
+  ["CitationViewer", /* @__PURE__ */ jsx29(CitationViewer, { mode: MODE, conversationId: "c1", docId: "up_a", tableId: "t1", caption: "Note 1", onClose: () => {
   } })],
-  ["UploadPanel", /* @__PURE__ */ jsx24(UploadPanel, { mode: MODE, conversationId: "c1" })],
-  ["UploadPanel (no conversation)", /* @__PURE__ */ jsx24(UploadPanel, { mode: MODE, conversationId: null })],
-  ["ErrorBoundary (passthrough)", /* @__PURE__ */ jsx24(ErrorBoundary, { label: "x", children: /* @__PURE__ */ jsx24("span", { children: "ok" }) })],
-  ["DocumentChips", /* @__PURE__ */ jsx24(DocumentChips, { docs: [DOC], onDelete: () => {
+  ["UploadPanel", /* @__PURE__ */ jsx29(UploadPanel, { mode: MODE, conversationId: "c1" })],
+  ["UploadPanel (no conversation)", /* @__PURE__ */ jsx29(UploadPanel, { mode: MODE, conversationId: null })],
+  ["ErrorBoundary (passthrough)", /* @__PURE__ */ jsx29(ErrorBoundary, { label: "x", children: /* @__PURE__ */ jsx29("span", { children: "ok" }) })],
+  ["DocumentChips", /* @__PURE__ */ jsx29(DocumentChips, { docs: [DOC], onDelete: () => {
   } })],
-  ["DocumentChips (empty)", /* @__PURE__ */ jsx24(DocumentChips, { docs: [] })],
-  ["DocumentChips (null)", /* @__PURE__ */ jsx24(DocumentChips, { docs: null })],
-  ["Composer (no attach)", /* @__PURE__ */ jsx24(Composer, { onSubmit: () => {
+  ["DocumentChips (empty)", /* @__PURE__ */ jsx29(DocumentChips, { docs: [] })],
+  ["DocumentChips (null)", /* @__PURE__ */ jsx29(DocumentChips, { docs: null })],
+  ["Composer (no attach)", /* @__PURE__ */ jsx29(Composer, { onSubmit: () => {
   }, placeholder: "Ask\u2026" })],
-  ["Composer (with attach)", /* @__PURE__ */ jsx24(Composer, { onSubmit: () => {
+  ["Composer (with attach)", /* @__PURE__ */ jsx29(Composer, { onSubmit: () => {
   }, placeholder: "Ask\u2026", onFiles: () => {
   } })],
-  ["Composer (attach busy)", /* @__PURE__ */ jsx24(Composer, { onSubmit: () => {
+  ["Composer (attach busy)", /* @__PURE__ */ jsx29(Composer, { onSubmit: () => {
   }, placeholder: "Ask\u2026", onFiles: () => {
   }, attachBusy: true })],
   // The whole FS chat surface, which is what actually went blank.
   [
     "ChatView (empty thread)",
-    /* @__PURE__ */ jsx24(
+    /* @__PURE__ */ jsx29(
       ChatView,
       {
         mode: MODE,
@@ -47906,7 +48953,7 @@ var CASES = [
   ],
   [
     "ChatView (with answers)",
-    /* @__PURE__ */ jsx24(
+    /* @__PURE__ */ jsx29(
       ChatView,
       {
         mode: MODE,
@@ -47924,11 +48971,11 @@ var CASES = [
       }
     )
   ],
-  ["DocumentPane", /* @__PURE__ */ jsx24(DocumentPane, { mode: MODE, conversationId: "c1", doc: DOC, onClose: () => {
+  ["DocumentPane", /* @__PURE__ */ jsx29(DocumentPane, { mode: MODE, conversationId: "c1", doc: DOC, onClose: () => {
   } })],
-  ["DocumentPane (no conversation)", /* @__PURE__ */ jsx24(DocumentPane, { mode: MODE, conversationId: null, doc: DOC, onClose: () => {
+  ["DocumentPane (no conversation)", /* @__PURE__ */ jsx29(DocumentPane, { mode: MODE, conversationId: null, doc: DOC, onClose: () => {
   } })],
-  ["DocumentPane (null doc)", /* @__PURE__ */ jsx24(DocumentPane, { mode: MODE, conversationId: "c1", doc: null, onClose: () => {
+  ["DocumentPane (null doc)", /* @__PURE__ */ jsx29(DocumentPane, { mode: MODE, conversationId: "c1", doc: null, onClose: () => {
   } })],
   // A table with one flagged cell -- the exact shape `page_text` returns
   // when ARTHA_FS_UPLOAD_USER_EDITS is on (see edits.cells_for_table). Only
@@ -47936,7 +48983,7 @@ var CASES = [
   // the one render case that actually exercises the button/badge/ARIA label,
   // not just the "Loading…" placeholder every other DocumentPane case stops
   // at (renderToString runs no effects, so PageText's own fetch never fires).
-  ["EditableTable (one flagged cell)", /* @__PURE__ */ jsx24(
+  ["EditableTable (one flagged cell)", /* @__PURE__ */ jsx29(
     EditableTable,
     {
       mode: MODE,
@@ -47968,7 +49015,7 @@ var CASES = [
     }
   }],
   // --- redesign: figure states, tag blocks, drawer, cards, wait bar --------
-  ["Markdown (figure states + tags)", /* @__PURE__ */ jsx24(Markdown, { children: [
+  ["Markdown (figure states + tags)", /* @__PURE__ */ jsx29(Markdown, { children: [
     "| Particulars | FY 2023-24 | FY 2022-23 |",
     "| --- | --- | --- |",
     "| Revenue | 1,42,318.40 | 1,28,904.10 |",
@@ -47986,7 +49033,7 @@ var CASES = [
     if (html.includes("142,318")) throw new Error("a printed figure was regrouped");
     if (html.includes("21,946.85")) throw new Error("should show the user figure as typed with Indian grouping only");
   }],
-  ["QualityReport drawer (Enter / Review / kept until)", /* @__PURE__ */ jsx24(QualityReport, { doc: {
+  ["QualityReport drawer (Enter / Review / kept until)", /* @__PURE__ */ jsx29(QualityReport, { doc: {
     ...DOC,
     uploaded_at: 179e7,
     user_entered_cells: 1,
@@ -48004,7 +49051,7 @@ var CASES = [
       if (!html.includes(needle)) throw new Error(`missing ${needle}`);
     }
   }],
-  ["DocumentChips (counters)", /* @__PURE__ */ jsx24(DocumentChips, { docs: [{
+  ["DocumentChips (counters)", /* @__PURE__ */ jsx29(DocumentChips, { docs: [{
     ...DOC,
     recovered_cells: 1,
     user_entered_cells: 2,
@@ -48015,20 +49062,20 @@ var CASES = [
       if (!html.includes(needle)) throw new Error(`missing ${needle}`);
     }
   }],
-  ["IngestProgress (queued ahead)", /* @__PURE__ */ jsx24(IngestProgress, { filename: "b.pdf", status: "queued", ahead: 1 }), (html) => {
+  ["IngestProgress (queued ahead)", /* @__PURE__ */ jsx29(IngestProgress, { filename: "b.pdf", status: "queued", ahead: 1 }), (html) => {
     if (!html.includes("Queued \xB7 1 ahead")) throw new Error("queue position missing");
   }],
-  ["IngestProgress (password failure)", /* @__PURE__ */ jsx24(IngestProgress, { filename: "c.pdf", error: "c.pdf: file is encrypted", onRetry: () => {
+  ["IngestProgress (password failure)", /* @__PURE__ */ jsx29(IngestProgress, { filename: "c.pdf", error: "c.pdf: file is encrypted", onRetry: () => {
   } }), (html) => {
     if (!html.includes("password-protected") || !html.includes("Retry")) throw new Error("failure not actionable");
   }],
-  ["AuthScreen (two panes, no dead link)", /* @__PURE__ */ jsx24(AuthProvider, { children: /* @__PURE__ */ jsx24(AuthScreen, {}) }), (html) => {
+  ["AuthScreen (two panes, no dead link)", /* @__PURE__ */ jsx29(AuthProvider, { children: /* @__PURE__ */ jsx29(AuthScreen, {}) }), (html) => {
     for (const needle of ["Welcome back.", "Every figure, traced to its page.", "Not an official government service"]) {
       if (!html.includes(needle)) throw new Error(`missing ${needle}`);
     }
     if (/forgot/i.test(html)) throw new Error("there is no password reset, so no Forgot link");
   }],
-  ["Sidebar (rail + retention)", /* @__PURE__ */ jsx24(AuthProvider, { children: /* @__PURE__ */ jsx24(
+  ["Sidebar (rail + retention)", /* @__PURE__ */ jsx29(AuthProvider, { children: /* @__PURE__ */ jsx29(
     Sidebar,
     {
       rail: false,
@@ -48046,7 +49093,7 @@ var CASES = [
     if (!html.includes("kept for 45 days")) throw new Error("retention note missing");
     if (!html.includes("Unavailable")) throw new Error("unavailable label missing");
   }],
-  ["AnswerCard (How this was checked, collapsed)", /* @__PURE__ */ jsx24(AnswerCard, { mode: MODE, conversationId: "c1", result: {
+  ["AnswerCard (How this was checked, collapsed)", /* @__PURE__ */ jsx29(AnswerCard, { mode: MODE, conversationId: "c1", result: {
     ...UPLOAD_RESULT,
     rewritten_query: "Compare finance costs FY 2023-24 vs FY 2022-23",
     upload_store_notice: "Your uploaded documents could not be reached.",
@@ -48057,7 +49104,7 @@ var CASES = [
     }
     if (html.includes("Lowered from")) throw new Error("checks detail should be collapsed");
   }],
-  ["pure helpers", /* @__PURE__ */ jsx24("span", {}), () => {
+  ["pure helpers", /* @__PURE__ */ jsx29("span", {}), () => {
     const eq = (a, b, m) => {
       if (a !== b) throw new Error(`${m}: got ${a}, want ${b}`);
     };
@@ -48078,6 +49125,112 @@ var CASES = [
     if (!String(keptUntil(86400 * 365, 30)).includes("1971")) throw new Error("kept until");
   }]
 ];
+CASES.push(
+  [
+    "Sidebar (admin link shown to an admin)",
+    /* @__PURE__ */ jsx29(AuthProvider, { children: /* @__PURE__ */ jsx29(
+      Sidebar,
+      {
+        showAdmin: true,
+        activeId: "financial-statement",
+        onSelect: () => {
+        },
+        health: {},
+        modes: [{ id: "financial-statement", short_label: "FS", integrated: true }]
+      }
+    ) }),
+    (html) => {
+      if (!html.includes("Users, chats")) throw new Error("admin link missing for an admin");
+    }
+  ],
+  [
+    "Sidebar (no admin link for everyone else)",
+    /* @__PURE__ */ jsx29(AuthProvider, { children: /* @__PURE__ */ jsx29(
+      Sidebar,
+      {
+        activeId: "financial-statement",
+        onSelect: () => {
+        },
+        health: {},
+        modes: [{ id: "financial-statement", short_label: "FS", integrated: true }]
+      }
+    ) }),
+    (html) => {
+      if (/Users, chats|Admin/.test(html)) throw new Error("admin link leaked to a non-admin");
+    }
+  ],
+  [
+    "AdminDashboard (initial state)",
+    /* @__PURE__ */ jsx29(AdminDashboard, { onExit: () => {
+    } }),
+    (html) => {
+      if (!html.includes("Super administrator")) throw new Error("header missing");
+    }
+  ],
+  ["InsightsPanel (populated)", /* @__PURE__ */ jsx29(InsightsPanel, { insights: INSIGHTS, onOpenConversation: () => {
+  } }), (html) => {
+    if (!html.includes("Where to look first")) throw new Error("observations missing");
+    if (!html.includes("Slow tail")) throw new Error("slow-tail observation missing");
+    if (!html.includes("Live ingestion quality")) throw new Error("ingestion section missing");
+  }],
+  [
+    "InsightsPanel (telemetry unavailable)",
+    /* @__PURE__ */ jsx29(InsightsPanel, { insights: { telemetry_available: false } }),
+    (html) => {
+      if (!html.includes("artha_query_events")) throw new Error("unavailable notice missing");
+    }
+  ],
+  [
+    "InsightsPanel (a section unavailable)",
+    /* @__PURE__ */ jsx29(InsightsPanel, { insights: { ...INSIGHTS, cost: { available: false, reason: "boom" } } }),
+    (html) => {
+      if (!html.includes("boom")) throw new Error("section reason missing");
+    }
+  ],
+  ["InsightsPanel (null)", /* @__PURE__ */ jsx29(InsightsPanel, { insights: null })],
+  ["UsersTable", /* @__PURE__ */ jsx29(UsersTable, { users: [ADMIN_USER], tb: { available: false, reason: "down" }, onOpen: () => {
+  } }), (html) => {
+    if (!html.includes("Harish")) throw new Error("user missing");
+    if (!html.includes("Trial Balance counts are unavailable")) throw new Error("TB degrade note missing");
+  }],
+  ["UsersTable (empty)", /* @__PURE__ */ jsx29(UsersTable, { users: [] })],
+  [
+    "UserDetail",
+    /* @__PURE__ */ jsx29(
+      UserDetail,
+      {
+        user: ADMIN_USER,
+        conversations: [{ conversation_id: "c1", title: "Assess going concern", n_messages: 4, last_at: "2026-09-23T10:00:00Z" }],
+        convosState: { loading: false },
+        mode: "fs",
+        onMode: () => {
+        },
+        events: [],
+        eventsState: { loading: false, available: true },
+        statusFilter: "",
+        onStatusFilter: () => {
+        },
+        onOpenConversation: () => {
+        },
+        onBack: () => {
+        }
+      }
+    ),
+    (html) => {
+      if (!html.includes("Assess going concern")) throw new Error("conversation missing");
+    }
+  ],
+  ["UserDetail (null user)", /* @__PURE__ */ jsx29(UserDetail, { user: null })],
+  ["ConversationViewer (FS, read-only)", /* @__PURE__ */ jsx29(ConversationViewer, { conversation: FS_CONVERSATION, onBack: () => {
+  } }), (html) => {
+    if (!html.includes("read-only")) throw new Error("read-only marker missing");
+    if (!html.includes("Going concern indicators warrant review")) throw new Error("answer missing");
+    if (/<textarea/.test(html)) throw new Error("a composer leaked into a read-only view");
+  }],
+  ["ConversationViewer (TB)", /* @__PURE__ */ jsx29(ConversationViewer, { conversation: { ...FS_CONVERSATION, mode: "tb" }, onBack: () => {
+  } })],
+  ["ConversationViewer (null)", /* @__PURE__ */ jsx29(ConversationViewer, { conversation: null })]
+);
 var failed = 0;
 for (const [name, element, check] of CASES) {
   try {

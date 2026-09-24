@@ -18,26 +18,42 @@ GET  /health                  readiness, per component
 ## The pipeline
 
 ```
-render -> precheck -> preprocess -> convert -> vlm second read -> verify -> identify -> emit
+render -> precheck -> preprocess -> layout + OCR -> structure + second read
+       -> reconcile / validate / export -> identify
 ```
 
 Each stage is one module; `pipeline.py` is the only thing that knows the order.
-Two of them are the reason this service exists at all:
 
-**`preprocess.py` — the stage docling does not have.** Docling performs no
+**Preprocessing is the stage docling does not have.** Docling performs no
 deskew, no resolution normalisation and no contrast correction, and will not
 tell you when they were needed. Every financial statement in `data/` is a
 200 DPI scan with no text layer, and `MH 2022-23 SFS` page 3 is skewed by 1.7°
 — enough to displace a row by more than a text line's height, which makes a
 table extractor bind a label to the wrong numbers and report no error.
+(`render.py`, `precheck.py`, `preprocess.py`.)
 
-**`verify.py` — the arithmetic self-audit.** Nothing here trusts the extractor.
-Subtotals are discovered arithmetically (real statements print unlabelled ones),
-and a cell that cannot be established is **withheld** and replaced by an
-`[unreadable: page N, table T, row "...", col "..."]` marker, so no unverified
-figure can reach a prompt. Three signals decide a cell: docling's OCR
-confidence, agreement with the vision model's independent re-read, and whether
-the column it sits in adds up.
+**Where the digits come from: OCR, and only OCR.**
+
+| Stage | Module | What it does |
+|---|---|---|
+| layout | `layout.py` | Docling reads the *text* (headings, paragraphs, lists) and *locates* tables. TableFormer is off; docling never reads table cells. |
+| OCR | `ocr.py` | RapidOCR reads every word inside each table region, with a box. Words are regrouped into cell-sized tokens. |
+| structure | `structure.py` | Geometry proposes rows and columns from the token positions. Gemma classifies them (column roles, row kinds, wrapped labels) and returns only ids and enums, never a number. The reply is validated against the page; a reply that fails is retried once, then the geometry-only grid is used and the table is marked unconfirmed. |
+| second read | `second_read.py` | Gemma reads each cropped row independently and lists the amounts it sees. |
+| reconcile | `reconcile.py` | Compares the two readers per cell: `verified_dual_read`, `ocr_only`, `flagged`, `unreadable`, `handwritten`, `struck`. A doubtful figure is **flagged, never fixed** — OCR's text is kept verbatim and the second reader's is kept beside it. |
+| validate | `validate.py`, `rules.yaml` | Footing, Balance Sheet identity, and note-total-vs-statement-line checks. They report failures and change nothing. |
+| export | `export.py` | Builds the records the gateway and UI already consume (`table_md` with `[unreadable: ...]` / `[recovered ...]` markers, `CellFinding`s addressed by row/column index). |
+
+`llm_client.py` is the one Gemma client: structure calls and second-read calls
+have separate concurrency caps (a burst of long structure calls must not queue
+every short row read behind it), and every request and response is logged to
+`out/<doc_id>/llm_logs/`.
+
+**Pages run concurrently.** After preprocessing, each page flows through the
+stages as soon as the one before is done with it, so the wait on the model for
+page 1's tables overlaps with docling working through page 2. Layout stays
+single-file (two docling conversions at once run out of memory); OCR and model
+calls run on their own pools. Output order never depends on completion order.
 
 ## Running the tests
 
@@ -45,9 +61,11 @@ the column it sits in adds up.
 ingestion/venv/Scripts/python -m pytest ingestion/tests -q
 ```
 
-These cover cell parsing, footing discovery, the withholding rules and
-identification, and need none of the heavy dependencies — they run against
-figures hand-read from the sample scans.
+These need none of the heavy dependencies: the model endpoint, docling and
+RapidOCR are faked, and the tests cover number parsing, structure validation,
+reconciliation, the validation rules, the export contract and pipeline
+concurrency. The accuracy harness (`tests/accuracy/`, real filings) needs the
+deployed venv: `python -m tests.accuracy.runner --mode inproc score-all`.
 
 ## Installing
 
@@ -91,7 +109,7 @@ reuses the gateway's own `LLM_BASE_URL` / `LLM_MODEL_NAME` rather than giving
 the same server a second name to drift from. See `app/config.py`; the
 deployment-facing subset is documented in `.env.example`.
 
-The vision model's second read is optional. Without it the pipeline still runs
-and figures are still checked against their own arithmetic, but each one then
-rests on a single reader — and the quality report says so rather than leaving
+The vision model is optional. Without it table structure is worked out from
+positions alone and figures are read by OCR alone, but each one then rests on
+a single reader — and the quality report says so rather than leaving
 the reader to assume otherwise.

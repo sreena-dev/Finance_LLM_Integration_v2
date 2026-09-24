@@ -90,8 +90,8 @@ def _warm_up_dependencies() -> None:
     `docling`'s own import chain pulls in torch and transformers and is
     genuinely slow -- commonly 15-60+ seconds on a cold process, more if a
     CUDA context has to initialise. This module's `/health` handler used to
-    do `from . import convert as convert_mod` inline, which meant Python
-    only actually ran `convert.py`'s top-level `import docling` the FIRST
+    do `from . import layout as layout_mod` inline, which meant Python
+    only actually ran `layout.py`'s top-level `import docling` the FIRST
     time any request reached that line -- almost always the caller's own
     health-check poll, arriving right after this process started. That
     request paid the whole import cost synchronously, blocking this
@@ -106,7 +106,7 @@ def _warm_up_dependencies() -> None:
     serve `/health` immediately -- reporting `"done": false` honestly, in
     milliseconds, until this finishes -- rather than hanging.
 
-    `/health` MUST NOT import `convert`/`cv2`/`pypdfium2` itself, even after
+    `/health` MUST NOT import `layout`/`cv2`/`pypdfium2` itself, even after
     this runs: Python's import lock is a real OS-level lock, not
     asyncio-aware, so a request arriving while THIS thread is mid-import
     would still block the event loop waiting for that lock -- exactly the
@@ -115,8 +115,8 @@ def _warm_up_dependencies() -> None:
     fresh import.
     """
     try:
-        from . import convert as convert_mod
-        docling = convert_mod.DOCLING_AVAILABLE
+        from . import layout as layout_mod
+        docling = layout_mod.DOCLING_AVAILABLE
     except Exception:
         logger.exception("docling import failed during startup warm-up")
         docling = False

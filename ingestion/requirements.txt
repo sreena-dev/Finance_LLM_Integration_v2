@@ -12,6 +12,7 @@ pydantic>=2.6.0
 python-multipart>=0.0.9
 python-dotenv>=1.0.0
 httpx>=0.27.0
+pyyaml>=6.0
 
 # Docling. PINNED, not >=: the vendored checkout at ../docling is 2.123.1 (one
 # commit past the tag) and the pipeline-options field names this service sets --

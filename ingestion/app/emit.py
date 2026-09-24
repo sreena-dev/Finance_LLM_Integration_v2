@@ -38,9 +38,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-from . import vlm_read
 from .config import Config
-from .identify import classify_statement, classify_statement_from_page, detect_units
 from .models import (
     CHUNK_HEADING,
     CHUNK_LIST,
@@ -58,7 +56,6 @@ from .models import (
     TableRecord,
     TextRecord,
 )
-from .tables import Table
 
 # "Refer note 12", "(Note 2A)", "Notes 3 and 4"
 _NOTE_REF_RE = re.compile(r"\bnotes?\.?\s*(?:no\.?)?\s*(\d{1,3}[A-Za-z]?)", re.I)
@@ -91,70 +88,38 @@ def _fy_years(financial_year: str | None) -> tuple[int | None, int | None]:
     return start, start + 1
 
 
-def build_table_record(
-    table: Table,
-    doc_id: str,
-    page_no: int,
-    surrounding_text: str,
-    footings: list[FootingCheck],
-    findings: list[CellFinding],
-    bbox: list[float] | None = None,
-    vlm_agreement: float | None = None,
-    snippet_jpeg_b64: str | None = None,
-    source_file: str | None = None,
-    toc_root: str | None = None,
-    recovered: list | None = None,
-) -> TableRecord:
-    # Caption first, then the page's own heading. See
-    # classify_statement_from_page: a scanned filing marks up no captions, so
-    # without the fallback financial_stmt_type is None on every table and
-    # _find_statement_tables matches nothing at all.
-    statement_type = classify_statement(table.title) or classify_statement_from_page(surrounding_text)
+def jpeg_b64(image: "np.ndarray", max_width: int = 1100, quality: int = 72) -> str | None:
+    """A base64 JPEG of an image, for a reader to look at rather than re-OCR.
 
-    # Units are looked for in the table's own text AND in the prose around it.
-    # The caption sits outside TableFormer's box more often than not -- the
-    # "(Amount in '000)" on the MH statements is printed above the top rule and
-    # to the right, and is not part of the table at all.
-    scale, currency = detect_units(f"{table.title or ''}\n{surrounding_text}\n{table.to_markdown()}")
+    Downscaled and compressed hard: this is evidence to look at, not to OCR
+    again. A 300 DPI crop of a full-page table is ~1.5MB raw and ~60KB at the
+    table-snippet defaults, and the gateway holds up to twelve documents per
+    user in memory.
+    """
+    try:
+        import base64
+        import io
 
-    passed = [f for f in footings if f.passed]
-    confidence = None
-    if footings:
-        confidence = round(len(passed) / len(footings), 4)
+        from PIL import Image
 
-    return TableRecord(
-        table_id=f"{doc_id}_{table.table_id}",
-        doc_id=doc_id,
-        table_title=table.title,
-        table_md=table.to_markdown(),
-        page_ocr_start=page_no,
-        page_ocr_end=page_no,
-        financial_stmt_type=statement_type,
-        toc_section=table.title,
-        unit=scale,
-        currency=currency,
-        note_refs=_note_refs(f"{table.title or ''} {surrounding_text}"),
-        is_financial=statement_type is not None or bool(table.value_cols),
-        bbox=bbox,
-        confidence=confidence,
-        vlm_agreement=vlm_agreement,
-        snippet_jpeg_b64=snippet_jpeg_b64,
-        table_description=describe_table(table),
-        source_file=source_file,
-        findings=findings,
-        footings=footings,
-        recovered=recovered or [],
-    )
+        frame = Image.fromarray(image).convert("L")
+        if frame.width > max_width:
+            frame = frame.resize((max_width, int(frame.height * max_width / frame.width)), Image.LANCZOS)
+        buffer = io.BytesIO()
+        frame.save(buffer, format="JPEG", quality=quality, optimize=True)
+        return base64.b64encode(buffer.getvalue()).decode("ascii")
+    except Exception:
+        return None
 
 
 def build_page_image(page_no: int, image: "np.ndarray | None") -> PageImage:
     """One page's corrected bitmap, encoded for the document pane's page view.
 
-    Sized separately from ``vlm_read.snippet``'s table-crop defaults
+    Sized separately from ``jpeg_b64``'s table-crop defaults
     (1100px/q72): a full page is roughly ten times a table crop's pixel area,
     and this is read to compare against the printed page, not fed back into
     OCR, so it can afford to be smaller and softer than a citation crop of one
-    figure. ``None`` is accepted defensively, mirroring ``vlm_read.snippet``'s
+    figure. ``None`` is accepted defensively, mirroring ``jpeg_b64``'s
     own contract, and returns an imageless record rather than raising -- the
     caller filters blank/duplicate pages out before this is reached, but a
     record that fails safe here is one fewer way ingestion can crash on a page
@@ -165,47 +130,10 @@ def build_page_image(page_no: int, image: "np.ndarray | None") -> PageImage:
     height, width = image.shape[:2]
     return PageImage(
         page_no=page_no,
-        image_jpeg_b64=vlm_read.snippet(image, max_width=1400, quality=60),
+        image_jpeg_b64=jpeg_b64(image, max_width=1400, quality=60),
         width_px=width,
         height_px=height,
     )
-
-
-#: How many row labels go into a derived description. Enough to name what the
-#: table is about; short enough that an ILIKE over it is still selective.
-_DESCRIPTION_LABELS = 12
-_DESCRIPTION_CHARS = 400
-
-
-def describe_table(table: Table) -> str | None:
-    """A searchable description of a table, derived from its own row labels.
-
-    ``AuditRiskTools._match_note_tables`` finds a note by matching patterns like
-    ``property, plant and equipment`` or ``provisions`` against ``table_title``
-    OR ``table_description``. On a scan docling recovers no caption for most
-    tables, so title matching alone misses them and three tools --
-    ``get_schedule_note``, ``get_audit_report_highlights`` and
-    ``review_account_area`` -- return nothing.
-
-    The labels the table itself prints are the honest source for this: a PPE
-    schedule says "Gross carrying amount", "Additions", "Disposals", and a
-    provisions note says "Provision for gratuity". Nothing is invented; this is
-    a concatenation of text already in the document, and it is marked derived on
-    the record so it is never mistaken for a filed caption.
-    """
-    labels = []
-    for r in range(len(table.rows)):
-        label = (table.label(r) or "").strip()
-        if label and not label.startswith("["):  # skip withheld-cell markers
-            labels.append(label)
-        if len(labels) >= _DESCRIPTION_LABELS:
-            break
-
-    header = [h.strip() for h in table.header if h and h.strip()]
-    parts = header + labels
-    if not parts:
-        return None
-    return "; ".join(parts)[:_DESCRIPTION_CHARS]
 
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")

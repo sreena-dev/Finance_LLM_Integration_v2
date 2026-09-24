@@ -94,6 +94,33 @@ export async function fetchModes() {
   return modes;
 }
 
+// ── Admin (super administrators only) ────────────────────────────────────
+//
+// Hard-coded `/api/admin/...` like `fetchModes`: these are not per-mode. The
+// server is the gate -- a non-admin gets a JSON 403 whose `detail` surfaces as
+// `err.message` with `err.status === 403` (NOT a 401, so it never signs the user
+// out). Every call below is read-only.
+
+const enc = encodeURIComponent;
+
+export const adminWhoAmI = () => request('/api/admin/whoami');
+export const adminUsers = () => request('/api/admin/users');
+export const adminUser = (userId) => request(`/api/admin/users/${enc(userId)}`);
+export const adminInsights = (days = 30) => request(`/api/admin/insights?days=${enc(days)}`);
+export const adminAudit = (limit = 100) => request(`/api/admin/audit?limit=${enc(limit)}`);
+
+export const adminUserConversations = (userId, mode = 'fs') =>
+  request(`/api/admin/users/${enc(userId)}/conversations?mode=${enc(mode)}`);
+
+export const adminConversation = (mode, conversationId) =>
+  request(`/api/admin/conversations/${enc(mode)}/${enc(conversationId)}`);
+
+export function adminUserEvents(userId, { status = '', limit = 100, offset = 0 } = {}) {
+  const q = new URLSearchParams({ limit, offset });
+  if (status) q.set('status', status);
+  return request(`/api/admin/users/${enc(userId)}/events?${q}`);
+}
+
 /** Probe one mode's readiness. Never throws — a probe failure is a result. */
 export async function probeMode(mode) {
   try {

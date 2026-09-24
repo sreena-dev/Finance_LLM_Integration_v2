@@ -8,7 +8,9 @@ import {
   fsUploadHealth,
   probeMode,
 } from './api/client';
-import Sidebar from './components/Sidebar';
+import Sidebar, { ADMIN_VIEW } from './components/Sidebar';
+import { useAuth } from './auth/AuthContext';
+import AdminDashboard from './components/admin/AdminDashboard';
 import ConversationList from './components/chat/ConversationList';
 import ChatView from './components/chat/ChatView';
 import DocumentPane from './components/ingestion/DocumentPane';
@@ -78,6 +80,12 @@ function ModeHeader({ mode, health }) {
 }
 
 export default function App() {
+  // The Admin view is offered only to a super administrator. That is what the
+  // sign-in payload reports; it is a display decision, not the protection --
+  // every /api/admin route re-checks the database on the server.
+  const { user } = useAuth();
+  const isAdmin = Boolean(user?.is_super_admin);
+
   const [modes, setModes] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [bootError, setBootError] = useState(null);
@@ -175,9 +183,19 @@ export default function App() {
 
   // Remember the selected mode so a refresh returns here instead of the first
   // page. Restored on boot in the mode-list effect above.
+  // The Admin view is deliberately not remembered: a refresh should land on a
+  // real mode, and boot restore above only accepts ids the gateway listed.
   useEffect(() => {
-    if (activeId) localStorage.setItem('artha.activeMode', activeId);
+    if (activeId && activeId !== ADMIN_VIEW) localStorage.setItem('artha.activeMode', activeId);
   }, [activeId]);
+
+  // If the Admin view is showing for someone who is not (or is no longer) an
+  // admin -- a revoked account, or a stale state -- leave it.
+  useEffect(() => {
+    if (activeId === ADMIN_VIEW && !isAdmin) {
+      setActiveId(modes.find((m) => !m.companion_of)?.id || null);
+    }
+  }, [activeId, isAdmin, modes]);
 
   // The switcher lists top-level modes only. A companion (SAR Q&A) shares its
   // parent's entity/FY dropdowns, so listing it separately would show the same
@@ -446,6 +464,7 @@ export default function App() {
   return (
     <div className="app">
       <Sidebar modes={sidebarModes} activeId={activeId} onSelect={setActiveId} health={health}
+               showAdmin={isAdmin}
                rail={activeId === 'financial-statement' && Boolean(fsViewDoc)}
                retentionDays={activeId === 'financial-statement' ? retentionDays : null}>
         {/* Financial Statements and Trial Balance both persist a conversation
@@ -476,6 +495,10 @@ export default function App() {
       </Sidebar>
 
       <main className="main">
+        {activeId === ADMIN_VIEW && isAdmin && (
+          <AdminDashboard onExit={() => setActiveId(modes.find((m) => !m.companion_of)?.id || null)} />
+        )}
+
         {activeMode && (
           <>
             <ModeHeader mode={headerMode} health={health[headerMode.id]} />

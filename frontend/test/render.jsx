@@ -32,6 +32,11 @@ import Markdown from '../src/components/common/Markdown';
 import AuthScreen from '../src/auth/AuthScreen';
 import { AuthProvider } from '../src/auth/AuthContext';
 import Sidebar from '../src/components/Sidebar';
+import AdminDashboard from '../src/components/admin/AdminDashboard';
+import InsightsPanel from '../src/components/admin/InsightsPanel';
+import UsersTable from '../src/components/admin/UsersTable';
+import UserDetail from '../src/components/admin/UserDetail';
+import ConversationViewer from '../src/components/admin/ConversationViewer';
 import { parseFigureCell } from '../src/lib/figures';
 import { groupIndian, inWords } from '../src/lib/indian';
 import { friendlyError, stageIndex } from '../src/components/ingestion/IngestProgress';
@@ -109,6 +114,49 @@ const DOC = {
     unavailable: ['accounting-policy lookup'],
     degraded: [],
   },
+};
+
+// ── Admin dashboard fixtures ────────────────────────────────────────────────
+const ADMIN_USER = {
+  user_id: 'u1', username: 'harish', email: 'h@x.io', display_name: 'Harish', is_super_admin: true,
+  created_at: '2026-09-01T10:00:00Z', last_login_at: '2026-09-24T09:00:00Z',
+  fs_conversations: 4, fs_messages: 18, tb_conversations: 1, tb_messages: 6,
+  queries: 12, avg_elapsed: 14.2, errors: 1, uploads: 3, last_query_at: '2026-09-24T09:10:00Z',
+};
+const INSIGHTS = {
+  days: 30, telemetry_available: true,
+  usage: { available: true, queries: 120, active_users: 6,
+    daily: [{ day: '2026-09-22', queries: 10, users: 3 }, { day: '2026-09-23', queries: 22, users: 4 }],
+    top_users: [], modes: [] },
+  performance: { available: true,
+    percentiles: { n: 100, p50: 9, p90: 41, p99: 70, mean: 15 },
+    daily: [{ day: '2026-09-22', p50: 8, p90: 30 }, { day: '2026-09-23', p50: 10, p90: 44 }],
+    slowest: [{ event_id: 'e1', query_text: 'Assess going concern for X', username: 'harish',
+      elapsed_seconds: 70, tool_calls: 4, prompt_tokens: 30000, conversation_id: 'c1', user_id: 'u1' }],
+    latency_by_tool: [{ tool: 'assess_going_concern', calls: 9, avg_elapsed: 30 }] },
+  cost: { available: true, averages: { avg_prompt: 24000, avg_completion: 700 },
+    daily: [{ day: '2026-09-22', prompt_tokens: 100000, completion_tokens: 5000 }],
+    top_users: [], heaviest_queries: [] },
+  reliability: { available: true, status: [{ status: 'ok', n: 110 }, { status: 'error', n: 10 }],
+    by_stage: [{ stage: 'RuntimeError', status: 'error', n: 10 }],
+    recent_failures: [{ event_id: 'e2', created_at: '2026-09-23T10:00:00Z', query_text: 'q', status: 'error',
+      error_stage: 'RuntimeError', error_message: 'boom', username: 'harish', user_id: 'u1' }] },
+  quality: { available: true, confidence: [{ confidence: 'High', n: 80 }, { confidence: 'Low', n: 30 }],
+    unsourced: { unsourced: 15, total: 110 }, unsourced_recent: [], lowered_reasons: [], no_data_answers: [] },
+  tools: { available: true, used: [{ tool: 'run_tie_out_checks', calls: 12 }], unused_in_window: ['scan_psu_red_flags'] },
+  repeats: { available: true, questions: [{ question: 'check caro for ntpc', asked: 4, users: 2, avg_elapsed: 20 }] },
+  ingestion: { available: true, documents: 6, avg_unreadable: 4.2, avg_recovered: 1, hand_edited: 3,
+    by_grade: [{ grade: 'fair', n: 4 }], by_version: [{ version: 'v1', n: 6, avg_unreadable: 4.2 }],
+    worst_documents: [{ filename: 'SFS.pdf', company: 'X Ltd', financial_year: '2023-24', grade: 'fair', unreadable: 9, failed_footings: 2 }],
+    daily: [] },
+};
+const FS_CONVERSATION = {
+  conversation_id: 'c1', mode: 'fs', user_id: 'u1', username: 'harish',
+  messages: [
+    { seq: 1, role: 'user', content: 'Assess going concern', created_at: '2026-09-23T10:00:00Z' },
+    { seq: 2, role: 'assistant', content: 'Answer text', created_at: '2026-09-23T10:00:20Z',
+      payload: { final_answer: 'Going concern indicators warrant review.', summary: 'Summary', checks: { confidence: 'High' } } },
+  ],
 };
 
 const CASES = [
@@ -283,6 +331,46 @@ const CASES = [
     if (!String(keptUntil(86400 * 365, 30)).includes('1971')) throw new Error('kept until');
   }],
 ];
+
+CASES.push(
+  ['Sidebar (admin link shown to an admin)', <AuthProvider><Sidebar showAdmin activeId="financial-statement"
+      onSelect={() => {}} health={{}} modes={[{ id: 'financial-statement', short_label: 'FS', integrated: true }]} /></AuthProvider>,
+    (html) => { if (!html.includes('Users, chats')) throw new Error('admin link missing for an admin'); }],
+  ['Sidebar (no admin link for everyone else)', <AuthProvider><Sidebar activeId="financial-statement"
+      onSelect={() => {}} health={{}} modes={[{ id: 'financial-statement', short_label: 'FS', integrated: true }]} /></AuthProvider>,
+    (html) => { if (/Users, chats|Admin/.test(html)) throw new Error('admin link leaked to a non-admin'); }],
+
+  ['AdminDashboard (initial state)', <AdminDashboard onExit={() => {}} />,
+    (html) => { if (!html.includes('Super administrator')) throw new Error('header missing'); }],
+  ['InsightsPanel (populated)', <InsightsPanel insights={INSIGHTS} onOpenConversation={() => {}} />, (html) => {
+    if (!html.includes('Where to look first')) throw new Error('observations missing');
+    if (!html.includes('Slow tail')) throw new Error('slow-tail observation missing');
+    if (!html.includes('Live ingestion quality')) throw new Error('ingestion section missing');
+  }],
+  ['InsightsPanel (telemetry unavailable)', <InsightsPanel insights={{ telemetry_available: false }} />,
+    (html) => { if (!html.includes('artha_query_events')) throw new Error('unavailable notice missing'); }],
+  ['InsightsPanel (a section unavailable)',
+    <InsightsPanel insights={{ ...INSIGHTS, cost: { available: false, reason: 'boom' } }} />,
+    (html) => { if (!html.includes('boom')) throw new Error('section reason missing'); }],
+  ['InsightsPanel (null)', <InsightsPanel insights={null} />],
+  ['UsersTable', <UsersTable users={[ADMIN_USER]} tb={{ available: false, reason: 'down' }} onOpen={() => {}} />, (html) => {
+    if (!html.includes('Harish')) throw new Error('user missing');
+    if (!html.includes('Trial Balance counts are unavailable')) throw new Error('TB degrade note missing');
+  }],
+  ['UsersTable (empty)', <UsersTable users={[]} />],
+  ['UserDetail', <UserDetail user={ADMIN_USER} conversations={[{ conversation_id: 'c1', title: 'Assess going concern', n_messages: 4, last_at: '2026-09-23T10:00:00Z' }]}
+      convosState={{ loading: false }} mode="fs" onMode={() => {}} events={[]} eventsState={{ loading: false, available: true }}
+      statusFilter="" onStatusFilter={() => {}} onOpenConversation={() => {}} onBack={() => {}} />,
+    (html) => { if (!html.includes('Assess going concern')) throw new Error('conversation missing'); }],
+  ['UserDetail (null user)', <UserDetail user={null} />],
+  ['ConversationViewer (FS, read-only)', <ConversationViewer conversation={FS_CONVERSATION} onBack={() => {}} />, (html) => {
+    if (!html.includes('read-only')) throw new Error('read-only marker missing');
+    if (!html.includes('Going concern indicators warrant review')) throw new Error('answer missing');
+    if (/<textarea/.test(html)) throw new Error('a composer leaked into a read-only view');
+  }],
+  ['ConversationViewer (TB)', <ConversationViewer conversation={{ ...FS_CONVERSATION, mode: 'tb' }} onBack={() => {}} />],
+  ['ConversationViewer (null)', <ConversationViewer conversation={null} />],
+);
 
 let failed = 0;
 for (const [name, element, check] of CASES) {

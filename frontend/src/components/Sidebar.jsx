@@ -10,6 +10,10 @@ export const MODE_ICONS = {
   'financial-diagnostic-report': 'pulse',
 };
 
+// Not a gateway mode: a reserved view id the sidebar and App agree on. Kept here
+// beside MODE_ICONS, which App already imports from this file.
+export const ADMIN_VIEW = '__admin';
+
 function StatusDot({ status }) {
   // status: 'checking' | 'ready' | 'down' | 'pending'
   const title = {
@@ -22,7 +26,7 @@ function StatusDot({ status }) {
   return <span className={`side__status side__status--${status}`} title={title} />;
 }
 
-export default function Sidebar({ modes, activeId, onSelect, health, children, rail = false, retentionDays = 30 }) {
+export default function Sidebar({ modes, activeId, onSelect, health, children, rail = false, retentionDays = 30, showAdmin = false }) {
   const { user, signOut } = useAuth();
 
   return (
@@ -84,6 +88,35 @@ export default function Sidebar({ modes, activeId, onSelect, health, children, r
             </motion.button>
           );
         })}
+
+        {/* Super administrators only. Hiding this link is a convenience, not
+            the protection: every /api/admin route re-checks the database. */}
+        {showAdmin && (
+          <motion.button
+            type="button"
+            className={`side__item side__item--admin ${activeId === ADMIN_VIEW ? 'is-active' : ''}`}
+            onClick={() => onSelect(ADMIN_VIEW)}
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.05 + modes.length * 0.05, duration: 0.34, ease: [0.22, 1, 0.36, 1] }}
+            aria-current={activeId === ADMIN_VIEW ? 'page' : undefined}
+          >
+            {activeId === ADMIN_VIEW && (
+              <motion.span
+                className="side__active-bg"
+                layoutId="side-active"
+                transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+              />
+            )}
+            <span className="side__item-inner">
+              <Icon name="shield" size={18} className="side__item-icon" />
+              <span className="side__item-label">
+                Admin
+                <span className="side__item-sub">Users, chats &amp; insights</span>
+              </span>
+            </span>
+          </motion.button>
+        )}
       </nav>
 
         {/* The conversation list, when the active mode has one. Passed as

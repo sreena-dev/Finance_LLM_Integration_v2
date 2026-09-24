@@ -119,4 +119,5 @@ async def me(user: CurrentUser = Depends(require_user)):
     moment before falling back to the sign-in screen.
     """
     return UserOut(user_id=user.user_id, username=user.username,
-                   email=user.email, display_name=user.display_name)
+                   email=user.email, display_name=user.display_name,
+                   is_super_admin=user.is_super_admin)

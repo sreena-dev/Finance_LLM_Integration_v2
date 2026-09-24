@@ -76,6 +76,10 @@ class UserOut(BaseModel):
     username: str
     email: str
     display_name: str | None = None
+    # Only ever used by the client to decide whether to SHOW the Admin link. It
+    # is not what protects the admin API -- the server checks the database on
+    # every admin request (see deps.require_super_admin).
+    is_super_admin: bool = False
 
 
 class TokenResponse(BaseModel):

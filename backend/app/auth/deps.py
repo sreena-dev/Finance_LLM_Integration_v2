@@ -27,6 +27,10 @@ class CurrentUser:
     username: str
     email: str
     display_name: str | None = None
+    # Read from the database on every request, never from the token, so a
+    # revoke (`python -m app.auth.admin revoke <user>`) takes effect on the very
+    # next call rather than when the token expires.
+    is_super_admin: bool = False
 
     @property
     def name(self) -> str:
@@ -72,4 +76,26 @@ async def require_user(
     current = CurrentUser(**user)
     # Stashed so a route can read it without re-declaring the dependency.
     request.state.user = current
+    return current
+
+
+async def require_super_admin(
+    current: CurrentUser = Depends(require_user),
+) -> CurrentUser:
+    """Allow only a super admin.
+
+    A signed-in user who is NOT an admin gets a 403 with a JSON `detail` --
+    deliberately not a 401. The browser client signs the user out on any 401,
+    which would punish an ordinary user for merely being refused; and the
+    detail must be JSON, or the client reads a bare 403 as a port conflict.
+    (`require_user` above explains the opposite rule for credential failures.)
+
+    An unauthenticated caller never reaches this: `require_user` rejects them
+    with a 401 first.
+    """
+    if not current.is_super_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This area is restricted to super administrators.",
+        )
     return current

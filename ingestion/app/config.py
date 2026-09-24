@@ -52,7 +52,7 @@ class Config:
     # fix that was just deployed; and the gateway stores it against the
     # extraction, so a 30-day-old row can be told apart from a current one
     # instead of silently being trusted as though it came from today's code.
-    PIPELINE_VERSION = os.getenv("INGEST_PIPELINE_VERSION", "").strip() or "2026.09.17"
+    PIPELINE_VERSION = os.getenv("INGEST_PIPELINE_VERSION", "").strip() or "2026.09.24"
 
     # Jobs are held in memory and reaped by age. A job's payload is the whole
     # extracted document, so this bounds RAM, not just bookkeeping.
@@ -120,7 +120,6 @@ class Config:
     # a multi-minute stall on first use and an outright failure air-gapped.
     ARTIFACTS_PATH = os.getenv("INGEST_DOCLING_ARTIFACTS") or None
     OCR_LANG = [s for s in (os.getenv("INGEST_OCR_LANG", "english").split(",")) if s]
-    TABLEFORMER_ACCURATE = _bool("INGEST_TABLEFORMER_ACCURATE", True)
     # Seconds docling may spend on ONE document. It cannot be scaled per call
     # (the converter, and the models behind it, are built once per process and
     # keyed on these options), so it has to cover the biggest file expected:
@@ -164,45 +163,57 @@ class Config:
     # 4 CPUs and no GPU, where that contention is worse.
     PAGE_WORKERS = _int("INGEST_PAGE_WORKERS", 4)
 
-    # ---- VLM second read -------------------------------------------------
+    # ---- Gemma (structure understanding + second read) --------------------
     # Same endpoint the FS agent generates against.
     VLM_ENABLED = _bool("INGEST_VLM_ENABLED", True)
     VLM_BASE_URL = (os.getenv("LLM_BASE_URL") or "").rstrip("/")
     VLM_MODEL = os.getenv("INGEST_VLM_MODEL") or os.getenv("LLM_MODEL_NAME") or ""
     VLM_API_KEY = os.getenv("GENERATION_API_KEY") or ""
     VLM_TIMEOUT = _float("INGEST_VLM_TIMEOUT", 180.0)
-    # Upsampling applied to a TARGETED RESCUE CROP before it is sent -- a
-    # factor on the already-rendered 300 DPI page, not a fraction of it. 1.0
-    # sends the strip at native render scale; 2.0 doubles it. Whole-table
-    # reads (transcribe(), above) are always sent at native scale regardless
-    # of this setting: a full schedule is already at the model's resolution
-    # limit and upsampling the whole thing only costs tokens. A two-row strip
-    # (see vlm_read.row_band) is small enough that doubling it is nearly free
-    # and recovers the thin strokes that made the cell unreadable in the
-    # first place. Previously declared but unused as a whole-page-relative
-    # scale; repurposed here rather than adding a second knob.
-    VLM_CROP_SCALE = _float("INGEST_VLM_CROP_SCALE", 2.0)
-    VLM_MAX_TABLES = _int("INGEST_VLM_MAX_TABLES", 60)
-    # Output room for one table's transcription. A wide PPE roll-forward runs
-    # to several thousand tokens of markdown; a read cut off by this limit is
-    # discarded rather than compared as a prefix (see vlm_read.transcribe), so
-    # raising it buys corroboration on big schedules that would otherwise fall
-    # back to arithmetic alone.
-    VLM_MAX_TOKENS = _int("INGEST_VLM_MAX_TOKENS", 8000)
-    # How many tables' second reads are in flight at once. Each is an
-    # independent network round trip (~15-20s observed) with nothing to share
-    # between them, and running them one at a time is what makes a real
-    # filing with 40+ tables take 5-10 minutes when docling's own layout+OCR
-    # pass on the same pages takes a fraction of that. Bounded rather than
-    # unbounded because this hits the SAME vLLM endpoint the live chat agent
-    # generates against (see this module's docstring) -- a large ingestion
-    # job must not be able to starve every other user's chat latency.
-    VLM_CONCURRENCY = _int("INGEST_VLM_CONCURRENCY", 4)
-    # Blind by default: no seed, no column pinning to docling's grid. A primed
-    # read (docling's markdown pasted into the prompt, asked to "correct" it)
-    # is not independent evidence -- agreement with a read the model was shown
-    # first is not a second opinion, it is an echo. See vlm_read.transcribe.
-    VLM_BLIND_READ = _bool("INGEST_VLM_BLIND_READ", True)
+    # Two workloads share the endpoint and must not crowd each other out: a
+    # STRUCTURE call returns a long JSON document and holds a slot for ~15-20 s,
+    # a second-read call returns one short line and holds it for a second or
+    # two. One semaphore for both lets a burst of structure calls queue every
+    # cheap read behind them. The endpoint is also shared with live chat, so
+    # both caps stay small.
+    LLM_STRUCTURE_CONCURRENCY = _int("INGEST_LLM_STRUCTURE_CONCURRENCY", 2)
+    LLM_VISION_CONCURRENCY = _int("INGEST_LLM_VISION_CONCURRENCY", 4)
+    # Longest image side sent to the model. A full-page table crop at 300 DPI is
+    # ~2500 px wide; past this the model gains no legibility, only image tokens.
+    LLM_MAX_IMAGE_SIDE = _int("INGEST_LLM_MAX_IMAGE_SIDE", 2200)
+    LLM_STRUCTURE_MAX_TOKENS = _int("INGEST_LLM_STRUCTURE_MAX_TOKENS", 6000)
+    LLM_VISION_MAX_TOKENS = _int("INGEST_LLM_VISION_MAX_TOKENS", 300)
+    # Every request and response is written under <dir>/<doc_id>/llm_logs/ so a
+    # bad structure read can be inspected after the fact. Empty disables it.
+    LLM_LOG_DIR = os.getenv("INGEST_LLM_LOG_DIR", "out").strip()
+    # A structure call covers at most this many candidate rows; a longer table
+    # is split, each chunk reusing the column schema the first one produced.
+    STRUCTURE_ROWS_PER_CALL = _int("INGEST_STRUCTURE_ROWS_PER_CALL", 40)
+    # Per-DOCUMENT cap on second-read row calls, so one huge filing cannot
+    # issue thousands of requests. Rows past the cap are emitted OCR-only.
+    SECOND_READ_MAX_ROWS = _int("INGEST_SECOND_READ_MAX_ROWS", 400)
+    # Upsampling applied to a row crop before the second read: a one-row strip
+    # is small enough that doubling it is nearly free and recovers thin strokes.
+    SECOND_READ_CROP_SCALE = _float("INGEST_SECOND_READ_CROP_SCALE", 2.0)
+    # An OCR token below this recognition score is not trusted on its own.
+    OCR_MIN_CONFIDENCE = _float("INGEST_OCR_MIN_CONFIDENCE", 0.6)
+
+    # ---- Page pipeline (concurrency) ---------------------------------------
+    # Pages flow through layout -> OCR -> structure -> second read as soon as
+    # the stage before them is done with that page, rather than every stage
+    # finishing the whole document first. Layout (docling) stays single-file --
+    # two converters at once run out of memory -- so the win comes from
+    # overlapping it with the OCR and Gemma waits of pages already past it.
+    PAGE_PIPELINE_DEPTH = _int("INGEST_PAGE_PIPELINE_DEPTH", 4)
+    OCR_WORKERS = _int("INGEST_OCR_WORKERS", 4)
+    # Tables docling's layout model never marked: a block of text whose lines
+    # are mostly right-aligned numbers is offered as a table candidate.
+    DETECT_UNMARKED_TABLES = _bool("INGEST_DETECT_UNMARKED_TABLES", True)
+    # Docling reads text and LOCATES tables; table cells come from OCR words.
+    # Turn this on only if the layout model does not report a table box without
+    # its structure model running (it then reads structure but the boxes are
+    # all that is used).
+    LAYOUT_TABLE_STRUCTURE = _bool("INGEST_LAYOUT_TABLE_STRUCTURE", False)
 
     # ---- Gross page-orientation (90/180/270) detection --------------------
     # OFF by default. Unlike plain skew correction (a few degrees, applied
@@ -216,154 +227,12 @@ class Config:
     # tests use, before this should default to True.
     ORIENTATION_DETECTION_ENABLED = _bool("INGEST_ORIENTATION_DETECTION_ENABLED", False)
 
-    # ---- VLM targeted rescue (recovering an individual unreadable cell) --
-    # Off switch independent of VLM_ENABLED: a deployment may want the
-    # existing whole-table second read but not the extra per-row round trips.
-    VLM_RESCUE_ENABLED = _bool("INGEST_VLM_RESCUE_ENABLED", True)
-    # Per-DOCUMENT cap on rescue calls -- the budget that stops one badly
-    # scanned filing from issuing hundreds of extra round trips. When the cap
-    # bites, the remaining cells stay withheld for BUDGET reasons rather than
-    # for lack of evidence, and the quality report says so (see pipeline.py).
-    VLM_MAX_RESCUES = _int("INGEST_VLM_MAX_RESCUES", 40)
-    # Deliberately BELOW VLM_CONCURRENCY (4): rescues run in a second wave
-    # after the whole-table pass, a bad scan can request dozens of them, and
-    # the same starve-live-chat argument above the table-level knob applies
-    # with more force to a long tail of small calls against the shared
-    # endpoint.
-    VLM_RESCUE_CONCURRENCY = _int("INGEST_VLM_RESCUE_CONCURRENCY", 2)
-    # A rescue transcribes one row, not a whole schedule -- far less output
-    # room is needed than VLM_MAX_TOKENS, and a smaller cap also bounds how
-    # long one bad read can run before the finish_reason == "length" discard
-    # (see vlm_read.transcribe_row) kicks in.
-    VLM_RESCUE_MAX_TOKENS = _int("INGEST_VLM_RESCUE_MAX_TOKENS", 400)
-
-    # ---- VLM band rescue (splitting a row TableFormer merged from several) -
-    # A DIFFERENT defect from the single-cell rescue above: here the ROW
-    # itself is wrong -- several real line items were merged into one grid
-    # row because the source page prints them with no ruling line between
-    # them, which TableFormer relies on to find row boundaries (see
-    # tables._ENUM_MARKER_RE's docstring and vlm_read._looks_merged). A
-    # single-cell rescue cannot fix this: there is no one printed row
-    # matching the merged label to re-read. This asks the model to
-    # transcribe every distinct line in a small cropped band instead, so a
-    # garbled 4-item label can come back as 4 correctly labelled rows.
-    VLM_BAND_RESCUE_ENABLED = _bool("INGEST_VLM_BAND_RESCUE_ENABLED", True)
-    # Per-DOCUMENT cap, same reasoning as VLM_MAX_RESCUES -- separate budget
-    # because this is a different, more expensive call (asks for several
-    # rows, not one).
-    VLM_MAX_BAND_RESCUES = _int("INGEST_VLM_MAX_BAND_RESCUES", 15)
-    # How many consecutive OCR lines a band search will consider merging into
-    # one crop. Bounded so a genuinely large, unrelated block of text cannot
-    # be swept in by a loose concatenation match.
-    VLM_BAND_MAX_LINES = _int("INGEST_VLM_BAND_MAX_LINES", 6)
-    # More room than a single-cell rescue (VLM_RESCUE_MAX_TOKENS) since the
-    # reply may contain several rows, but still far less than a whole-table
-    # transcription (VLM_MAX_TOKENS).
-    VLM_BAND_MAX_TOKENS = _int("INGEST_VLM_BAND_MAX_TOKENS", 800)
-
-    # ---- VLM closed-world disagreement resolution -------------------------
-    # A THIRD pass, distinct from both rescues above: for a cell where
-    # docling's own reading and the whole-table VLM's own reading already
-    # disagree (`readers_disagree`), force a choice between EXACTLY those
-    # two candidates rather than trusting the VLM's reading directly (the
-    # previous behaviour) or asking for a free re-read (which could in
-    # principle answer with a THIRD value neither reader produced). See
-    # vlm_read.resolve_disagreement's own docstring for why this is a
-    # meaningfully different, stronger guarantee than a free rescue.
-    VLM_DISAGREEMENT_RESOLUTION_ENABLED = _bool(
-        "INGEST_VLM_DISAGREEMENT_RESOLUTION_ENABLED", True
-    )
-    # Per-DOCUMENT cap, same reasoning as VLM_MAX_RESCUES.
-    VLM_MAX_DISAGREEMENT_RESOLUTIONS = _int("INGEST_VLM_MAX_DISAGREEMENT_RESOLUTIONS", 40)
-
-    # ---- Structural-risk reporting (vlm_read.assess_structural_risk) ------
-    # Purely a REPORTING signal since number binding took over deciding
-    # whether to replace a table's grid (see below) -- these two thresholds
-    # no longer gate a replacement, only whether the note calling a grid
-    # "unreliable" fires.
-    # Fraction of a table's rows that must look like several merged line
-    # items (vlm_read._looks_merged, aggregated) before the grid is flagged
-    # unreliable.
-    VLM_STRUCTURE_MERGED_ROW_THRESHOLD = _float("INGEST_VLM_STRUCTURE_MERGED_ROW_THRESHOLD", 0.15)
-    # How far apart the OCR-geometry row count and the grid's own row count
-    # must be, as a fraction of the larger, before that mismatch alone flags
-    # the grid.
-    VLM_STRUCTURE_ROW_MISMATCH_THRESHOLD = _float("INGEST_VLM_STRUCTURE_ROW_MISMATCH_THRESHOLD", 0.25)
-
-    # ---- OCR number binding ("the VLM proposes, OCR disposes") -----------
-    # The mechanism that makes "the VLM must not hallucinate a number"
-    # structural rather than a prompting instruction: every figure the VLM
-    # places into a table must bind to an actual OCR-read number at a
-    # consistent position, or it never becomes a plain figure. OFF by
-    # default -- unproven against the real corpus; see
-    # structure_repair.py's module docstring and vlm_read.select_structure
-    # for the two earlier, measured-and-discarded designs this replaces.
-    # Anyone turning this on should run the accuracy harness across the
-    # corpus first and expect to prove WRONG does not increase by one.
-    NUMBER_BINDING_ENABLED = _bool("INGEST_NUMBER_BINDING_ENABLED", False)
-    # A leftover OCR figure can be PROPOSED for an empty cell on geometric
-    # evidence, but is only ever PLACED if a second reader independently
-    # reads the same figure there (`vlm_read.confirm_gap_fill`). OCR read the
-    # digits, the vision model read the digits, and they agree at the same
-    # position -- the strongest evidence a gap fill can have. With the vision
-    # model unreachable nothing is placed: there is no fallback to position
-    # alone. Separately disableable so binding + coverage selection + the
-    # half-read report can run without any gap filling at all.
-    NUMBER_BINDING_GAP_FILL = _bool("INGEST_NUMBER_BINDING_GAP_FILL", True)
-    # Per-DOCUMENT cap on the targeted re-reads the unbound-cell escape
-    # hatch issues, same reasoning as VLM_MAX_BAND_RESCUES -- its own
-    # budget since it is a different, additional call.
-    VLM_MAX_BINDING_REREADS = _int("INGEST_VLM_MAX_BINDING_REREADS", 40)
-    # Per-DOCUMENT cap on gap-fill confirmations. Between VLM_MAX_BAND_RESCUES
-    # (15) and VLM_MAX_BINDING_REREADS (40): a gap fill needs a leftover
-    # token that survives every refusal in `propose_gap_fills`, so they are
-    # rarer than unbound cells, and this stops one badly fragmented scan from
-    # issuing hundreds of calls.
-    VLM_MAX_GAP_FILL_CONFIRMS = _int("INGEST_VLM_MAX_GAP_FILL_CONFIRMS", 20)
-    # One character's width at ~10pt type -- see structure_repair.py's
-    # _COLUMN_MARGIN_PT for the full justification (column gutters on this
-    # corpus measure 80-100pt, an order of magnitude larger).
-    NUMBER_BINDING_COL_MARGIN_PT = _float("INGEST_NUMBER_BINDING_COL_MARGIN_PT", 6.0)
-
-    # `structure_repair.repair_from_geometry` runs on EVERY table at
-    # conversion time, so unlike NUMBER_BINDING_ENABLED this is not opt-in: the
-    # comparator that decides whether to rebuild a table's grid from OCR
-    # geometry is OCR-coverage rather than footing strength, because footing
-    # strength was measured on a real document to prefer the broken table.
-    # Kept as a switch only so it can be reverted by env var without a deploy;
-    # when False the geometry rebuild is skipped entirely (a cleaner kill
-    # switch than resurrecting the discredited comparator).
-    GEOMETRY_REPAIR_COVERAGE_GATE = _bool("INGEST_GEOMETRY_REPAIR_COVERAGE_GATE", True)
-
-    # Rebuild a table docling's layout model never found (a statement with
-    # almost no ruling lines) from its text items' positions, and say so when
-    # figures were read but could not be assembled
-    # (`structure_repair.synthesize_table`). Rebuilt tables go through the same
-    # verification as any other. False skips the rebuild AND the caveat.
-    SYNTHESIZE_MISSED_TABLES = _bool("INGEST_SYNTHESIZE_MISSED_TABLES", True)
-
-    # Rejoin a caption that wrapped onto a second printed line with the row
-    # carrying its figures, deterministically from the page's own geometry
-    # (`structure_repair.join_wrapped_labels`). On by default: it moves no
-    # figure -- the merged row is the value row's cells verbatim -- and it is
-    # the only fix for this defect when the vision model is unreachable.
-    WRAPPED_LABEL_JOIN = _bool("INGEST_WRAPPED_LABEL_JOIN", True)
-
-    # Report an EMPTY cell as withheld when the page's own OCR text proves it
-    # held a figure the grid dropped (`structure_repair.classify_label_only_rows`).
-    # Without it a line item that lost its figures is indistinguishable from a
-    # section heading -- verify.py skips any empty cell -- so silent data loss
-    # is structurally undetectable. On by default: it only ever converts a
-    # blank into an honest `[unreadable]`, and only on positive evidence.
-    LABEL_ONLY_ROW_REPORTING = _bool("INGEST_LABEL_ONLY_ROW_REPORTING", True)
-
-    # Withhold a RECOVERED figure whose sign contradicts its own line (a
-    # negative total; a negative beside a comparable positive from the other
-    # year). Withhold-only: it never flips a sign or rewrites a figure, and it
-    # never vetoes a figure the column's arithmetic proved. Applied to
-    # recovery candidates only -- never to cleanly read cells, where it would
-    # risk withholding figures that are correct today.
-    CONTEXT_SANITY_ENABLED = _bool("INGEST_CONTEXT_SANITY", True)
+    # Turn a page scanned sideways (text running bottom-to-top) upright before layout
+    # and OCR, decided from OCR's own text-box shapes and recognition confidence
+    # (app/orient.py). Separate from the flag above, which belongs to preprocessing and
+    # rotates on image statistics. This one only ever acts on a page where most
+    # detected text is standing up, and leaves any page it cannot judge alone.
+    ORIENTATION_CORRECTION = _bool("INGEST_ORIENTATION_CORRECTION", True)
 
     # ---- verification ----------------------------------------------------
     # A subtotal is treated as footing if it is within this many currency units

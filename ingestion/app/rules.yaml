@@ -1,0 +1,40 @@
+# Financial-statement rules the validation stage checks extracted tables against.
+#
+# These are checks ON a table that has already been extracted. None of them
+# choose a structure or change a value: a rule that fails is reported in the
+# quality report (failed_footings / notes), and the figures stay as read.
+#
+# Patterns are case-insensitive regular expressions matched against a row's
+# label text.
+
+# Rows whose label marks them as a sum of the rows above.
+total_labels:
+  - '\btotal\b'
+  - '\bnet\s+(?:surplus|deficit|profit|loss|income)\b'
+  - '\bsurplus\s*/\s*\(?deficit\)?\b'
+  - '\bgrand\s+total\b'
+
+# The Balance Sheet identity: one side must equal the other, column by column.
+balance_sheet:
+  assets: '^\s*total\s+assets\b'
+  equity_and_liabilities:
+    - '^\s*total\s+(?:equity\s+and\s+liabilities|liabilities\s+and\s+equity)\b'
+    - '^\s*total\s+(?:funds\s+and\s+liabilities|sources\s+of\s+funds)\b'
+
+# A note's total must equal the statement line that cites it, when both are
+# printed for the same period. Only pairs whose period headers name the same
+# year are compared.
+cross_table:
+  enabled: true
+
+# A cash flow statement is not a column of items under subtotals: sections are added
+# across, and each year prints an items column beside a subtotal column. The generic
+# "total equals the rows above" footing is meaningless there, so it is not applied.
+# These identities are.
+cash_flow:
+  opening: '\bopening\s+balance\b'
+  closing: '\bclosing\s+balance\b'
+  net_change: '^\s*net\s+(?:increase|decrease)\b'
+  operating: '\boperating\s+activities\s*\(?a\)?\s*$'
+  investing: '\binvesting\s+activities\s*\(?b\)?\s*$'
+  financing: '\bfinancing\s+activities\s*$'

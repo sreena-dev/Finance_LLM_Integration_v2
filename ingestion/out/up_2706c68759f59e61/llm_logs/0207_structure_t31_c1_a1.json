@@ -1,0 +1,11 @@
+{
+  "kind": "structure",
+  "label": "t31_c1_a1",
+  "images": 1,
+  "prompt": "You are shown an image of ONE table from a scanned financial statement, plus the OCR text found in it, already grouped by position into candidate ROWS and candidate COLUMNS. Describe the table's STRUCTURE only. Do not write, correct or guess any number or word.\n\nCOLUMNS (column 0 is always the label column and is already decided):\n1: x=2235-2289, first entries: 0 | 1,50,000 | 0\n\nROWS (each token is shown as [token number]text):\nr0: [0]Particulars [1]31st March, 2024\nr1: [2]Surplus/(deficit) for the Year (In INR) [3]0\nr2: [4]Weighted Average number of Equity [5]Shares (In [6]1,50,000\nr3: [7]Numbers)\nr4: [8]Earnings per equity share both basic & diluted. [9]0\nr5: [10](Face value per Equity Share: [11]Rs.10)\n\nReply with JSON only, in exactly this shape:\n{\"columns\":[{\"id\":1,\"role\":\"note|value|ignore\"}],\"rows\":[{\"id\":0,\"kind\":\"header|item|subtotal|total|heading|blank\",\"join\":null}],\"moves\":[]}\n\nRules:\n- \"columns\": give one entry for each of columns [1]. \"note\" = a column of small note/schedule reference numbers, \"value\" = a column of amounts, \"ignore\" = anything else (serial numbers, stray marks).\n- \"rows\": give one entry for each of rows 0..5. kind \"header\" = column headings or the unit line; \"item\" = a line with its own figures; \"subtotal\" or \"total\" = a sum line; \"heading\" = a section title with no figures; \"blank\" = nothing useful.\n- \"join\": use \"next\" when the row holds only the START of a label whose figures are on the row below; use \"prev\" when it holds only the CONTINUATION of the row above's label. Otherwise null. A joined row must have no figures of its own.\n- \"moves\": normally empty. Only when a figure token is clearly printed under a different column than the one listed, give {\"token\":<token number>,\"column\":<column id>}.\n",
+  "ok": true,
+  "error": null,
+  "finish_reason": "stop",
+  "seconds": 5.53,
+  "response": "```json\n{\"columns\":[{\"id\":1,\"role\":\"value\"}],\"rows\":[{\"id\":0,\"kind\":\"header\",\"join\":null},{\"id\":1,\"kind\":\"item\",\"join\":null},{\"id\":2,\"kind\":\"item\",\"join\":null},{\"id\":3,\"kind\":\"item\",\"join\":null},{\"id\":4,\"kind\":\"item\",\"join\":null},{\"id\":5,\"kind\":\"item\",\"join\":null}],\"moves\":[]}\n```"
+}

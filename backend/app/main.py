@@ -73,7 +73,8 @@ from app.tracing import setup_tracing  # noqa: E402
 
 setup_tracing()
 
-from app.auth.deps import require_user  # noqa: E402
+from app.admin.router import router as admin_router  # noqa: E402
+from app.auth.deps import require_super_admin, require_user  # noqa: E402
 from app.auth.router import router as auth_router  # noqa: E402
 from app.errors import InvalidRequestError, NotFoundError  # noqa: E402
 from app.mode_loader import IMPORT_FAILURES, load_routers  # noqa: E402
@@ -149,6 +150,9 @@ async def _invalid_request_handler(_request: Request, exc: InvalidRequestError) 
 # Sign-up and sign-in are the only routes besides /api/health reachable without
 # a token — a chicken-and-egg requirement rather than a policy choice.
 app.include_router(auth_router)
+# The guard is attached HERE, at include time, not per route: every route in the
+# admin router inherits it, so none can be added without it. See app/admin/router.py.
+app.include_router(admin_router, dependencies=[Depends(require_super_admin)])
 
 # EVERY mode is authenticated by this one argument. Attaching the dependency
 # here rather than inside each mode's router is what lets four working

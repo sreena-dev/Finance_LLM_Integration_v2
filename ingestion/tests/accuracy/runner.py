@@ -127,6 +127,25 @@ def run_via_http(pdf_path: str, base_url: str = DEFAULT_BASE_URL) -> dict[str, A
     raise TimeoutError(f"{os.path.basename(pdf_path)} did not finish in {POLL_TIMEOUT}s")
 
 
+def _load_env() -> None:  # noqa: D401 - called at import, below
+    """Load the same .env files the service loads, most specific first.
+
+    Without this an in-process run has no model endpoint configured and
+    silently runs with no vision model at all -- a different pipeline from the
+    deployed one. Shell exports still win (override=False).
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    for path in (os.path.join(_INGESTION, ".env"), os.path.join(_REPO, ".env")):
+        if os.path.isfile(path):
+            load_dotenv(path, override=False)
+
+
+_load_env()
+
+
 def run_in_process(pdf_path: str) -> dict[str, Any]:
     """Call the pipeline directly. Needs the full ingestion dependencies."""
     from app import pipeline

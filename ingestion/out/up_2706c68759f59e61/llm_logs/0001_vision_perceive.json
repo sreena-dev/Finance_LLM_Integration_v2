@@ -1,0 +1,11 @@
+{
+  "kind": "vision",
+  "label": "perceive",
+  "images": 1,
+  "prompt": "Read the number printed in this image. Reply with the digits only.",
+  "ok": true,
+  "error": null,
+  "finish_reason": "stop",
+  "seconds": 0.64,
+  "response": "107603"
+}
