@@ -55,8 +55,8 @@ Whether the SAR's reproduced cag_directions text actually *responds* to a
 direction (source spec's fuller `responsive` / `impact_reconciled` /
 `cross_report_consistent` dimensions) needs real reading comprehension.
 This engine only checks whether topic keywords drawn from the direction's
-own text (verified against the 5 real directions currently in this DB —
-see `_DIRECTION_THEMES`) appear anywhere in the extracted text. A report
+own text (verified against the real directions currently in this DB —
+see `_DIRECTION_THEMES_BY_DOC`) appear anywhere in the extracted text. A report
 that mentions "risk management" in an unrelated context would false-
 positive as "addressed"; one that responds in different words without
 the matched keywords would false-negative as "not addressed". This is the
@@ -74,34 +74,43 @@ from sar_prod_v3.observation import Observation
 logger = logging.getLogger("sar_prod_v3.cag_directions_engine")
 
 # Keyword themes per direction, drawn from each direction's own real text
-# (verified against REFERENCE_DSN.cag_directions_chunks — see this module's
-# docstring). `roman` is only used to build a readable check_id / label; it
-# is NOT necessarily stable across future document versions with a
-# different clause count or lettering — a version-aware lookup would need
-# to key on `doc_id` too, not attempted here since only one version exists
-# in this deployment today.
-_DIRECTION_THEMES: list[dict] = [
-    {
-        "roman": "I", "label": "Fair valuation of investments (incl. post-retirement benefit trusts)",
-        "keywords": ["fair valuation", "investment", "post retirement", "post-retirement", "valuation methodolog"],
-    },
-    {
-        "roman": "II", "label": "IT-system processing of accounting transactions",
-        "keywords": ["it system", "accounting transaction", "outside it system", "integrity of the accounts"],
-    },
-    {
-        "roman": "III", "label": "Grants/subsidy/scheme funds — accounting and utilisation",
-        "keywords": ["grant", "subsidy", "scheme fund", "utilis", "utiliz"],
-    },
-    {
-        "roman": "IV", "label": "Risk management policy and data-asset valuation",
-        "keywords": ["risk management", "key risk area", "data asset"],
-    },
-    {
-        "roman": "V", "label": "Regulatory compliance (SEBI/RBI/CERT-In and sector regulators)",
-        "keywords": ["sebi", "listing obligation", "rbi", "reserve bank", "cert-in", "telecom regulatory"],
-    },
-]
+# (verified against REFERENCE_DSN.cag_directions_chunks). Keyed by `doc_name`
+# — see cag_directions_chunks.doc_name — so a document whose effective
+# window matches a report only gets tested against ITS OWN themes, never
+# another document's. This used to be a single flat list tested against
+# every matched document regardless of which one actually applied — found
+# in production: a report whose applicable directions were the (unrelated,
+# not-yet-ingested) older 3-point "applicable from 2015-16" standing
+# directions was still being checked against this 5-point document's
+# themes, because there was only ever one hardcoded theme set. A document
+# with no entry here still date-matches in resolve_applicable_directions()
+# but is skipped by check_direction_addressed's caller with a logged
+# warning — not silently tested against the wrong themes — until its own
+# theme set is curated and added below.
+_DIRECTION_THEMES_BY_DOC: dict[str, list[dict]] = {
+    "CAG's Revised Directions for Statutory Auditors": [
+        {
+            "roman": "I", "label": "Fair valuation of investments (incl. post-retirement benefit trusts)",
+            "keywords": ["fair valuation", "investment", "post retirement", "post-retirement", "valuation methodolog"],
+        },
+        {
+            "roman": "II", "label": "IT-system processing of accounting transactions",
+            "keywords": ["it system", "accounting transaction", "outside it system", "integrity of the accounts"],
+        },
+        {
+            "roman": "III", "label": "Grants/subsidy/scheme funds — accounting and utilisation",
+            "keywords": ["grant", "subsidy", "scheme fund", "utilis", "utiliz"],
+        },
+        {
+            "roman": "IV", "label": "Risk management policy and data-asset valuation",
+            "keywords": ["risk management", "key risk area", "data asset"],
+        },
+        {
+            "roman": "V", "label": "Regulatory compliance (SEBI/RBI/CERT-In and sector regulators)",
+            "keywords": ["sebi", "listing obligation", "rbi", "reserve bank", "cert-in", "telecom regulatory"],
+        },
+    ],
+}
 
 
 def resolve_applicable_directions(report_date, *, tables) -> list[dict]:
@@ -160,26 +169,40 @@ def check_direction_addressed(direction_theme: dict, cag_directions_text: str) -
 def run_cag_directions_checks(merged_json: dict, report_date, *, tables) -> list[Observation]:
     """Gate: is there a directions-document in effect for this report date
     at all (DB-driven, via `resolve_applicable_directions`)? If so, test
-    against `_DIRECTION_THEMES` — the curated, hand-verified theme set for
-    the one live document version this deployment currently has (see module
-    docstring). This deliberately does NOT try to auto-derive themes from
-    each DB row's raw text: with only one version live today, the curated
-    table is more reliable than a generic parse, and a future second
-    version would need `_DIRECTION_THEMES` reviewed and updated anyway —
-    tracked as a known limitation, not silently papered over.
+    against `_DIRECTION_THEMES_BY_DOC[doc_name]` — the curated, hand-
+    verified theme set for whichever document(s) actually matched, never a
+    different document's themes. This deliberately does NOT try to
+    auto-derive themes from each DB row's raw text: a curated table is more
+    reliable than a generic parse, and a newly-ingested document needs its
+    own theme set reviewed and added anyway — tracked as a known
+    limitation, not silently papered over. A document that date-matches
+    but has no curated entry yet is skipped (logged, not silently tested
+    against another document's unrelated themes, and not invented from
+    nothing) — see this function's caller for how to add one.
     """
     applicable_rows = resolve_applicable_directions(report_date, tables=tables)
     if not applicable_rows:
         return []  # nothing in this DB covers this report date — nothing to test against (§25.1: don't invent)
 
+    doc_names = {row.get("doc_name") for row in applicable_rows if row.get("doc_name")}
     cag_directions_text = ((merged_json.get("cag_directions") or {}).get("text") or "")
     observations: list[Observation] = []
-    for theme in _DIRECTION_THEMES:
-        try:
-            result = check_direction_addressed(theme, cag_directions_text)
-        except Exception:
-            logger.exception("check_direction_addressed failed for %s", theme.get("roman"))
+    for doc_name in sorted(doc_names):
+        themes = _DIRECTION_THEMES_BY_DOC.get(doc_name)
+        if themes is None:
+            logger.warning(
+                "CAG directions document %r matched this report's date but has no curated "
+                "theme set in _DIRECTION_THEMES_BY_DOC — skipped rather than tested against "
+                "another document's unrelated themes. Add an entry for it once reviewed.",
+                doc_name,
+            )
             continue
-        if result is not None:
-            observations.append(result)
+        for theme in themes:
+            try:
+                result = check_direction_addressed(theme, cag_directions_text)
+            except Exception:
+                logger.exception("check_direction_addressed failed for %s / %s", doc_name, theme.get("roman"))
+                continue
+            if result is not None:
+                observations.append(result)
     return observations
