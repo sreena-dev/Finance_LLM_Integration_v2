@@ -450,7 +450,16 @@ _SECTION_TOTAL_KEY = {
     "non_current_liabilities": "total_non_current_liabilities",
     "current_liabilities":     "total_current_liabilities",
 }
-_HELD_FOR_SALE_KEYS = ("assets_held_for_sale", "liabilities_held_for_sale")
+# Top-level blocks that sit BETWEEN a section's own rows and the next recognised header,
+# so the forward tagger (`_tag_sections`) mis-includes them in whichever section happens
+# to be open — proved live on PGCIL, whose "Regulatory Deferral Account Balances" row
+# (a distinct Ind AS 114 block, not a current-asset line) inherited the `current_assets`
+# tag because nothing between "Current assets" and "EQUITY AND LIABILITIES" flips it.
+# `_validate_hierarchy` excludes each of these from the section sum it bled into, exactly
+# as it already did for held-for-sale — the same defect, three more names for it.
+_OUTSIDE_SECTION_KEYS = ("assets_held_for_sale", "liabilities_held_for_sale",
+                         "regulatory_deferral_debit", "regulatory_deferral_credit",
+                         "deferred_revenue")
 
 _SECTION_TOTAL_RX = {
     "non_current_assets":      r"^total non[ -]?current assets\b",
@@ -582,6 +591,37 @@ REGISTRY: list[LineSpec] = [
               r"^liabilit(y|ies) held[- ]for[- ]sale",
               r"^liabilit(y|ies) classified as held for sale"),
              "Liabilities held for sale, liabilities in a disposal group",
+             frozenset({"line", "total", "sum"})),
+    # Ind AS 114 regulatory deferral accounts — a THIRD top-level group on each side of
+    # the balance sheet, same shape as held-for-sale above and for the same reason: a
+    # rate-regulated entity (a power distribution utility, principally) is required to
+    # carry the timing difference a regulator has approved for future recovery or refund
+    # as its own line, outside the current/non-current split. Without these two keys
+    # assets_split and liabilities_split fail on every entity that reports one — not a
+    # sign of a bad filing, but of an identity that did not know a fourth Schedule III
+    # possibility exists (caught live on NTPC, whose accounts otherwise balance to the
+    # rupee: a ₹16,960.60cr regulatory-deferral debit was the entire gap).
+    LineSpec("regulatory_deferral_debit", "BS",
+             (r"^regulatory deferral account.*debit", r"^regulatory deferral.*debit balance",
+              # Some filings (PGCIL) print the ASSETS-side line bare, with neither
+              # "debit" nor "credit" in the label — Ind AS 114's own defined term is
+              # "regulatory deferral account debit balances", but the presentation
+              # is a filer choice. Scoped to the assets section so it cannot also
+              # claim the liabilities-side balance where a filer omits both labels
+              # (none observed in this corpus, but the ambiguity is real).
+              r"^regulatory deferral account balances?$"),
+             "Regulatory deferral account debit balances",
+             frozenset({"line", "total", "sum"}), "current_assets"),
+    LineSpec("regulatory_deferral_credit", "BS",
+             (r"^regulatory deferral account.*credit", r"^regulatory deferral.*credit balance"),
+             "Regulatory deferral account credit balances",
+             frozenset({"line", "total", "sum"})),
+    # Deferred revenue (typically an unamortised capital grant) prints as its own
+    # top-level line below current liabilities in the same filings that carry a
+    # regulatory deferral account — NTPC's own liabilities_split gap was this line plus
+    # the credit-side deferral above, together and exactly.
+    LineSpec("deferred_revenue", "BS", (r"^deferred revenue\b",),
+             "Deferred revenue, unamortised capital grant",
              frozenset({"line", "total", "sum"})),
     LineSpec("long_term_borrowings", "BS", (r"^borrowings\b", r"^long[- ]term borrowings\b"),
              "Long-term borrowings", frozenset({"line", "total", "sum"}), "non_current_liabilities"),
@@ -724,9 +764,10 @@ _SECTION_CRITICAL = _section_critical()
 _VALIDATIONS = {
     "BS": [
         ("assets_split", ["total_current_assets", "total_non_current_assets", "total_assets"],
-         ["assets_held_for_sale"],
+         ["assets_held_for_sale", "regulatory_deferral_debit"],
          lambda v: _close(v["total_current_assets"] + v["total_non_current_assets"]
-                          + v["assets_held_for_sale"], v["total_assets"])),
+                          + v["assets_held_for_sale"] + v["regulatory_deferral_debit"],
+                          v["total_assets"])),
         # CONSOLIDATED statements carry a third equity component — non-controlling
         # interests — so Total Equity exceeds Share Capital + Other Equity by exactly the
         # NCI. Without it this identity fails on every consolidated filing, and the
@@ -741,9 +782,10 @@ _VALIDATIONS = {
         # abstaining nine ratios and computing debt on part of the borrowings.
         ("liabilities_split", ["total_current_liabilities", "total_non_current_liabilities",
                                "total_equity", "total_equity_and_liabilities"],
-         ["liabilities_held_for_sale"],
+         ["liabilities_held_for_sale", "deferred_revenue", "regulatory_deferral_credit"],
          lambda v: _close(v["total_current_liabilities"] + v["total_non_current_liabilities"]
-                          + v["total_equity"] + v["liabilities_held_for_sale"],
+                          + v["total_equity"] + v["liabilities_held_for_sale"]
+                          + v["deferred_revenue"] + v["regulatory_deferral_credit"],
                           v["total_equity_and_liabilities"])),
         ("balance_sheet_balances", ["total_assets", "total_equity_and_liabilities"], [],
          lambda v: _close(v["total_assets"], v["total_equity_and_liabilities"])),
@@ -1141,8 +1183,11 @@ class Resolver:
         if (cur and cur.value is not None) or not all(
                 k in rep.bound and rep.bound[k].value is not None for k in parts):
             return
-        hfs = rep.bound.get("assets_held_for_sale")
-        extra = hfs.value if (hfs and hfs.value is not None and hfs.trusted()) else 0.0
+        extra = 0.0
+        for extra_key in ("assets_held_for_sale", "regulatory_deferral_debit"):
+            ln = rep.bound.get(extra_key)
+            if ln and ln.value is not None and ln.trusted():
+                extra += ln.value
         total = sum(rep.bound[k].value for k in parts) + extra
         priors = [rep.bound[k].prior for k in parts]
         prior = sum(priors) if all(p is not None for p in priors) else None
@@ -1280,19 +1325,22 @@ class Resolver:
             parts = [r for r in rows if r.role not in ("total", "sum")]
             got = sum(r.values[period] for r in _topmost_valued(parts, levels, period))
 
-            # Ind AS 105 held-for-sale balances sit inside the section on the page but
-            # OUTSIDE its printed total — which is exactly why assets_split and
-            # liabilities_split carry them as their own term. Whether a given filing prints
-            # them in or out is decided by the filing, not assumed here: the plain sum is
-            # tried first, and the held-for-sale-excluded sum only if the plain one misses.
-            hfs = sum(ln.value for k in _HELD_FOR_SALE_KEYS
-                      if (ln := rep.bound.get(k)) is not None
-                      and ln.section == section and ln.value is not None)
+            # Ind AS 105 held-for-sale balances, and Ind AS 114 regulatory deferral
+            # accounts, sit inside the section ON THE PAGE but OUTSIDE its printed total
+            # — which is exactly why assets_split and liabilities_split carry them as
+            # their own term, and exactly why the forward section tagger mis-includes
+            # them here (see `_OUTSIDE_SECTION_KEYS`). Whether a given filing prints
+            # them in or out is decided by the filing, not assumed here: the plain sum
+            # is tried first, and the exclusion applied only if the plain one misses.
+            outside = sum(ln.value for k in _OUTSIDE_SECTION_KEYS
+                          if (ln := rep.bound.get(k)) is not None
+                          and ln.section == section and ln.value is not None)
             ok = total is not None and _close(got, total)
-            if not ok and total is not None and hfs and _close(got - hfs, total):
-                ok, got = True, got - hfs
+            if not ok and total is not None and outside and _close(got - outside, total):
+                ok, got = True, got - outside
                 recovered_from = (recovered_from + "; " if recovered_from else "") + \
-                    "held-for-sale balances excluded, per the printed total"
+                    "held-for-sale / regulatory-deferral balances excluded, per the " \
+                    "printed total"
 
             rep.validations.append({"check": f"hierarchy_{section}",
                                     "status": "PASS" if ok else ("SKIP" if total is None else "FAIL"),

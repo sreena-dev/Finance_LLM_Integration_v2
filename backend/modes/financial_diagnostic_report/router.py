@@ -12,14 +12,29 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.errors import InvalidRequestError, ModeUnavailableError, NotFoundError
 
 from . import adapter
 from . import config as CFG
-from .schemas import FDREntitiesResponse, FDRQueryRequest, FDRQueryResponse
+from .schemas import (
+    FDREntitiesResponse,
+    FDRQueryRequest,
+    FDRQueryResponse,
+    FDRReportManifestResponse,
+    FDRReportRequest,
+    FDRReportResponse,
+    XbrlDashboardResponse,
+    XbrlEntitiesResponse,
+    XbrlBusinessProfileResponse,
+    XbrlHealthSummaryResponse,
+    XbrlRiskClustersResponse,
+    XbrlSignalsResponse,
+    XbrlCompanyOverviewResponse,
+    XbrlTrendsResponse,
+)
 
 router = APIRouter(
     prefix="/api/financial-diagnostic-report", tags=["financial-diagnostic-report"]
@@ -81,10 +96,8 @@ async def query(req: FDRQueryRequest):
         # 503 — the one status that invites a retry. Converted here because the
         # gateway registers handlers for the other two only.
         raise exc.as_http() from exc
-    except (InvalidRequestError, NotFoundError):
-        # 400 / 404 via the gateway's own exception handlers, so every mode
-        # answers a bad request the same way.
-        raise
+        # InvalidRequestError / NotFoundError propagate unhandled: 400 / 404 via the
+        # gateway's own exception handlers, so every mode answers a bad request the same way.
 
     return FDRQueryResponse(**result)
 
@@ -179,6 +192,152 @@ def settings_heartbeat_seconds() -> float:
     return 15.0
 
 
+@router.get("/report/manifest", response_model=FDRReportManifestResponse)
+async def report_manifest():
+    """What the report will contain, before any of it is built.
+
+    Answered without touching the database, so the browser can lay out the
+    blocks it is about to receive while the first read is still running.
+    """
+    from . import report as REP
+    return FDRReportManifestResponse(blocks=adapter.report_manifest(),
+                                     report_version=REP.REPORT_VERSION)
+
+
+@router.post("/report", response_model=FDRReportResponse)
+async def report(req: FDRReportRequest):
+    """The whole report in one response, for a script or an integration.
+
+    The browser uses `/report/stream` instead — same builders, same output, but
+    delivered block by block so the first section can be read while the rest are
+    still being built.
+    """
+    settings = CFG.load()
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(adapter.run_report, req.entity_id, refresh=req.refresh),
+            timeout=settings.evaluate_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"Reading {req.entity_id}'s filings took longer than "
+                f"{settings.evaluate_timeout_seconds}s. The read is still running — "
+                f"ask again shortly and it will build from the completed read."
+            ),
+        )
+    except ModeUnavailableError as exc:
+        raise exc.as_http() from exc
+
+    return FDRReportResponse(**result)
+
+
+@router.post("/report/stream")
+async def report_stream(req: FDRReportRequest):
+    """The report, watched as it is built.
+
+    Two kinds of event travel here, and they mean different things to a reader:
+
+      progress  the filings being read, one event per filing. This is the wait.
+      block     one finished section, delivered the moment it is built.
+
+    Blocks arrive by completion rather than by number — every block is currently
+    arithmetic and lands at once, but the narrated ones coming next will not, and
+    a client that already orders what it receives will not need changing then.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def emit(event: dict) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, event)
+
+    def work() -> None:
+        try:
+            result = adapter.run_report(
+                req.entity_id,
+                refresh=req.refresh,
+                progress=lambda stage, detail: emit({
+                    "type": "progress",
+                    "stage": stage,
+                    "message": adapter._stage_message(stage, detail),
+                    **{k: v for k, v in detail.items() if k in ("i", "n", "fy", "count")},
+                }),
+                on_block=lambda block: emit({"type": "block", **block}),
+            )
+            emit({"type": "complete",
+                  "entity_id": result["entity_id"],
+                  "provenance": result["provenance"],
+                  "versions": result["versions"],
+                  "report_version": result["report_version"],
+                  "elapsed_seconds": result["elapsed_seconds"]})
+        except (InvalidRequestError, NotFoundError) as exc:
+            emit({"type": "error", "detail": str(exc),
+                  "status": 400 if isinstance(exc, InvalidRequestError) else 404})
+        except ModeUnavailableError as exc:
+            emit({"type": "error", "detail": exc.reason, "status": 503})
+        except Exception as exc:  # noqa: BLE001 - a stream must fail visibly
+            emit({"type": "error", "detail": f"{type(exc).__name__}: {exc}",
+                  "status": 500})
+        finally:
+            emit({"type": "done"})
+
+    asyncio.create_task(asyncio.to_thread(work))
+
+    async def frames():
+        while True:
+            try:
+                event = await asyncio.wait_for(
+                    queue.get(), timeout=settings_heartbeat_seconds()
+                )
+            except asyncio.TimeoutError:
+                yield ": keep-alive\n\n"
+                continue
+            yield f"data: {json.dumps(event)}\n\n"
+            if event.get("type") == "done":
+                return
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                 "Connection": "keep-alive"},
+    )
+
+
+@router.post("/report/download")
+async def report_download(req: FDRReportRequest):
+    """The same report as a PDF, built from the same block builders.
+
+    A rendering of each block's own markdown, concatenated — same run, same
+    numbered blocks, same "[n] citation" sources the screen shows, and
+    nothing besides them (see `adapter.report_pdf`) — so the file cannot say
+    anything the screen did not; only the layout is paginated rather than
+    scrolled.
+    """
+    settings = CFG.load()
+    try:
+        filename, content = await asyncio.wait_for(
+            asyncio.to_thread(adapter.report_pdf, req.entity_id,
+                              refresh=req.refresh),
+            timeout=settings.evaluate_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail=f"Building {req.entity_id}'s report took longer than "
+                   f"{settings.evaluate_timeout_seconds}s. Please retry.",
+        )
+    except ModeUnavailableError as exc:
+        raise exc.as_http() from exc
+
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("/cache/invalidate")
 async def invalidate(entity_id: str | None = None):
     """Drop cached evaluations so the next question re-reads the corpus.
@@ -188,3 +347,129 @@ async def invalidate(entity_id: str | None = None):
     """
     dropped = await asyncio.to_thread(adapter.invalidate, entity_id)
     return {"invalidated": dropped, "entity_id": entity_id}
+
+
+# ===================================================================================
+# XBRL direct-fetch path (as_db) — additive. See adapter.py's matching section for
+# why this does not reuse `entities`/`report/*` above: a different database, no
+# panel, no trust scoring, because none of that applies to tagged XBRL facts.
+# ===================================================================================
+
+@router.get("/xbrl/entities", response_model=XbrlEntitiesResponse)
+async def xbrl_entities():
+    """Every filing in as_db, for the picker."""
+    try:
+        rows = await asyncio.to_thread(adapter.xbrl_entities)
+    except ModeUnavailableError as exc:
+        raise exc.as_http() from exc
+    return XbrlEntitiesResponse(entities=rows, count=len(rows))
+
+
+@router.get("/xbrl/dashboard", response_model=XbrlDashboardResponse)
+async def xbrl_dashboard(doc_id: str = Query(..., min_length=1, max_length=200)):
+    """Block 2, computed directly from as_db for one filing — no report run, no
+    panel, no cache. A single read, shaped once, returned."""
+    try:
+        result = await asyncio.to_thread(adapter.xbrl_dashboard, doc_id)
+    except ModeUnavailableError as exc:
+        raise exc.as_http() from exc
+    return XbrlDashboardResponse(**result)
+
+
+@router.get("/xbrl/business-profile", response_model=XbrlBusinessProfileResponse)
+async def xbrl_business_profile(doc_id: str = Query(..., min_length=1, max_length=200)):
+    """Block 3: Business Profile, computed directly from as_db for one filing."""
+    try:
+        result = await asyncio.to_thread(adapter.xbrl_business_profile, doc_id)
+    except ModeUnavailableError as exc:
+        raise exc.as_http() from exc
+    return XbrlBusinessProfileResponse(**result)
+
+
+@router.get("/xbrl/risk-clusters", response_model=XbrlRiskClustersResponse)
+async def xbrl_risk_clusters(doc_id: str = Query(..., min_length=1, max_length=200)):
+    """Block 6: Key Risk Clusters with Interactions, computed directly from as_db for one filing."""
+    try:
+        result = await asyncio.to_thread(adapter.xbrl_risk_clusters, doc_id)
+    except ModeUnavailableError as exc:
+        raise exc.as_http() from exc
+    return XbrlRiskClustersResponse(**result)
+
+
+@router.get("/xbrl/company-overview", response_model=XbrlCompanyOverviewResponse)
+async def xbrl_company_overview(doc_id: str = Query(..., min_length=1, max_length=200)):
+    """Block 1: Company Overview — entity identity, statement flavour, reporting
+    framework, computed directly from as_db for one filing."""
+    try:
+        result = await asyncio.to_thread(adapter.xbrl_company_overview, doc_id)
+    except ModeUnavailableError as exc:
+        raise exc.as_http() from exc
+    return XbrlCompanyOverviewResponse(**result)
+
+
+@router.get("/xbrl/signals", response_model=XbrlSignalsResponse)
+async def xbrl_signals(doc_id: str = Query(..., min_length=1, max_length=200)):
+    """The S01-S27 signal library, evaluated directly against as_db for one filing's
+    entity. Additive and standalone from `/xbrl/risk-clusters`: returns the raw
+    FIRED/NOT_FIRED/ABSTAIN/NOT_APPLICABLE signal list with no cluster synthesis or LLM
+    narration, so the signal engine can be reviewed on its own."""
+    try:
+        result = await asyncio.to_thread(adapter.xbrl_signals, doc_id)
+    except ModeUnavailableError as exc:
+        raise exc.as_http() from exc
+    return XbrlSignalsResponse(**result)
+
+
+@router.get("/xbrl/health-summary", response_model=XbrlHealthSummaryResponse)
+async def xbrl_health_summary(doc_id: str = Query(..., min_length=1, max_length=200)):
+    """Block 4: Financial Health Summary — Structure & Performance, Interpreted."""
+    try:
+        result = await asyncio.to_thread(adapter.xbrl_health_summary, doc_id)
+    except ModeUnavailableError as exc:
+        raise exc.as_http() from exc
+    return XbrlHealthSummaryResponse(**result)
+
+
+@router.get("/xbrl/trends", response_model=XbrlTrendsResponse)
+async def xbrl_trends(doc_id: str = Query(..., min_length=1, max_length=200)):
+    """Block 5: Key Trends & Structural Drift, computed directly from as_db for one filing."""
+    try:
+        result = await asyncio.to_thread(adapter.xbrl_trends, doc_id)
+    except ModeUnavailableError as exc:
+        raise exc.as_http() from exc
+    return XbrlTrendsResponse(**result)
+
+
+@router.get("/xbrl/report/download")
+async def xbrl_report_download(doc_id: str = Query(..., min_length=1, max_length=200)):
+    """The XBRL Direct tab's five blocks, as a single planning-first PDF.
+
+    Runs the same block functions the tab itself calls and reorders their
+    payloads per the spec's output architecture (§14.1) — see
+    `adapter.xbrl_report_pdf` / `xbrl_report.to_markdown` for the reordering
+    rationale.
+    """
+    settings = CFG.load()
+    try:
+        filename, content = await asyncio.wait_for(
+            asyncio.to_thread(adapter.xbrl_report_pdf, doc_id),
+            timeout=settings.evaluate_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail=f"Building the report for {doc_id} took longer than "
+                   f"{settings.evaluate_timeout_seconds}s. Please retry.",
+        )
+    except ModeUnavailableError as exc:
+        raise exc.as_http() from exc
+
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+
+

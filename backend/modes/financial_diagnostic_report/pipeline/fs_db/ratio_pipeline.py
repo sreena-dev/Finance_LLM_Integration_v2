@@ -566,7 +566,7 @@ def _statement_by_title(doc_id: str, include_rx: str, exclude_rx: str, statement
     consolidated = str(flavor).lower().startswith("consolidat")
     flav = "consolidated" if consolidated else "standalone"
     rows = db.query(
-        """SELECT table_id, table_title, page_pdf_start, table_md
+        """SELECT table_id, table_title, page_pdf_start, page_ocr_start, table_md
              FROM table_chunks
             WHERE doc_id=%(d)s AND table_md IS NOT NULL
               AND table_title ~* %(inc)s AND table_title !~* %(exc)s
@@ -607,11 +607,15 @@ def _statement_by_title(doc_id: str, include_rx: str, exclude_rx: str, statement
         if not rows:
             return None
     r = rows[0]
+    # The PDF page is the citation an auditor can actually turn to; the OCR page is
+    # what most filings in this corpus actually have. Falling back the same way
+    # `repository._page` does — most tables here carry only `page_ocr_start`, and
+    # citing neither is a worse answer than citing the one that exists.
+    page = r["page_pdf_start"] or r.get("page_ocr_start")
     md, joined, pieces = _with_continuations(doc_id, r, statement)
-    pt = parse_table_md(md, table_id=r["table_id"],
-                        statement=statement, page=r["page_pdf_start"])
+    pt = parse_table_md(md, table_id=r["table_id"], statement=statement, page=page)
     if len(joined) > 1:
-        pt = _merge_chunkwise(pt, pieces, joined, statement, r["page_pdf_start"])
+        pt = _merge_chunkwise(pt, pieces, joined, statement, page)
         pt.warnings.append(f"statement assembled from {len(joined)} table chunks: "
                            f"{', '.join(joined)}")
     if r.get("_by_content"):
@@ -645,7 +649,7 @@ def _statement_by_content(doc_id: str, statement: str, flav: str,
     if not anchor:
         return []
     near = db.query(
-        """SELECT table_id, table_title, page_pdf_start, table_md
+        """SELECT table_id, table_title, page_pdf_start, page_ocr_start, table_md
              FROM table_chunks
             WHERE doc_id=%(d)s AND table_md IS NOT NULL AND table_id < %(a)s
               AND (table_title IS NULL OR table_title !~* %(exc)s)

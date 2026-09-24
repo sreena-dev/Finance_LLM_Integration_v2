@@ -59,12 +59,15 @@ class PanelCell:
     unit_scale: str = ""
     source_label: str = ""
     doc_id: str = ""
+    table_id: str = ""
+    page: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {"value": self.value, "fy": self.fy_label, "period_end": self.period_end,
                 "unit_confidence": self.unit_confidence, "unit_scale": self.unit_scale,
                 "verify_verdict": self.verify_verdict,
-                "source": self.source_label, "doc_id": self.doc_id}
+                "source": self.source_label, "doc_id": self.doc_id,
+                "table_id": self.table_id, "page": self.page}
 
 
 @dataclass
@@ -303,7 +306,8 @@ def build(rows: list[dict[str, Any]], *, entity_id: str, flavor: str = STANDALON
                 value=float(v), fy_label=y, period_end=r["period_end"],
                 unit_confidence=r["unit_confidence"], verify_verdict=r["verify_verdict"],
                 unit_scale=r.get("unit_scale") or "",
-                source_label=r.get("source_label") or "", doc_id=r.get("doc_id") or "")
+                source_label=r.get("source_label") or "", doc_id=r.get("doc_id") or "",
+                table_id=r.get("table_id") or "", page=r.get("page"))
 
     gate = {
         "status": "OK" if len(years) >= MIN_TREND_YEARS else "SHORT_SERIES",
