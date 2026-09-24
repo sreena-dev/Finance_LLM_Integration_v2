@@ -114,8 +114,15 @@ NOT_COMPUTABLE = "NOT_COMPUTABLE"    # inputs bound; the arithmetic is undefined
 NOT_APPLICABLE = "NOT_APPLICABLE"    # the framework does not use the concept
 NEEDS_BINDER = "NEEDS_BINDER"        # no LineSpec binds this key in any filing, ever
 NO_PANEL = "NO_PANEL"                # no entity-year panel was built
+# Distinct from VALUE_ONLY on purpose. VALUE_ONLY means an unremarkable structural
+# fact — no adjacent prior year exists yet, nothing to explain twice. This means the
+# level and the movement actively DISAGREE with each other in a way worth a reader's
+# attention: the movement was computed, then withheld, because its ratio against the
+# entity's own history carries the signature of a transcription error. Kept apart so
+# the ordinary case never has to say anything, and the unusual one always does.
+SCALE_SUSPECT = "SCALE_SUSPECT"
 
-COMPUTED_STATES = frozenset({OK, VALUE_ONLY})
+COMPUTED_STATES = frozenset({OK, VALUE_ONLY, SCALE_SUSPECT})
 
 
 @dataclass(frozen=True)
@@ -658,6 +665,92 @@ def compute_tile(tile: Tile, panel: Panel | None, *,
             reason=(f"The {prior_year} figure is zero, so a movement against it is "
                     f"undefined rather than large. The level is shown; the movement is not."),
             **common)
+
+    # A single transition whose ratio sits close to an EXACT power of ten away from
+    # every OTHER transition in the same series is the signature of a decimal-point
+    # or digit-grouping error in one of its two years — not a real business swing.
+    # Checking the pair in isolation is not enough: IRCTC's trade receivables really
+    # did grow ~26% that year, so the CORRUPTED ratio (0.126, one leg printed ten
+    # times too large) is not itself close to any round number — only its
+    # relationship to the OTHER, uncorrupted transitions in the same series reveals
+    # it. A genuine result can be volatile; it has no reason to sit within 2% of
+    # exactly 10x or 100x of what every other year in its own history looks like.
+    # Needs at least two OTHER transitions to have a baseline at all — with a short
+    # series this check does not run, and the movement is shown as computed.
+    if tile.delta_kind == RELATIVE and prior != 0 and len(series) >= 4:
+        ratios = [b / a for (_, a), (_, b) in zip(series, series[1:]) if a != 0]
+        latest, others = ratios[-1], ratios[:-1]
+        if len(others) >= 2:
+            baseline = sorted(abs(r) for r in others)[len(others) // 2]  # median
+            if baseline > 0:
+                factor = abs(latest) / baseline
+                suspect = next((m for m in (10.0, 100.0)
+                                if abs(factor - m) / m < 0.05
+                                or abs(factor - 1 / m) * m < 0.05), None)
+                if suspect is not None:
+                    off = suspect if factor >= 1 else round(1 / suspect, 4)
+                    return TileValue(
+                        state=SCALE_SUSPECT,
+                        reason=(f"The {prior_year}→{year} movement is about {off:g}x "
+                                f"out of line with how this figure moves in every other "
+                                f"year of this entity's own panel ({value:,.2f} vs "
+                                f"{prior:,.2f}) — the signature of a decimal-point or "
+                                f"digit-grouping error in one of the two filings, not a "
+                                f"plausible business swing. The level is shown as "
+                                f"extracted; the year-on-year movement is withheld until "
+                                f"the source figures are checked against both filings."),
+                        **common)
+
+    # Exactly three points give no OTHER adjacent transition to baseline against, but
+    # the year before `prior` is still evidence. Take the geometric mean of the two
+    # legs as the SMOOTH, no-corruption baseline for either one alone — the single-
+    # year ratio a steady path between the two known-good endpoints would imply — and
+    # check the first leg against it. A middle point corrupted by a clean power-of-
+    # ten shows up as that leg sitting within a hair of exactly 10x or 100x the smooth
+    # baseline, with the second leg automatically landing near the reciprocal (their
+    # product is fixed at the two-year change either way). A genuine spike-and-
+    # reversal has no reason to land within 5% of a round multiple of its own
+    # implied smooth path. Measured live: IRCTC's trade receivables (only 3 usable
+    # years, an unrelated gap having broken the run further back) — the first leg
+    # (114,291.4 -> 1,374,341.9) sits at 9.76x its smooth baseline, well inside 5% of
+    # exactly 10x, while the straight two-year change across the suspect year is an
+    # unremarkable +51.7%.
+    elif tile.delta_kind == RELATIVE and prior != 0 and len(series) == 3:
+        first_year, first = series[0]
+        if first != 0 and prior != 0:
+            two_year = value / first
+            r1, r2 = prior / first, value / prior
+            # A ROUND TRIP is the necessary shape — one leg clearly up, the other
+            # clearly down — not merely "far from the smooth path". A real business
+            # can front-load its whole two-year change into a single step (flat, then
+            # one event): that leg sits far from the geometric-mean baseline too, but
+            # it never reverses, and reversal is what a spike-then-crash decimal error
+            # actually produces. Excludes exactly the false positive this check first
+            # tripped on: a depreciation charge flat for a year, then a genuine
+            # ten-fold impairment — r1 == 1.0, no reversal, correctly left alone.
+            reversal = (r1 >= 1.5 and r2 <= 1 / 1.5) or (r1 <= 1 / 1.5 and r2 >= 1.5)
+            expected_leg = abs(two_year) ** 0.5   # smooth single-year path, either leg
+            if reversal and expected_leg > 0:
+                factor = abs(r1) / expected_leg
+                suspect = next((m for m in (10.0, 100.0)
+                                if abs(factor - m) / m < 0.05
+                                or abs(factor - 1 / m) * m < 0.05), None)
+                if suspect is not None:
+                    return TileValue(
+                        state=SCALE_SUSPECT,
+                        reason=(f"{prior_year}'s figure moves {r1:,.2f}x from "
+                                f"{first_year} and then {r2:,.3f}x to {year} — a "
+                                f"round-trip that cancels almost exactly, leaving a "
+                                f"straight {first_year}→{year} change of "
+                                f"{(two_year - 1) * 100:+.1f}%, an ordinary result. "
+                                f"That shape is the signature of a decimal-point or "
+                                f"digit-grouping error in {prior_year} specifically "
+                                f"({value:,.2f} vs {prior:,.2f}), not a real spike and "
+                                f"reversal. The level is shown as extracted; the "
+                                f"year-on-year movement is withheld until "
+                                f"{prior_year}'s figure is checked against the "
+                                f"filing."),
+                        **common)
 
     delta = (value - prior) / abs(prior) if tile.delta_kind == RELATIVE else value - prior
     band = tile.attention or (ATTENTION_POINTS if tile.delta_kind == POINTS

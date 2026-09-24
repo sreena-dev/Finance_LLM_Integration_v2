@@ -277,6 +277,38 @@ def _tail(series: list[tuple[str, float]], n: int) -> list[tuple[str, float]] | 
     return series[-n:] if len(series) >= n else None
 
 
+def _cogs_series(comc: list[tuple[str, float]] | None, chg: list[tuple[str, float]] | None,
+                  purch: list[tuple[str, float]] | None) -> list[tuple[str, float]] | None:
+    """Cost of materials/goods consumed, from whichever Schedule III line a filing prints.
+
+    Cost of materials consumed is the manufacturer's line; a trading or extraction entity
+    never binds it and discloses purchases of stock-in-trade instead — the same split the
+    ratio engine's own `_cogs()` union exists for (`pipeline/fs_db/computations.py`).
+    `changes_in_inventories` is presented as a DECREASE in stock being positive income, so
+    consumption = purchases + the increase. None only when neither line is bound at all.
+    """
+    if comc is not None:
+        return comc
+    if purch is not None:
+        return [(y, v + (chg[i][1] if chg is not None else 0.0))
+                for i, (y, v) in enumerate(purch)]
+    return None
+
+
+def _purchases_series(comc: list[tuple[str, float]] | None, chg: list[tuple[str, float]] | None,
+                       purch: list[tuple[str, float]] | None) -> list[tuple[str, float]] | None:
+    """Purchases, from whichever Schedule III line a filing prints — the inverse of
+    `_cogs_series`. Purchases = consumption - the increase in inventory. None only when
+    neither cost of materials consumed nor purchases of stock-in-trade is bound at all.
+    """
+    if purch is not None:
+        return purch
+    if comc is not None:
+        return [(y, v - (chg[i][1] if chg is not None else 0.0))
+                for i, (y, v) in enumerate(comc)]
+    return None
+
+
 # ---- the rules ---------------------------------------------------------------------
 
 def s01_cash_conversion_cycle(panel: Panel) -> Outcome:
@@ -290,19 +322,24 @@ def s01_cash_conversion_cycle(panel: Panel) -> Outcome:
     capped at MEDIUM: it is sound arithmetic on a figure that is not quite the one the
     derivation names.
     """
-    keys = ("trade_receivables", "inventories", "trade_payables", "revenue",
-            "cost_of_materials_consumed")
-    missing = panel.missing(keys)
+    base_keys = ("trade_receivables", "inventories", "trade_payables", "revenue")
+    missing = panel.missing(base_keys)
     if missing:
-        return _needs(panel, keys)
-    raw = {k: panel.window(k) for k in keys}
+        return _needs(panel, base_keys)
+    raw = {k: panel.window(k) for k in base_keys}
     if any(v is None for v in raw.values()):
-        return _needs(panel, keys)
+        return _needs(panel, base_keys)
     win: dict[str, list[tuple[str, float]]] = {k: v for k, v in raw.items() if v is not None}
 
     years = tuple(y for y, _ in win["revenue"])
     chg = panel.window("changes_in_inventories")
     purch = panel.window("purchases_of_stock_in_trade")
+    comc = panel.window("cost_of_materials_consumed")
+    cogs_win = _cogs_series(comc, chg, purch)
+    purch_win = _purchases_series(comc, chg, purch)
+    if cogs_win is None or purch_win is None:
+        return _needs(panel, base_keys + ("cost_of_materials_consumed",
+                                          "purchases_of_stock_in_trade"))
 
     proxies: list[str] = []
     if purch is not None:
@@ -321,17 +358,9 @@ def s01_cash_conversion_cycle(panel: Panel) -> Outcome:
             "a separate line, so payables days are overstated where stock is building and "
             "understated where it is drawing down. Caps this diagnostic at MEDIUM.")
 
-    def purchases(i: int) -> float | None:
-        if purch is not None:
-            return purch[i][1]
-        cogs = win["cost_of_materials_consumed"][i][1]
-        # `changes_in_inventories` is presented as a DECREASE in stock being positive
-        # income, so purchases = consumption - (decrease) = consumption + increase.
-        return cogs - chg[i][1] if chg is not None else cogs
-
     def legs(i: int) -> tuple[float, float, float] | None:
-        rev, cogs, p = win["revenue"][i][1], win["cost_of_materials_consumed"][i][1], purchases(i)
-        if rev <= 0 or cogs <= 0 or p is None or p <= 0:
+        rev, cogs, p = win["revenue"][i][1], cogs_win[i][1], purch_win[i][1]
+        if rev <= 0 or cogs <= 0 or p <= 0:
             return None
         return (win["trade_receivables"][i][1] / rev * 365,
                 win["inventories"][i][1] / cogs * 365,
@@ -344,12 +373,37 @@ def s01_cash_conversion_cycle(panel: Panel) -> Outcome:
                         "negative in too many window years, so a cycle in days cannot be "
                         "formed.", ())
 
+    # A payables-days figure in the thousands is not itself a data error, and this
+    # rule's job is not to report one anyway. It is the signature of a business whose
+    # disclosed "cost of materials consumed" is not its real operating cost base — an
+    # agency or platform model that collects cash upfront and holds it as payables to
+    # a principal (IRCTC's Ministry-of-Railways-facing settlements, for instance) has
+    # no purchases cycle for that denominator to measure. Checked on the two years the
+    # fired/not-fired decision actually compares, because those are exactly the ones a
+    # reader would otherwise take as a genuine multi-thousand-day liquidity collapse.
+    dpo_cap = TH.get("dpo_implausible_days")
+    implausible = [(y, l[2]) for y, l in (usable[0], usable[-1]) if l[2] > dpo_cap]
+    if implausible:
+        named = "; ".join(f"{y} {dpo:.0f}d" for y, dpo in implausible)
+        return _abstain(
+            f"Payables days would be implausible in this window ({named}) — beyond "
+            f"{dpo_cap:.0f} days is not a trade-credit measure. Cost of materials "
+            f"consumed here is a small fraction of revenue, which is the signature of a "
+            f"business whose payables are cash held on behalf of a principal rather than "
+            f"a purchases cycle; dividing by it manufactures an impossible figure instead "
+            f"of measuring one. The cash-conversion cycle is not formed for this entity "
+            f"rather than reported on a formula that does not fit its business model.",
+            (), code=NOT_COMPUTABLE)
+
     (y0, (dso0, dio0, dpo0)), (y1, (dso1, dio1, dpo1)) = usable[0], usable[-1]
     first, last = dso0 + dio0 - dpo0, dso1 + dio1 - dpo1
     delta = last - first
     limit = TH.get("ccc_deterioration_days")
 
-    conf, cbasis = _confidence(panel, keys, years)
+    used_keys = base_keys + (("cost_of_materials_consumed",) if comc is not None else ()) \
+                          + (("purchases_of_stock_in_trade",) if purch is not None else ()) \
+                          + (("changes_in_inventories",) if chg is not None else ())
+    conf, cbasis = _confidence(panel, used_keys, years)
     if proxies:
         conf = _cap(conf, MEDIUM)
         cbasis += (" Capped at MEDIUM because the payables leg rests on a proxy for "
@@ -917,13 +971,29 @@ def s02_payables_funding_growth(panel: Panel) -> Outcome:
     that separates supplier funding from a general expansion of the working-capital cycle.
     Either fires; both firing is the strong case.
     """
-    keys = ("trade_payables", "cost_of_materials_consumed", "revenue",
-            "trade_receivables", "inventories")
-    raw = {k: panel.window(k) for k in keys}
+    base_keys = ("trade_payables", "revenue", "trade_receivables", "inventories")
+    raw = {k: panel.window(k) for k in base_keys}
     if any(v is None for v in raw.values()):
-        return _needs(panel, keys)
+        return _needs(panel, base_keys)
     win: dict[str, list[tuple[str, float]]] = {k: v for k, v in raw.items() if v is not None}
     years = tuple(y for y, _ in win["trade_payables"])
+
+    comc = panel.window("cost_of_materials_consumed")
+    chg = panel.window("changes_in_inventories")
+    purch = panel.window("purchases_of_stock_in_trade")
+    # Same manufacturer-vs-trading split S01 reads (see its comment) — a trading or
+    # extraction entity never binds cost of materials consumed and discloses purchases
+    # of stock-in-trade instead.
+    cogs_win = _cogs_series(comc, chg, purch)
+    if cogs_win is None:
+        return _needs(panel, base_keys + ("cost_of_materials_consumed",
+                                          "purchases_of_stock_in_trade"))
+    if comc is not None:
+        cogs_basis = "cost of materials consumed"
+    elif chg is not None:
+        cogs_basis = "purchases of stock-in-trade adjusted for the change in inventories"
+    else:
+        cogs_basis = "purchases of stock-in-trade, unadjusted"
 
     # (a) growth comparison
     need = [(y, win["trade_receivables"][i][1] + win["inventories"][i][1])
@@ -941,9 +1011,9 @@ def s02_payables_funding_growth(panel: Panel) -> Outcome:
     def days(num: list[tuple[str, float]], den: list[tuple[str, float]]) -> list[tuple[str, float]]:
         return [(y, n / d * 365) for (y, n), (_, d) in zip(num, den) if d > 0]
 
-    dpo = days(win["trade_payables"], win["cost_of_materials_consumed"])
+    dpo = days(win["trade_payables"], cogs_win)
     dso = days(win["trade_receivables"], win["revenue"])
-    dio = days(win["inventories"], win["cost_of_materials_consumed"])
+    dio = days(win["inventories"], cogs_win)
     rise = TH.get("payables_days_rise")
     flat = TH.get("working_capital_days_flat")
     pattern = False
@@ -954,10 +1024,13 @@ def s02_payables_funding_growth(panel: Panel) -> Outcome:
         d_dio = dio[-1][1] - dio[0][1]
         pattern = d_dpo > rise and abs(d_dso) < flat and abs(d_dio) < flat
 
-    conf, cbasis = _confidence(panel, keys, years)
+    used_keys = base_keys + (("cost_of_materials_consumed",) if comc is not None else ()) \
+                          + (("purchases_of_stock_in_trade",) if purch is not None else ()) \
+                          + (("changes_in_inventories",) if chg is not None else ())
+    conf, cbasis = _confidence(panel, used_keys, years)
     conf = _cap(conf, MEDIUM)
-    cbasis += (" Capped at MEDIUM because payables days rest on cost of materials as a "
-               "proxy for purchases, which the annual report does not disclose separately.")
+    cbasis += (f" Capped at MEDIUM because payables days rest on {cogs_basis} as a proxy "
+               f"for purchases, which the annual report does not disclose separately.")
 
     pattern_txt = (
         f" Payables days moved {d_dpo:+.0f} while DSO moved {d_dso:+.0f} and inventory days "
@@ -975,12 +1048,12 @@ def s02_payables_funding_growth(panel: Panel) -> Outcome:
                f"{_fmt(win['trade_payables'][-1][1])} ({_pct(g_ap)}); revenue {_pct(g_rev)}; "
                f"receivables + inventories {_pct(g_need)}; fires when payables exceed BOTH "
                f"by more than {limit * 100:.1f}pp. "
-               f"(b) payables days = payables / cost of goods sold x 365: "
+               f"(b) payables days = payables / {cogs_basis} x 365: "
                + "; ".join(f"{y} {d:.0f}d" for y, d in dpo)
                + f"; fires on a rise above {rise:.0f}d while DSO and inventory days each "
                  f"move less than {flat:.0f}d."),
         confidence=conf, confidence_basis=cbasis,
-        proxies=("Purchases (the payables-days denominator) -> cost of materials consumed. "
+        proxies=(f"Purchases (the payables-days denominator) -> {cogs_basis}. "
                  "Caps this diagnostic at MEDIUM.",),
         evidence=(
             "Trade payables ageing schedule — the Schedule III mandatory schedule",
