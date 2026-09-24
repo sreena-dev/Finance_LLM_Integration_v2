@@ -256,11 +256,13 @@ def extract(doc_id: str, *, entity_id: str, fy_label: str, period_end: str,
             if modal in U.SCALES else U.UNKNOWN)
 
         verdict, why = _verdict(rep.binding or {}, statement)
+        table_id, page = _source_cell(rep.binding or {}, statement, input_key)
 
         out.append({
             "doc_id": doc_id, "entity_id": entity_id, "fy_label": fy_label,
             "flavor": flavor, "statement": statement, "canonical_key": key,
             "period_end": period_end, "period_type": ptype,
+            "table_id": table_id or "", "page": page,
 
             "value_native": float(value),
             "unit_scale": unit.scale,
@@ -277,6 +279,26 @@ def extract(doc_id: str, *, entity_id: str, fy_label: str, period_end: str,
             "extractor_version": extractor_version,
         })
     return out
+
+
+def _source_cell(binding: dict, statement: str, input_key: str) -> tuple[str | None, int | None]:
+    """Which table and page this figure was read from, if the binder recorded one.
+
+    `BoundLine` carries `table_id`/`page` from the moment it is bound
+    (`binding.py` — every construction site passes `pt.table_id, pt.page`); this
+    is the first place anything reads them back out. Missing for a figure that
+    was DERIVED rather than read off one row (`binding.py`'s `_derive_missing`
+    sets no `page`) — that is a real absence, not a lookup failure, and is
+    reported as one rather than guessed at.
+    """
+    kind = {"balance_sheet": "BS", "profit_loss": "PL", "cash_flow": "CF"}.get(statement)
+    rep = binding.get(kind) if kind else None
+    if rep is None:
+        return None, None
+    line = rep.bound.get(input_key)
+    if line is None:
+        return None, None
+    return line.table_id, line.page
 
 
 def _table_from_detail(detail: str, known: dict[str, Any]) -> str | None:

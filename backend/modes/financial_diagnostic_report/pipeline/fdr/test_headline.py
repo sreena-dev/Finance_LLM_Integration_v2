@@ -277,6 +277,68 @@ def test_a_zero_base_shows_the_level_and_refuses_the_movement() -> None:
     check(t.delta is None, "a movement from zero must not be reported")
 
 
+def test_a_clean_tenfold_outlier_against_its_own_history_withholds_the_movement() -> None:
+    """A five-year run flat in every OTHER step, and the latest step a clean 10x —
+    the signature the corpus actually produced (a decimal-grouping error read into
+    a single year). The level must still show; the movement must not."""
+    years = ("FY2020-21", "FY2021-22", "FY2022-23", "FY2023-24", "FY2024-25")
+    p = _panel({"revenue": {"FY2020-21": 1_000.0, "FY2021-22": 1_000.0,
+                            "FY2022-23": 1_000.0, "FY2023-24": 1_000.0,
+                            "FY2024-25": 10_000.0}}, years=years)
+    t = _tile(HL.compute(p), "H01")
+    check(t.state == HL.SCALE_SUSPECT and t.value == 10_000.0,
+          f"H01 state {t.state} — the level is real and must still be shown")
+    check(t.delta is None, "a 10x-outlier movement must be withheld, not reported")
+    check(bool(t.reason) and "10" in t.reason,
+          "the reason must name the suspected multiple")
+
+
+def test_an_ordinary_large_move_with_a_supporting_history_is_not_censored() -> None:
+    """The guard must not fire just because a move is big — only because it is a
+    clean multiple AND out of line with the rest of the SAME entity's own history.
+    A steady climb that happens to include one big-but-irregular step must still
+    report its movement."""
+    years = ("FY2020-21", "FY2021-22", "FY2022-23", "FY2023-24", "FY2024-25")
+    p = _panel({"revenue": {"FY2020-21": 1_000.0, "FY2021-22": 1_050.0,
+                            "FY2022-23": 1_100.0, "FY2023-24": 3_200.0,
+                            "FY2024-25": 3_500.0}}, years=years)
+    t = _tile(HL.compute(p), "H01")
+    check(t.state == HL.OK and t.delta is not None,
+          "an irregular but non-clean-multiple jump must not be withheld")
+
+
+def test_a_spiked_middle_year_with_only_three_points_still_withholds() -> None:
+    """Too short a run for the five-year baseline check (needs a fourth point), but
+    the IRCTC shape is still catchable: the middle year spikes then crashes by
+    close to the same clean factor, and skipping it gives an ordinary two-year
+    change. Reproduces the corpus case almost exactly (12.0x then 0.126x, +51.7%
+    straight across)."""
+    years = ("FY2022-23", "FY2023-24", "FY2024-25")
+    p = _panel({"trade_receivables": {"FY2022-23": 114_291.4, "FY2023-24": 1_374_341.9,
+                                      "FY2024-25": 173_423.41}}, years=years)
+    t = _tile(HL.compute(p), "H07")
+    check(t.state == HL.SCALE_SUSPECT and t.value == 173_423.41,
+          f"H07 state {t.state} — the latest level is still shown")
+    check(t.delta is None, "the spike-then-crash movement must be withheld")
+    check(bool(t.reason) and "FY2023-24" in t.reason,
+          "the reason must name the year it suspects, not just the pair")
+
+
+def test_a_genuine_spike_and_reversal_that_does_not_cancel_is_not_censored() -> None:
+    """The three-point guard must require the round-trip to CANCEL (an ordinary
+    two-year change once the middle point is skipped) — not fire on every large
+    up-then-down shape, which a one-off gain reversing the next year produces
+    legitimately."""
+    years = ("FY2022-23", "FY2023-24", "FY2024-25")
+    # Spikes ~4x then falls back — but the two-year change (100 -> 60) is a real
+    # -40%, not the near-1.0 "it cancelled out" signature.
+    p = _panel({"revenue": {"FY2022-23": 100.0, "FY2023-24": 400.0,
+                            "FY2024-25": 60.0}}, years=years)
+    t = _tile(HL.compute(p), "H01")
+    check(t.state == HL.OK and t.delta is not None,
+          "a genuine spike-and-partial-reversal must not be withheld")
+
+
 def test_a_framework_gap_is_not_a_missing_figure() -> None:
     t = _tile(HL.compute(FULL, framework="sch3_div3"), "H09")
     check(t.state == HL.NOT_APPLICABLE, f"H09 state {t.state}, expected NOT_APPLICABLE")

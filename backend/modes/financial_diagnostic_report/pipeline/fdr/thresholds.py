@@ -59,6 +59,15 @@ _T: tuple[Threshold, ...] = (
               "A cash-conversion cycle lengthening by more than a fortnight across the "
               "series is a working-capital change of audit interest. §9.2 requires "
               "working capital be read as an interacting system, not line by line."),
+    Threshold("dpo_implausible_days", 365.0, "days",
+              "Payables days beyond a full year is not a data error and not a liquidity "
+              "read — it is the signature of a business whose disclosed cost of materials "
+              "consumed is not its real operating cost base (an agency or platform model "
+              "collecting cash upfront and holding it as payables to a principal, not "
+              "running a purchases cycle against it): dividing a large payable balance by "
+              "a near-zero purchases proxy manufactures a figure in the thousands of days "
+              "rather than measuring one. Measured live on IRCTC: payables days of "
+              "1,800-2,500 against cost of materials consumed under 1% of revenue."),
 
     # ---- S02 payables funding growth --------------------------------------------
     Threshold("payables_growth_gap", 0.15, "ratio",

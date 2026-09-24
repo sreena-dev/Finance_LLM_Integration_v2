@@ -34,7 +34,16 @@ _CURRENCY_RE = re.compile(r"[₹$]|\brs\.?|\binr\b", re.I)
 # Typographic minus signs. Standing ALONE each is a nil marker (already in `_NIL`);
 # in front of digits each is a real minus that `_NUM_RE` rejects.
 _UNICODE_MINUS = "−–—"          # −  –  —
-_NOTE_CELL_RE = re.compile(r"^\d+\s*[A-Za-z]?$")            # 2, 15, 2A, 11A
+_NOTE_CELL_RE = re.compile(
+    r"^\d+\s*[A-Za-z]?$"           # 2, 15, 2A, 11A
+    r"|^\d+\.\d(\([a-zA-Z]\))?$"   # 12.1, 13.5, 13.1(a) — decimal sub-note numbering
+)
+# The second branch is deliberately EXACTLY one digit after the point: Indian financial
+# figures are always printed to the paisa, i.e. exactly two decimal digits ("966.99",
+# "23,809.42"), so requiring one and only one digit here cannot admit real money. Without
+# it, a note column numbered "12.1".."13.8" scored 0.0 on this pattern — nothing distinguished
+# it from a value column — and depreciation bound to "13.5", its own note reference, while
+# the real figure (935.64, one column over) went unread. Caught live on Mahanadi Coal Field.
 _SERIAL_HDR_RE = re.compile(r"^\s*(sr|sl|s)\.?\s*no\.?\s*$|^\s*#\s*$", re.I)
 _NOTE_HDR_RE = re.compile(r"note", re.I)
 _LABEL_HDR_RE = re.compile(r"particular|description|\bitem\b|head", re.I)
@@ -350,9 +359,22 @@ def parse_table_md(md: str, table_id: str | None = None, statement: str | None =
                      if i not in period_hdr_cols and i != serial_col
                      and _NOTE_HDR_RE.search(header[i] or "")), None)
     if note_col is None:                                    # no "Note" header → profile
+        # `_NOTE_CELL_RE` (`^\d+[A-Za-z]?$`) cannot match a real money figure — every
+        # money cell in this corpus carries a decimal point, a comma, or both — so a
+        # column scoring near 1.0 on it is the STRONGEST possible signal, not a reason
+        # for suspicion. Requiring `numeric[i] < 0.99` on top of a high `noteish` score
+        # got this backwards: OVL's P&L prints a note reference on almost every line
+        # (revenue, other income, finance costs, depreciation all cite one), so that
+        # column's `numeric` ratio lands at exactly 1.00 and used to slip past this
+        # check entirely — admitted as a bogus THIRD value column, sorted ahead of the
+        # two real ones, and read as "the current period" while the real current-year
+        # figure was pushed into the "prior" slot. Every figure the resolver produced
+        # was numerically real and individually plausible, which is what let it through
+        # every arithmetic identity check silently.
         note_col = next((i for i in range(ncol)
                          if i not in period_hdr_cols and i != serial_col
-                         and noteish[i] >= 0.6 and numeric[i] < 0.99), None)
+                         and (noteish[i] >= 0.9
+                              or (noteish[i] >= 0.6 and numeric[i] < 0.99))), None)
     label_col = next((i for i in range(ncol)
                       if i not in period_hdr_cols and i not in (serial_col, note_col)
                       and _LABEL_HDR_RE.search(header[i] or "")), None)
