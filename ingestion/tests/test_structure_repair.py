@@ -322,6 +322,35 @@ def test_column_ranges_ignore_spanning_cells():
     assert ranges == {}
 
 
+def test_consolidate_overlapping_bands_leaves_distinct_columns_alone():
+    ranges = {0: (40.0, 200.0), 1: (370.0, 390.0), 2: (540.0, 660.0)}
+    assert sr._consolidate_overlapping_bands(ranges) == ranges
+
+
+def test_consolidate_overlapping_bands_merges_two_heavily_overlapping_columns():
+    # Column 1 (500-600) and column 2 (510-610) overlap by 90/110 -- well
+    # past the 0.5 IoU threshold.
+    ranges = {0: (40.0, 200.0), 1: (500.0, 600.0), 2: (510.0, 610.0)}
+    merged = sr._consolidate_overlapping_bands(ranges)
+    assert merged[0] == (40.0, 200.0)  # untouched
+    # BOTH original indices survive -- neither is silently dropped -- and
+    # both now point at the same, unioned band.
+    assert set(merged.keys()) == {0, 1, 2}
+    assert merged[1] == merged[2] == (500.0, 610.0)
+
+
+def test_consolidate_overlapping_bands_ignores_merely_adjacent_columns():
+    # Touching or lightly overlapping (not the 83%+ IoU signature this
+    # guards against) must be left as two real, distinct columns.
+    ranges = {0: (40.0, 200.0), 1: (200.0, 400.0)}
+    assert sr._consolidate_overlapping_bands(ranges) == ranges
+
+
+def test_consolidate_overlapping_bands_handles_zero_and_one_entries():
+    assert sr._consolidate_overlapping_bands({}) == {}
+    assert sr._consolidate_overlapping_bands({0: (40.0, 200.0)}) == {0: (40.0, 200.0)}
+
+
 def test_nearest_column_picks_the_containing_range():
     ranges = {0: (40.0, 200.0), 1: (370.0, 390.0), 2: (540.0, 660.0), 3: (750.0, 860.0)}
     assert sr._nearest_column(100.0, ranges) == 0
@@ -1080,3 +1109,114 @@ def test_continuation_refuses_when_a_gap_separates_it_from_the_table():
     ]
     orphans = sr.orphan_figures(frags, [_BS_BOX], [])
     assert sr.synthesize_continuation(frags, orphans, _BS_DETECTED_MD, _bs_ocr(), _BS_BOX) is None
+
+
+# ---------------------------------------------------------------------------
+# detect_year_column_order: current/previous-year column-swap signal
+# ---------------------------------------------------------------------------
+
+def _year_table(header_years: str) -> "object":
+    return _table(
+        f"| Particulars | Note | {header_years} |\n"
+        "| --- | --- | --- | --- |\n"
+        "| Revenue | 1 | 100 | 90 |\n"
+    )
+
+
+def test_descending_year_order_is_not_flagged():
+    # The corpus's own printed convention -- current year first.
+    table = _year_table("31st March, 2024 | 31st March, 2023")
+    assert sr.detect_year_column_order(table) is None
+
+
+def test_ascending_year_order_is_flagged_as_a_possible_swap():
+    table = _year_table("31st March, 2023 | 31st March, 2024")
+    warning = sr.detect_year_column_order(table)
+    assert warning is not None
+    assert "2023" in warning and "2024" in warning
+
+
+def test_headers_with_no_year_token_are_a_no_op():
+    table = _year_table("Amount | Amount")
+    assert sr.detect_year_column_order(table) is None
+
+
+def test_the_same_year_printed_twice_is_not_a_swap_signal():
+    # A restated comparative can legitimately repeat a year -- not evidence
+    # of anything wrong.
+    table = _year_table("31st March, 2024 | 31st March, 2024")
+    assert sr.detect_year_column_order(table) is None
+
+
+def test_a_header_with_two_year_like_tokens_refuses_rather_than_guesses():
+    # "Schedule 2024" alongside a real year in the SAME cell is exactly the
+    # kind of ambiguity this module refuses elsewhere rather than picking one.
+    table = _year_table("2024 Schedule 2099 | 31st March, 2023")
+    assert sr.detect_year_column_order(table) is None
+
+
+def test_only_one_known_year_is_not_enough_to_compare():
+    table = _year_table("31st March, 2024 | Amount")
+    assert sr.detect_year_column_order(table) is None
+
+
+# ---------------------------------------------------------------------------
+# detect_cross_page_continuation: table-split-by-page-break signal
+# ---------------------------------------------------------------------------
+
+def _cp_table(page_no: int, last_label: str, title: str | None = None,
+              header_years: str = "31st March, 2024 | 31st March, 2023"):
+    from app.tables import Table
+    return Table(
+        table_id=f"cp{page_no}",
+        page_no=page_no,
+        title=title,
+        header=["Particulars", "Note"] + header_years.split(" | "),
+        rows=[
+            ["Revenue", "1", "100", "90"],
+            [last_label, "", "200", "180"],
+        ],
+        label_col=0,
+        note_col=1,
+        value_cols=[2, 3],
+    )
+
+
+def test_an_abrupt_table_followed_by_a_same_shape_untitled_table_next_page_is_flagged():
+    prev = _cp_table(5, "Employee benefit expense")  # not a Total line
+    nxt = _cp_table(6, "Total")
+    warning = sr.detect_cross_page_continuation(prev, nxt)
+    assert warning is not None
+    assert "page 6" in warning and "page 5" in warning
+
+
+def test_a_table_that_ends_in_a_total_line_is_not_flagged():
+    prev = _cp_table(5, "Total")
+    nxt = _cp_table(6, "Total")
+    assert sr.detect_cross_page_continuation(prev, nxt) is None
+
+
+def test_a_next_table_with_its_own_title_is_not_flagged():
+    prev = _cp_table(5, "Employee benefit expense")
+    nxt = _cp_table(6, "Total", title="Note 12: Other Expenses")
+    assert sr.detect_cross_page_continuation(prev, nxt) is None
+
+
+def test_non_adjacent_pages_are_a_no_op():
+    prev = _cp_table(5, "Employee benefit expense")
+    nxt = _cp_table(8, "Total")
+    assert sr.detect_cross_page_continuation(prev, nxt) is None
+
+
+def test_different_header_shapes_are_not_flagged():
+    prev = _cp_table(5, "Employee benefit expense")
+    nxt = _cp_table(6, "Total", header_years="Amount | Amount")
+    assert sr.detect_cross_page_continuation(prev, nxt) is None
+
+
+def test_empty_tables_are_a_no_op():
+    from app.tables import Table
+    prev = _cp_table(5, "Employee benefit expense")
+    empty = Table(table_id="cp6", page_no=6, title=None, header=prev.header, rows=[])
+    assert sr.detect_cross_page_continuation(prev, empty) is None
+    assert sr.detect_cross_page_continuation(empty, prev) is None

@@ -5,6 +5,7 @@ import Markdown from '../common/Markdown';
 import CopyButton from '../common/CopyButton';
 import Notice from '../common/Notice';
 import CitationViewer from './CitationViewer';
+import TrendChart from './TrendChart';
 import './AnswerCard.css';
 
 function Collapsible({ title, count, icon, children, defaultOpen = false }) {
@@ -141,12 +142,15 @@ export default function AnswerCard({ result, mode, conversationId }) {
     // a stored payload that has neither key.
     uploaded_documents: uploaded = [],
     rewritten_query: rewritten = '',
-    materiality_legend: legend = null,
     upload_store_notice: storeNotice = null,
     // How the answer was checked. Hidden from the answer text on purpose (the
     // server strips it); offered here, collapsed, so it is available without
     // being the first thing a reader sees. Older stored turns have no `checks`.
     checks = null,
+    // Financial-statement only: structured trend rows, populated when the
+    // trend tool was called this turn. Absent on every other mode and on
+    // stored turns recorded before this feature existed.
+    trend_data: trendData = [],
   } = result || {};
 
   // Which citation's scanned region is open, if any.
@@ -199,12 +203,7 @@ export default function AnswerCard({ result, mode, conversationId }) {
         <p className="answer__blank">The pipeline returned an empty answer.</p>
       )}
 
-      {/* The materiality legend is server-supplied and shown verbatim, never
-          restyled or rephrased. The model is also told to reproduce it (prompt
-          rule 22), so it is only added when the answer text does not already. */}
-      {legend?.markdown && !/materiality legend/i.test(`${summary || ''} ${answer || ''}`) && (
-        <div className="answer__legend"><Markdown>{legend.markdown}</Markdown></div>
-      )}
+      <TrendChart trendData={trendData} />
 
       {uploaded.length > 0 && (
         <div className="answer__uploads">

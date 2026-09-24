@@ -154,22 +154,36 @@ def test_ensure_index_returns_the_same_object_across_separate_reads(_fake_redis)
     the doc_id-keyed _index_cache, ensure_index() would rebuild (re-embed)
     the same document's index on every single tool call within a
     conversation -- a real latency and cost regression versus the old
-    dict store, which handed back the same live object every time."""
-    store.STORE.put(_doc("u1", "c1", "up_a", texts=[
-        {"chunk_id": "x1", "page_ocr_start": 1, "content": "hello"},
-    ]))
+    dict store, which handed back the same live object every time.
 
+    `put()` itself now builds this document's index eagerly (Phase 2 --
+    see `store.put()`'s own comment), so the mock has to be in place for
+    THAT call too, not just the reads after it -- otherwise `put()` builds
+    a real (unmocked) index first and the reads below only ever find it
+    already cached, which used to look like "zero builds happened" rather
+    than the one eager build that actually did. A doc_id not used by any
+    OTHER test in this file, and not shared with `_doc`'s callers above --
+    `_index_cache` is a module-level global with no per-test reset, and an
+    earlier test's real (unmocked) `put()` on a REUSED id would already
+    have populated it before this test's mock is even installed.
+    """
     with patch("modes.financial_statement.upload.embeddings.DocumentIndex") as fake_index:
         fake_index.side_effect = lambda: object()
 
-        first = store.STORE.get("u1", "c1", "up_a")
-        second = store.STORE.get("u1", "c1", "up_a")
+        store.STORE.put(_doc("u1", "c1", "up_index_test", texts=[
+            {"chunk_id": "x1", "page_ocr_start": 1, "content": "hello"},
+        ]))
+
+        first = store.STORE.get("u1", "c1", "up_index_test")
+        second = store.STORE.get("u1", "c1", "up_index_test")
         assert first is not second, "expected two separately-deserialized instances"
 
         idx1 = first.ensure_index()
         idx2 = second.ensure_index()
         assert idx1 is idx2, "expected the SAME index object via _index_cache"
-        assert fake_index.call_count == 1, "expected exactly one build, not one per read"
+        assert fake_index.call_count == 1, (
+            "expected exactly one build (the eager one in put()), not one per read"
+        )
 
 
 def test_delete_evicts_the_index_cache_entry(_fake_redis):

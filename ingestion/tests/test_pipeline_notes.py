@@ -12,11 +12,15 @@ from __future__ import annotations
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.convert import Converted, ConvertedTable          # noqa: E402
-from app.models import PageQuality                         # noqa: E402
-from app.pipeline import _empty_page_note, _vlm_cap_note    # noqa: E402
+from app.convert import Converted, ConvertedTable                          # noqa: E402
+from app.models import PageQuality                                         # noqa: E402
+from app.pipeline import (                                                 # noqa: E402
+    _empty_page_note, _stage_progress, _STAGE_WEIGHTS, _vlm_cap_note,
+)
 
 
 def _quality(page_no: int) -> PageQuality:
@@ -227,3 +231,62 @@ def test_confirmations_past_the_cap_are_not_placed_and_are_named(monkeypatch):
     assert first["table"].cell(0, 1).value == 100.0
     assert second["table"].cell(0, 1).value is None
     assert any("BUDGET" in n and "INGEST_VLM_MAX_GAP_FILL_CONFIRMS" in n for n in notes)
+
+
+# --------------------------------------------------------------------------
+# _stage_progress -- the within-stage progress-tick arithmetic.
+#
+# `done` here is exactly what `run()`'s `advance()` closure would have left
+# it at by the time each stage's own work begins: `advance()` reports a
+# stage's START message using the OLD `done`, then immediately adds that
+# stage's own weight -- so by the time anyone could call `report_within_
+# stage` for stage X, `done` already includes X's own weight. Real values
+# from `_STAGE_WEIGHTS`, matching the actual render->precheck->preprocess->
+# convert sequence `run()` executes, not made-up numbers.
+# --------------------------------------------------------------------------
+
+_DONE_AFTER_CONVERT_ADVANCE = (
+    _STAGE_WEIGHTS["render"] + _STAGE_WEIGHTS["precheck"]
+    + _STAGE_WEIGHTS["preprocess"] + _STAGE_WEIGHTS["convert"]
+)  # 0.05 + 0.05 + 0.10 + 0.55 = 0.75
+
+
+def test_zero_stage_fraction_recovers_the_stage_own_starting_point():
+    # This is the exact regression this function exists to fix: an earlier
+    # version reported 76.9% at the very first tick inside `convert`, a
+    # stage that `advance()` itself reports starting at 20%.
+    start = _DONE_AFTER_CONVERT_ADVANCE - _STAGE_WEIGHTS["convert"]
+    assert start == pytest.approx(0.20)
+    assert _stage_progress(_DONE_AFTER_CONVERT_ADVANCE, "convert", 0.0) == pytest.approx(0.20)
+
+
+def test_stage_fraction_interpolates_within_the_stage_own_span():
+    # Halfway through `convert` (20%..75%) should read 47.5%, not (still)
+    # 20% and not past 75%.
+    result = _stage_progress(_DONE_AFTER_CONVERT_ADVANCE, "convert", 0.5)
+    assert result == pytest.approx(0.20 + 0.55 * 0.5)
+
+
+def test_full_stage_fraction_never_exceeds_the_global_report_cap():
+    result = _stage_progress(_DONE_AFTER_CONVERT_ADVANCE, "convert", 1.0)
+    assert result == pytest.approx(0.20 + 0.55)  # 0.75, comfortably under the 0.99 cap
+    assert result < 0.99
+
+
+def test_stage_fraction_is_clamped_to_zero_and_one():
+    # A caller passing an out-of-range fraction (a slightly-off elapsed-time
+    # estimate, say) must not report BEFORE the stage's own start or AT/PAST
+    # the global "done" signal -- only `advance()` to the next stage may
+    # claim that.
+    below = _stage_progress(_DONE_AFTER_CONVERT_ADVANCE, "convert", -0.3)
+    above = _stage_progress(_DONE_AFTER_CONVERT_ADVANCE, "convert", 5.0)
+    assert below == pytest.approx(0.20)
+    assert above == pytest.approx(0.20 + 0.55)
+
+
+def test_an_unweighted_stage_name_reports_done_unchanged():
+    # Defensive: a typo'd stage name (weight 0.0 via `.get(..., 0.0)`) must
+    # not crash or silently misreport -- it just can't move the bar within
+    # itself, which is the correct degradation for a stage this function
+    # doesn't know the span of.
+    assert _stage_progress(0.42, "not_a_real_stage", 0.7) == 0.42

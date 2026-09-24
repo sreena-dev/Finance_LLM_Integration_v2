@@ -53,6 +53,8 @@ from .models import (
     IngestResult,
     PageImage,
     PageQuality,
+    RecoveryStats,
+    StageDuration,
     TableRecord,
     TextRecord,
 )
@@ -354,6 +356,10 @@ def build_result(
     vlm_used: bool,
     notes: list[str],
     page_images: list[PageImage] | None = None,
+    stage_durations: list[StageDuration] | None = None,
+    rescue_stats: RecoveryStats | None = None,
+    disagreement_stats: RecoveryStats | None = None,
+    gap_fill_stats: RecoveryStats | None = None,
 ) -> IngestResult:
     fy_start, fy_end = _fy_years(identification.financial_year)
 
@@ -383,6 +389,10 @@ def build_result(
         recovered_cells=recovered,
         vlm_used=vlm_used,
         notes=notes,
+        stage_durations=stage_durations or [],
+        rescue_stats=rescue_stats or RecoveryStats(),
+        disagreement_stats=disagreement_stats or RecoveryStats(),
+        gap_fill_stats=gap_fill_stats or RecoveryStats(),
     )
 
     document = DocumentRecord(

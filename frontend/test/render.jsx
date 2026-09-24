@@ -68,6 +68,26 @@ const UPLOAD_RESULT = {
   }],
 };
 
+/** Exercises TrendChart — a render path a build alone would not catch (see this file's own
+ * header comment on why renderToString exists here at all). */
+const FS_FEATURE_RESULT = {
+  ...LEGACY_RESULT,
+  final_answer: 'Revenue was broadly flat while trade receivables rose sharply.',
+  trend_data: [{
+    statement_label: 'Balance Sheet',
+    years_sorted: [2023, 2024],
+    rows: [
+      { label: 'Revenue from Operations', cells: [4150, 4200], yoy: [[50, 1.2]], cagr: 1.2, significant: false },
+      { label: 'Trade Receivables', cells: [850, 1360], yoy: [[510, 60.0]], cagr: 60.0, significant: true },
+    ],
+    divergences: [{
+      year: 2024, line_a: 'Revenue from Operations', line_b: 'Trade Receivables',
+      pct_a: 1.2, pct_b: 60.0, delta_pct: 58.8,
+      label: 'cut-off, collectability, fictitious revenue or delayed collections',
+    }],
+  }],
+};
+
 const DOC = {
   doc_id: 'up_a', filename: 'SFS.pdf', company: 'IDBI Trusteeship Services Ltd',
   pages: 23, tables: 9, grade: 'fair', low_grade: 'poor',
@@ -98,6 +118,7 @@ const CASES = [
   ['AnswerCard (no mode/convo)', <AnswerCard result={UPLOAD_RESULT} />],
   ['AnswerCard (empty result)', <AnswerCard result={{}} />],
   ['AnswerCard (null result)', <AnswerCard result={null} />],
+  ['AnswerCard (trend chart)', <AnswerCard result={FS_FEATURE_RESULT} mode={MODE} conversationId="c1" />],
 
   ['QualityReport (full)', <QualityReport doc={DOC} onDelete={() => {}} />],
   ['QualityReport (no coverage)', <QualityReport doc={{ ...DOC, coverage: undefined }} />],

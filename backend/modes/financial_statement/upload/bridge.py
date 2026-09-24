@@ -113,10 +113,28 @@ def _document_header(upload) -> str:
     fy = ""
     if row.get("fy_start") and row.get("fy_end"):
         fy = f", FY{row['fy_start']}-{str(row['fy_end'])[-2:]}"
-    return (
+    header = (
         f"Document: {row['doc_name']} (doc_id={row['doc_id']}, "
         f"company={row['company']}{fy})"
     )
+    # `upload.ingestion_status == "partial"` means this is a snapshot the
+    # ingestion service published WHILE STILL CONVERTING (see `router.py`'s
+    # `/upload/{job_id}/events` partial branch and `UploadedDocument.
+    # ingestion_status`'s own docstring) -- tables verified so far, but the
+    # document is not finished. Every reports-DB tool prints this header, so
+    # this is the one place that has to say so: a table this tool doesn't
+    # find on a partial document may simply not have been converted YET, not
+    # "the filing doesn't disclose it" -- the same honesty this pipeline
+    # already insists on for an individual withheld figure (never silent),
+    # carried into the chat layer for the document as a whole.
+    if getattr(upload, "ingestion_status", "complete") == "partial":
+        header += (
+            f"\nNOTE: this document is STILL BEING INGESTED ({len(upload.tables)} "
+            "table(s) extracted so far). A table or figure not found here may "
+            "not have been converted yet -- it is not evidence the filing omits "
+            "it. Say so plainly to the user rather than treating this as complete."
+        )
+    return header
 
 
 def _table_text_with_edit_note(document: UploadedDocument, table: dict) -> str:

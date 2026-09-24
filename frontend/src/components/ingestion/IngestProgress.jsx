@@ -127,8 +127,8 @@ export default function IngestProgress({
         <span className="ingest__time">{mmss(elapsed)}</span>
         <span className="ingest__track" role="progressbar" aria-valuenow={pct}
               aria-valuemin={0} aria-valuemax={100}>
-          <motion.span className="ingest__fill" initial={false} animate={{ width: `${pct}%` }}
-                       transition={{ duration: 0.4, ease: 'easeOut' }} />
+          <motion.span className={`ingest__fill ${pct >= 100 ? 'is-done' : ''}`} initial={false}
+                       animate={{ width: `${pct}%` }} transition={{ duration: 0.4, ease: 'easeOut' }} />
         </span>
         <span className="ingest__expand">{open ? 'Collapse' : 'Expand'}</span>
       </button>

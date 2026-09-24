@@ -1427,6 +1427,102 @@ def transcribe_row(image: "np.ndarray", row_label: str, column_name: str) -> str
     return _strip_fences(content or "")
 
 
+_DISAGREEMENT_INSTRUCTION = """You are shown one cropped table image. Two different automated
+readers disagreed about the value in ONE cell: row "{row_label}", column "{column_name}".
+
+Their candidate readings are:
+{candidate_lines}
+
+Look ONLY at that one cell in the image and decide which candidate, if any, matches exactly
+what is printed there.
+
+Rules, in order of importance:
+1. Reply with EXACTLY ONE letter from the list above (for example: A), or the single word
+   UNCERTAIN.
+2. You may choose ONLY from the candidates given above. Do NOT transcribe a new value, do
+   NOT complete a partial one, and do NOT correct either candidate. If neither candidate
+   matches what is printed, or you cannot tell, reply UNCERTAIN.
+3. Output the letter or UNCERTAIN and nothing else -- no explanation, no punctuation, no
+   repetition of the candidate text.
+"""
+
+
+def resolve_disagreement(
+    image: "np.ndarray", row_label: str, column_name: str, candidates: list[str],
+) -> str | None:
+    """Force a choice between EXACTLY the candidates already in evidence --
+    never a free read. Returns the chosen candidate's own text, or `None`
+    if the model could not be reached, replied UNCERTAIN, or replied
+    anything that isn't cleanly one of the offered letters (a malformed
+    answer is treated identically to UNCERTAIN, not parsed leniently).
+
+    Built specifically because the existing rescue path (`transcribe_row`)
+    reads freely, and a free read can in principle answer with a THIRD
+    value never seen in ANY reader's output -- exactly the failure this
+    function exists to make structurally impossible: the model has no
+    channel here to express a value it was not given as a candidate.
+    Intended for the `readers_disagree` tier specifically, where a real,
+    closed candidate set already exists (docling's own reading vs. the
+    whole-table VLM's own reading) -- it does not replace `transcribe_row`
+    for tiers with no second candidate to choose between.
+
+    `candidates` is deliberately ordered but not deduplicated by the
+    caller's choice -- if two candidates happen to be identical text, that
+    is itself useful information the caller can see in which index was
+    chosen, not something this function should silently collapse.
+    """
+    if httpx is None or Image is None or not candidates or len(candidates) > 26:
+        return None
+    labels = [chr(ord("A") + i) for i in range(len(candidates))]
+    candidate_lines = "\n".join(f"{label}: {text}" for label, text in zip(labels, candidates))
+    instruction = _DISAGREEMENT_INSTRUCTION.format(
+        row_label=row_label, column_name=column_name, candidate_lines=candidate_lines,
+    )
+    try:
+        response = httpx.post(
+            f"{Config.VLM_BASE_URL}/v1/chat/completions",
+            headers=_headers(),
+            timeout=Config.VLM_TIMEOUT,
+            json={
+                "model": Config.VLM_MODEL,
+                "temperature": 0.0,
+                "max_tokens": 6,
+                "messages": [
+                    {"role": "system", "content": _SYSTEM},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": instruction},
+                        {"type": "image_url", "image_url": {
+                            "url": f"data:image/png;base64,{_encode(image)}"}},
+                    ]},
+                ],
+            },
+        )
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"].get("content") or ""
+    except Exception as exc:
+        logger.warning("VLM closed-world disagreement resolution failed: %s", exc)
+        return None
+
+    return _parse_disagreement_reply(content, labels, candidates)
+
+
+def _parse_disagreement_reply(content: str, labels: list[str], candidates: list[str]) -> str | None:
+    """The one candidate `content` cleanly names, or `None` -- strict on
+    purpose (see `resolve_disagreement`'s own docstring): only an exact,
+    unambiguous single-letter reply resolves anything.
+    """
+    lines = (content or "").strip().splitlines()
+    if not lines:
+        return None
+    reply = lines[0].strip().upper().rstrip(".:")
+    if reply == "UNCERTAIN":
+        return None
+    matched = [i for i, label in enumerate(labels) if reply == label]
+    if len(matched) == 1:
+        return candidates[matched[0]]
+    return None
+
+
 def parse_rescue_row(reply: str) -> list[str] | None:
     """The rescued row's cells, split the same way ``compare()`` parses a
     body row. ``None`` if the reply does not contain a recognisable pipe row

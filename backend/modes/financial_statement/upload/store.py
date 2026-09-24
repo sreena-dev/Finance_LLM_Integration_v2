@@ -224,6 +224,26 @@ class UploadedDocument:
     # ---- accessors the bridge uses ------------------------------------
 
     @property
+    def ingestion_status(self) -> str:
+        """"complete" (default) or "partial".
+
+        Stored inside `self.document` (the free-form JSONB field) rather
+        than as its own dataclass field/column, deliberately -- it needs no
+        schema migration this way, matching how `company`/`financial_year`
+        already read out of the same free-form dicts.
+
+        A "partial" document was built from `ingestion/app/jobs.
+        PartialResult` -- tables verified SO FAR, no identification, no
+        narrative text yet (the pipeline computes those in a LATER stage --
+        see that class's own docstring for why). Every reader that answers
+        a question from `self.tables`/`self.narrative()` -- the bridge's
+        tools -- must check this before treating a lookup's silence as "the
+        filing doesn't disclose this", which is a real conclusion for a
+        COMPLETE document and a false one for a still-converting one.
+        """
+        return self.document.get("ingestion_status") or "complete"
+
+    @property
     def company(self) -> str | None:
         return self.identification.get("entity_name") or self.document.get("company")
 
@@ -410,6 +430,33 @@ class DocumentStore:
         # was never durably written would leave the user believing they had a
         # document that vanishes at the next cache expiry.
         _persist(document)
+
+        # Build the narrative embedding index NOW, not on the user's first
+        # chat question. `DocumentIndex.ensure()` "never raises" by its own
+        # contract (degrades to keyword search and records `.degraded`), but
+        # that degrade-on-failure design has a real cost when it fires on the
+        # first question instead of here: `embeddings.py`'s own `_attempted`/
+        # `degraded` guard means a single slow or failed embed call there
+        # both adds a ~60s stall to that one question AND silently downgrades
+        # search quality for every question after it in the conversation --
+        # a regression the user has no way to see coming. Doing it here means
+        # any such failure happens during the ingestion wait the user is
+        # already watching, with the SAME degrade-gracefully behaviour, not a
+        # new one grafted on top of a live chat turn. A no-op, cheaply, for a
+        # partial (Phase 2) snapshot -- `document.narrative()` is empty until
+        # the `identify` stage runs, and `ensure()` on an empty chunk list
+        # returns immediately without a network call.
+        try:
+            document.ensure_index().ensure(document.narrative())
+        except Exception:  # noqa: BLE001
+            # Never let an embedding-side failure fail the upload -- the
+            # document is already durably written above. Worst case, the
+            # index gets built lazily on the first narrative question
+            # instead, exactly as it did before this existed.
+            logger.exception(
+                "eager embedding-index build failed for %s; narrative search "
+                "will build it lazily on first use instead", document.doc_id,
+            )
 
         r = self._redis()
         doc_key = _doc_key(document.user_id, document.conversation_id, document.doc_id)

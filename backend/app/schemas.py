@@ -84,6 +84,12 @@ class QueryResponse(BaseModel):
     # why), the tools used, and whether no tool was called. Financial-statement
     # only; None for every other mode. Shown collapsed, never above the answer.
     checks: dict | None = None
+    # Financial-statement only: structured per-line-item year series captured
+    # from TrendAnalysisTools (see modes/financial_statement/trend_capture.py)
+    # when the trend tool was called this turn, each entry annotated with any
+    # spec-section-9.3 divergences. Empty for every other mode and for FS
+    # answers that never called the trend tool — never populated by guessing.
+    trend_data: list[dict] = []
 
 
 # ---------------------------------------------------------------------------

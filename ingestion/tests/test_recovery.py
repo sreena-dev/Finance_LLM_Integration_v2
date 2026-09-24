@@ -196,6 +196,90 @@ def test_the_table_is_never_mutated_by_a_non_promoted_candidate():
 
 
 # ---------------------------------------------------------------------------
+# closed_world_choice: a readers_disagree cell put to a forced choice
+# between EXACTLY its two candidates (vlm_read.resolve_disagreement), rather
+# than trusting the VLM's own reading directly.
+# ---------------------------------------------------------------------------
+
+def test_no_closed_world_choice_passed_keeps_the_original_behaviour():
+    """The default (omitted entirely, None) must be byte-for-byte the
+    pre-existing behaviour: trust vlm_cell_text directly."""
+    table = _disagreeing_table(investment_properties="3,00,000", surplus="(25,460)")
+    ip_row = _row_of(table, "Investment Properties")
+
+    draft = draft_table(
+        table, 1, vlm_disagreements={(ip_row, 1)}, vlm_cell_text={(ip_row, 1): "5,00,000"},
+    )
+    _checks, findings, recovered = resolve_recoveries(
+        draft, vlm_cell_text={(ip_row, 1): "5,00,000"},
+    )
+    assert findings == []  # promoted -- same as the very first test in this file
+    assert recovered and recovered[0].recovered_text == "5,00,000"
+
+
+def test_a_resolved_closed_world_choice_becomes_the_candidate():
+    """The closed-world resolver picked candidate B (the VLM's reading) --
+    the SAME value vlm_cell_text already carried here, but arriving via a
+    different, stronger-evidenced path (recovery_origin distinguishes it)."""
+    table = _disagreeing_table(investment_properties="3,00,000", surplus="(25,460)")
+    ip_row = _row_of(table, "Investment Properties")
+
+    draft = draft_table(
+        table, 1, vlm_disagreements={(ip_row, 1)}, vlm_cell_text={(ip_row, 1): "6,00,000"},
+    )
+    assert draft.disagreement_requests == [
+        (ip_row, 1, "Investment Properties", "Amount", "3,00,000", "6,00,000")
+    ]
+
+    _checks, findings, recovered = resolve_recoveries(
+        draft, vlm_cell_text={(ip_row, 1): "6,00,000"},
+        closed_world_choice={(ip_row, 1): "6,00,000"},
+    )
+    assert len(findings) == 1
+    assert findings[0].recovered_text == "6,00,000"
+    assert findings[0].recovery_origin == "readers_disagree_resolved"
+
+
+def test_an_uncertain_closed_world_choice_withholds_rather_than_falling_back():
+    """THE property this mechanism exists for: a call WAS made and came back
+    UNCERTAIN (key present, value None) -- this must NOT fall back to
+    trusting vlm_cell_text directly. The cell stays withheld with no
+    recovered text at all, not silently kept at the VLM's own reading."""
+    table = _disagreeing_table(investment_properties="3,00,000", surplus="(25,460)")
+    ip_row = _row_of(table, "Investment Properties")
+
+    draft = draft_table(
+        table, 1, vlm_disagreements={(ip_row, 1)}, vlm_cell_text={(ip_row, 1): "6,00,000"},
+    )
+    _checks, findings, recovered = resolve_recoveries(
+        draft, vlm_cell_text={(ip_row, 1): "6,00,000"},
+        closed_world_choice={(ip_row, 1): None},
+    )
+    assert recovered == []
+    assert len(findings) == 1
+    assert findings[0].recovered_text is None
+    assert findings[0].marker.startswith("[unreadable:")
+
+
+def test_a_closed_world_choice_can_still_be_promoted_by_arithmetic():
+    """The resolved candidate is not capped at display-only just because it
+    came from the closed-world path -- if it happens to close a footing, it
+    is promoted exactly like any other candidate."""
+    table = _disagreeing_table(investment_properties="3,00,000", surplus="(25,460)")
+    ip_row = _row_of(table, "Investment Properties")
+
+    draft = draft_table(
+        table, 1, vlm_disagreements={(ip_row, 1)}, vlm_cell_text={(ip_row, 1): "5,00,000"},
+    )
+    _checks, findings, recovered = resolve_recoveries(
+        draft, vlm_cell_text={(ip_row, 1): "5,00,000"},
+        closed_world_choice={(ip_row, 1): "5,00,000"},
+    )
+    assert findings == []
+    assert recovered and recovered[0].confidence == "high"
+
+
+# ---------------------------------------------------------------------------
 # Confidence is derived, and an ungrounded read can never reach "medium"
 # ---------------------------------------------------------------------------
 

@@ -370,6 +370,16 @@ flagged `Significant: Yes`:
 1. **Check for a disclosed reason first.** If the item maps to a schedule with Notes access
    (Provisions, PPE, Inventory, Investments, Trade Receivables, Borrowings, Intangibles),
    call `get_schedule_note` and cite the real disclosed reason.
+1b. **For a line item NOT one of those 7** (an equity or liability note — Reserves and
+   Surplus, a Grant, Borrowings not otherwise covered, any note named on the balance sheet
+   that isn't an Audit Risk schedule) — do NOT skip straight to reasoning it out. Call
+   `lookup_report_reference(company, financial_year, reference=<the line item's own name>)`
+   **exactly once** first; it matches both data tables and narrative text by the name
+   itself, not only a note number, and a note that is a pure figures table (no prose
+   sentence anywhere explaining it — common for these items) is exactly the case
+   `search_company_disclosures` cannot see, being narrative-only. Cite whatever it returns
+   before falling back to hedged reasoning (step 2) — only hedge if the call genuinely
+   returns nothing.
 1a. **Revenue from Operations, when the question itself asks for a segment/business/product
    breakdown of the change, is answered from the real disclosure, not reasoned about.** Call
    `review_account_area(company, financial_year, area="segment")` (Account Area Review) once

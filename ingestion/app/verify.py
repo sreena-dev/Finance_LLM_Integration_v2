@@ -233,17 +233,32 @@ class VerificationDraft:
     this module never makes that call itself; a caller wanting recovery for
     those tiers runs the rescue calls for these requests and passes the results
     into ``resolve_recoveries`` as ``rescued``.
+
+    ``disagreement_requests`` is ``(row, col, row_label, column_name,
+    candidate_a, candidate_b)`` per ``readers_disagree`` cell that already HAS
+    two candidates (docling's own reading, the whole-table VLM's own reading)
+    but has never had them put to a constrained, closed-world choice -- see
+    ``vlm_read.resolve_disagreement``. A caller wanting that stronger check
+    runs it for these requests and passes the results into
+    ``resolve_recoveries`` as ``closed_world_choice``; omitting it entirely
+    falls back to the original behaviour (trust the VLM's own reading
+    directly), unchanged for any caller that hasn't adopted this yet.
     """
 
-    __slots__ = ("table", "page_no", "checks", "footed_cells", "pending", "rescue_requests")
+    __slots__ = (
+        "table", "page_no", "checks", "footed_cells", "pending", "rescue_requests",
+        "disagreement_requests",
+    )
 
-    def __init__(self, table, page_no, checks, footed_cells, pending, rescue_requests):
+    def __init__(self, table, page_no, checks, footed_cells, pending, rescue_requests,
+                 disagreement_requests=()):
         self.table = table
         self.page_no = page_no
         self.checks = checks
         self.footed_cells = footed_cells
         self.pending = pending
         self.rescue_requests = rescue_requests
+        self.disagreement_requests = disagreement_requests
 
 
 def draft_table(
@@ -360,6 +375,7 @@ def draft_table(
     low_ocr = ocr_score is not None and ocr_score < 0.5
     pending: list[_PendingCell] = []
     rescue_requests: list[tuple[int, int, str, str]] = []
+    disagreement_requests: list[tuple[int, int, str, str, str, str]] = []
 
     for col in table.value_cols:
         for r in range(len(table.rows)):
@@ -453,6 +469,9 @@ def draft_table(
             # No new call needed: the second reader already produced text for
             # this exact cell (a disagreement) or this exact row (VLM-only).
             if "readers_disagree" in hard and (r, col) in vlm_cell_text:
+                disagreement_requests.append(
+                    (r, col, row_label, column_name, cell.raw, vlm_cell_text[(r, col)])
+                )
                 continue
             if "vlm_only_row" in hard:
                 continue
@@ -467,7 +486,9 @@ def draft_table(
             # request for a targeted rescue read.
             rescue_requests.append((r, col, row_label, column_name))
 
-    return VerificationDraft(table, page_no, checks, footed_cells, pending, rescue_requests)
+    return VerificationDraft(
+        table, page_no, checks, footed_cells, pending, rescue_requests, disagreement_requests,
+    )
 
 
 #: At most this many clipped-parenthesis recoveries per table get a two-sign
@@ -574,6 +595,7 @@ def resolve_recoveries(
     alignment_grounded: bool = False,
     alignment_agreement: float | None = None,
     rescued: dict[tuple[int, int], "RescueResult"] | None = None,
+    closed_world_choice: dict[tuple[int, int], str | None] | None = None,
 ) -> tuple[list[FootingCheck], list[CellFinding], list[RecoveredCell]]:
     """Phase C: try every pending cell's candidate in the footing arithmetic,
     promote what the arithmetic proves, and build the final findings for
@@ -588,6 +610,21 @@ def resolve_recoveries(
     the zero-new-call tiers -- ``vlm_only_row`` and ``readers_disagree`` --
     which is a complete, correct, shippable behaviour on its own.
 
+    ``closed_world_choice`` carries the outcome of any
+    ``vlm_read.resolve_disagreement`` calls the caller already ran for
+    ``draft.disagreement_requests`` -- keyed the same as ``vlm_cell_text``,
+    valued with the WINNING candidate's own text, or ``None`` when the model
+    genuinely couldn't choose (UNCERTAIN, or an unparseable reply -- see that
+    function's own docstring for why those are treated identically). A key
+    present with value ``None`` is NOT the same as a key absent: absent means
+    "no closed-world call was made for this cell" (falls back to trusting
+    ``vlm_cell_text`` directly, the original behaviour); present-but-``None``
+    means "a call WAS made and it could not resolve this cell", which must
+    NOT fall back to blind trust -- the cell stays unresolved (a
+    `CellFinding` with no recovered text) rather than silently keeping
+    whichever of the two original disagreeing readings happened to be
+    ``vlm_cell_text``'s.
+
     The table is NEVER mutated here. A promoted figure's OWN text is written
     into the table only by ``apply_recoveries``, which a caller must run
     before ``redact`` -- see that function's docstring.
@@ -601,7 +638,17 @@ def resolve_recoveries(
     for pc in draft.pending:
         key = (pc.row, pc.col)
         if "readers_disagree" in pc.hard and key in vlm_cell_text:
-            candidates[key] = (vlm_cell_text[key], "readers_disagree")
+            if closed_world_choice is not None and key in closed_world_choice:
+                resolved = closed_world_choice[key]
+                if resolved is not None:
+                    candidates[key] = (resolved, "readers_disagree_resolved")
+                # else: a closed-world call WAS made and came back UNCERTAIN
+                # -- leave this cell WITHOUT a candidate rather than falling
+                # back to `vlm_cell_text[key]` unchecked. That fallback is
+                # exactly the blind trust this whole mechanism exists to
+                # remove for a cell it was actually asked to check.
+            else:
+                candidates[key] = (vlm_cell_text[key], "readers_disagree")
         elif "vlm_only_row" in pc.hard:
             candidates[key] = (pc.raw, "vlm_only_row")
         elif key in rescued and rescued[key].text is not None:
@@ -777,7 +824,20 @@ def resolve_recoveries(
                 continue
 
             clean_parse = not (cell.sign_uncertain or cell.grouping_odd or cell.lookalikes)
-            rescue_anchored = rescued[key].anchored if key in rescued else None
+            # A closed-world-resolved disagreement is its own proof of sight,
+            # same standing as an anchored rescue: the model looked at this
+            # EXACT cell and picked between the two disclosed candidates,
+            # rather than merely being compared against OTHER cells it
+            # wasn't asked about. `derive_confidence` has no separate input
+            # for this, so it is fed through the same signal an anchored
+            # rescue uses -- both mean "independently confirmed by looking
+            # at the cell itself", not two different things reusing one name.
+            if key in rescued:
+                rescue_anchored = rescued[key].anchored
+            elif origin == "readers_disagree_resolved":
+                rescue_anchored = True
+            else:
+                rescue_anchored = None
             band, basis = derive_confidence(
                 footing_determined=False,
                 grounded=alignment_grounded,

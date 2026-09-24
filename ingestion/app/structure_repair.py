@@ -93,7 +93,59 @@ def _column_ranges(cells, header_count: int) -> dict[int, tuple[float, float]]:
         l, _, r, _ = cell.bbox
         lo, hi = ranges.get(col, (l, r))
         ranges[col] = (min(lo, l), max(hi, r))
-    return ranges
+    return _consolidate_overlapping_bands(ranges)
+
+
+def _consolidate_overlapping_bands(
+    ranges: dict[int, tuple[float, float]], iou_threshold: float = 0.5,
+) -> dict[int, tuple[float, float]]:
+    """Defensive consolidation of two column INDICES whose bands overlap
+    heavily -- distinct from every other repair in this module, which fixes
+    ROW-boundary inconsistency across columns, not duplicate/overlapping
+    detections within one column axis.
+
+    Unlike the row-duplicate-box problem this mirrors (found and fixed for
+    TATR, a DETR-style object detector genuinely capable of proposing two
+    heavily-overlapping candidate boxes for one physical row), TableFormer
+    does not produce independent per-column candidate detections the same
+    way -- `_column_ranges`'s own docstring already records that its bands
+    were verified non-overlapping on this corpus. So this is precautionary,
+    not a fix for a confirmed active bug: kept cheap and safe (union rather
+    than picking a winner, since there is no per-band confidence score to
+    prefer one over the other the way TATR's row-NMS could) so it can only
+    ever collapse a genuine overlap, never discard real structure.
+    """
+    if len(ranges) < 2:
+        return ranges
+    items = sorted(ranges.items(), key=lambda kv: kv[1][0])
+    # Every ORIGINAL column index is preserved in the result, always --
+    # collision only ever widens the band two indices share, never removes
+    # an index from the map. Dropping one on collision (an earlier version
+    # of this function did exactly that) would silently delete a real
+    # column the instant a threshold false-positive fired -- exactly the
+    # "never silently delete information" failure this gap exists to guard
+    # against, not a corner case to accept.
+    groups: list[list[int]] = []
+    bands: list[tuple[float, float]] = []
+    for col, (lo, hi) in items:
+        placed = False
+        for gi, (glo, ghi) in enumerate(bands):
+            inter = max(0.0, min(hi, ghi) - max(lo, glo))
+            union = max(hi, ghi) - min(lo, glo)
+            if union > 0 and inter / union > iou_threshold:
+                groups[gi].append(col)
+                bands[gi] = (min(lo, glo), max(hi, ghi))
+                placed = True
+                break
+        if not placed:
+            groups.append([col])
+            bands.append((lo, hi))
+
+    result: dict[int, tuple[float, float]] = {}
+    for group, band in zip(groups, bands):
+        for col in group:
+            result[col] = band
+    return result
 
 
 def _nearest_column(x_center: float, ranges: dict[int, tuple[float, float]]) -> int | None:
@@ -201,6 +253,35 @@ class NumberToken:
     column: int | None = None
 
 
+#: How much shorter than the region's own median OCR-line height a bare
+#: 1-2 digit line must be before it's treated as a likely footnote marker
+#: rather than a real figure. NOT calibrated against a measured real-corpus
+#: case (no confirmed bug motivated this, unlike every other threshold in
+#: this module) -- a conservative starting point pending real evidence.
+#: Deliberately requires the marker be a genuinely SEPARATE, smaller OCR
+#: detection: this pipeline's `OcrLine` carries no font-size field, so a
+#: marker MERGED into the same OCR line as its neighbouring real figure
+#: (sharing that line's one bbox) cannot be told apart this way at all --
+#: guessing there risks the exact silent-value-loss this module refuses to
+#: do everywhere else, so it is deliberately left untouched rather than
+#: guessed at.
+_FOOTNOTE_MARKER_HEIGHT_RATIO = 0.75
+
+
+def _looks_like_footnote_marker(line, median_line_height: float) -> bool:
+    """A short, small OCR line more likely a footnote reference than a
+    printed figure -- see `_FOOTNOTE_MARKER_HEIGHT_RATIO`'s own comment for
+    the exact, narrow signal this checks and why it stops there.
+    """
+    text = (line.text or "").strip()
+    if not re.fullmatch(r"\d{1,2}", text):
+        return False
+    if median_line_height <= 0 or line.bbox is None:
+        return False
+    _, t, _, b = line.bbox
+    return (b - t) < median_line_height * _FOOTNOTE_MARKER_HEIGHT_RATIO
+
+
 def build_number_ledger(
     ocr_lines, header_bottom: float | None = None,
 ) -> list[NumberToken]:
@@ -225,7 +306,12 @@ def build_number_ledger(
         lines = [l for l in lines if l.bbox[1] >= header_bottom - 3.0]
     lines.sort(key=lambda l: (l.bbox[1], l.bbox[0]))
 
+    heights = sorted(l.bbox[3] - l.bbox[1] for l in lines)
+    median_line_height = heights[len(heights) // 2] if heights else 0.0
+
     for line in lines:
+        if _looks_like_footnote_marker(line, median_line_height):
+            continue
         text = line.text
         matches = list(re.finditer(r"\S+", text))
         numeric: list[tuple[re.Match, float]] = []
@@ -785,6 +871,125 @@ def _map_table_cols_to_bands(
         return dict(zip(value_cols, rightmost))
 
     return None
+
+
+#: A bare 4-digit year, 1900-2099. Deliberately not anchored to a keyword
+#: ("March", "as at", "year ended") -- headers are short and already
+#: date-shaped by construction (this is only ever run over VALUE-column
+#: headers, never body text), so the extra keyword requirement would only
+#: add missed cases, not correctness.
+_YEAR_TOKEN_RE = re.compile(r"(19|20)\d{2}")
+
+
+def _header_year(text: str | None) -> int | None:
+    """The year printed in one header cell, or `None` if it can't be read
+    with confidence.
+
+    Refuses (returns `None`) rather than guesses when a cell carries ZERO
+    or MULTIPLE year tokens -- a header with two 4-digit numbers (a year
+    plus, say, a stray note/schedule reference) is exactly the kind of
+    ambiguity this module refuses elsewhere rather than picking one.
+    """
+    if not text:
+        return None
+    matches = list(_YEAR_TOKEN_RE.finditer(text))
+    if len(matches) != 1:
+        return None
+    return int(matches[0].group())
+
+
+def detect_year_column_order(table) -> str | None:
+    """A warning string if `table`'s value-column headers carry two
+    DIFFERENT years in ASCENDING left-to-right order.
+
+    Current year before previous year (i.e. DESCENDING left to right) is
+    the printed convention this entire corpus follows -- every table this
+    session's real documents produced prints the current year's column
+    first (e.g. "31st March, 2024" then "31st March, 2023"). Ascending
+    order the wrong way round is the exact signature of a current/
+    previous-year column swap -- the precise failure mode that produced 18
+    WRONG figures when a vision model was tried as the sole table reader
+    this session (a real, measured column transposition on otherwise
+    correctly-shaped tables, not a hypothetical case this function guards
+    against speculatively).
+
+    Deliberately a SIGNAL, not a fix: this never reorders anything itself,
+    matching every other refuse-on-ambiguity function in this module --
+    the caller decides what to do with a flagged table (redact, note,
+    both). Returns `None` for the ordinary case of a table whose headers
+    carry no positively-identified year at all ("Amount", "Rs." printed
+    twice with no date) -- that is not evidence of anything, and this must
+    be a no-op for it, not a forced opinion.
+    """
+    years = [_header_year(table.column_name(c)) for c in sorted(table.value_cols)]
+    known = [(i, y) for i, y in enumerate(years) if y is not None]
+    if len(known) < 2:
+        return None
+
+    for (i1, y1), (i2, y2) in zip(known, known[1:]):
+        if y1 == y2:
+            continue  # the same year printed twice (e.g. a restated column) -- not a swap signal
+        if y1 < y2:
+            return (
+                f"value columns {i1} and {i2} print years {y1} then {y2}, left to right "
+                f"(ascending) -- this corpus's own convention is current year before "
+                f"previous year (descending), so this table's year columns may be swapped"
+            )
+    return None
+
+
+def _norm_header(text: str | None) -> str:
+    return (text or "").strip().casefold()
+
+
+def detect_cross_page_continuation(prev_table, next_table) -> str | None:
+    """A warning string if `next_table` looks like it holds the rows that
+    spilled off the BOTTOM of `prev_table`, printed on the very next page.
+
+    Two signals, both required, because either alone is common and means
+    nothing on its own:
+
+    1. `prev_table` doesn't end in a `Total`/`Grand Total` line -- a table
+       that closed cleanly on its own page is not missing anything, however
+       similar the next page's table looks.
+    2. `next_table` carries the exact same value-column headers as
+       `prev_table` AND has no title of its own -- a genuinely new
+       statement almost always prints its own caption and its own header
+       row; a spillover, by construction, has neither, since it is just
+       the tail of the table above continuing under a page break.
+
+    Deliberately a SIGNAL, not a merge: this never joins the two tables or
+    moves a single figure between them, matching `detect_year_column_order`
+    -- both tables are still reported exactly as extracted. A caller relying
+    on either table's own printed "Total" should know that total may not be
+    the true one if this fires; the real total could be sitting on the next
+    page's table instead. Returns `None` whenever the page numbers aren't
+    exactly adjacent, either table is empty, or the header shapes don't
+    match -- this must stay a no-op for two unrelated tables that merely
+    happen to sit on consecutive pages.
+    """
+    from .tables import looks_like_total
+
+    if next_table.page_no != prev_table.page_no + 1:
+        return None
+    if not prev_table.rows or not next_table.rows:
+        return None
+    if looks_like_total(prev_table.label(len(prev_table.rows) - 1)):
+        return None
+    if next_table.title:
+        return None
+
+    prev_headers = [_norm_header(prev_table.column_name(c)) for c in sorted(prev_table.value_cols)]
+    next_headers = [_norm_header(next_table.column_name(c)) for c in sorted(next_table.value_cols)]
+    if not prev_headers or prev_headers != next_headers:
+        return None
+
+    return (
+        f"table on page {next_table.page_no} has no title of its own and repeats the exact "
+        f"same value-column headers as the table on page {prev_table.page_no}, whose last row "
+        f"('{prev_table.label(len(prev_table.rows) - 1).strip()}') is not a Total line -- it "
+        f"may be the continuation of that table, split by the page break"
+    )
 
 
 def bind_table(

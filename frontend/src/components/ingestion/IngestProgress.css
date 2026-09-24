@@ -78,7 +78,11 @@
   position: relative;
   overflow: hidden;
 }
-/* The sheen shows the bar is alive; width still follows the real stage. */
+/* The sheen shows the bar is alive; width still follows the real stage.
+   Stopped once the job is done (`.is-done`, set from `pct === 100` in the
+   component) -- left running, a screenshot or a glance at a finished bar can
+   catch the highlight mid-pass and read as an unfilled gap on an otherwise
+   solid, complete bar. A finished bar has nothing left to show as "alive". */
 .ingest__fill::after {
   content: "";
   position: absolute;
@@ -87,6 +91,7 @@
   transform: translateX(-100%);
   animation: ingest-sheen 1.8s linear infinite;
 }
+.ingest__fill.is-done::after { animation: none; display: none; }
 @keyframes ingest-sheen { to { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .ingest__fill::after { animation: none; display: none; } }
 .ingest__expand { font-size: 12px; font-weight: 600; color: var(--navy-600); }

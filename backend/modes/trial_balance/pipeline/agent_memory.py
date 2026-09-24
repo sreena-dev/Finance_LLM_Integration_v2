@@ -22,6 +22,7 @@ never-persisted memory -- never the old shared singleton behaviour.
 """
 
 import logging
+import time
 import uuid
 from typing import Optional
 
@@ -98,8 +99,23 @@ def invoke_scoped(agent, prompt: str, session_id: Optional[str] = None, durable_
     memory = _session_memory(effective_session_id, system_prompt, durable_history=durable_history)
     agent.set_memory(memory)
 
+    # A real per-turn latency number, not a guess: this is the single choke
+    # point every /ask and /ask-general call passes through (both routes
+    # call THIS function -- see this module's own docstring), and nothing
+    # before this logged how long a turn actually took. `max_iter=120`
+    # (backend/agent.py) is a much larger ceiling than FS's 8, and there was
+    # no data anywhere to say whether a typical TB turn is nowhere near that
+    # or routinely climbing toward it. Wall-clock only, not a token/tool-call
+    # breakdown -- `agent.invoke()` returns a plain string, and getting
+    # finer detail would mean reaching into yukta's own internals, which is
+    # real further work, not assumed available here.
+    _t0 = time.perf_counter()
     try:
         response = agent.invoke(prompt)
+        logger.info(
+            "tb agent turn latency: session=%s elapsed=%.2fs prompt_len=%d",
+            effective_session_id, time.perf_counter() - _t0, len(prompt),
+        )
     finally:
         try:
             memory.chat_manager.save_chat(effective_session_id)

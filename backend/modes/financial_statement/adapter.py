@@ -61,6 +61,7 @@ def _load() -> object:
             _install_entity_resolution()
             _install_upload_bridge()
             _install_reranker_fallback()
+            _install_trend_capture()
             _warm_table_config(fs_api)
             _require_reports_db(fs_api)
             _state["api"] = fs_api
@@ -194,6 +195,21 @@ def _install_entity_resolution() -> None:
     from . import entity_resolution
 
     entity_resolution.install(DocumentResolver)
+
+
+def _install_trend_capture() -> None:
+    """Recover the structured rows `get_multi_year_trend` computes and discards.
+
+    See `trend_capture.py`'s module docstring for the full reasoning. Short
+    version: `_format_statement_trend` already receives the assembled rows as
+    a plain argument, so rebinding it (not editing `tools_fs.py`) is enough to
+    capture them for chart rendering, with the model-facing string unchanged.
+    """
+    from tools_fs import TrendAnalysisTools  # type: ignore
+
+    from . import trend_capture
+
+    trend_capture.install(TrendAnalysisTools)
 
 
 def _install_reranker_fallback() -> None:
@@ -500,8 +516,11 @@ def run_query(
             logger.warning("could not refresh %s's TTL: %s", conversation_id, exc)
         effective = _name_the_upload(effective, scope)
 
+    from . import trend_capture
+
     started = time.perf_counter()
     threshold = None
+    trend_token = trend_capture.begin()
     try:
         result = fs_api._orchestrator.answer(
             effective,
@@ -524,6 +543,12 @@ def run_query(
     finally:
         if token is not None:
             upload_store.reset_scope(token)
+        # Collected unconditionally, exception or not — the ContextVar must
+        # never be left set for whatever request reuses this thread/task next,
+        # the same discipline `reset_scope` above already applies to upload
+        # scope. The captured rows themselves are only used below when this
+        # function returns normally.
+        trend_captured = trend_capture.collect(trend_token)
 
     if "error" in result:
         raise ModeUnavailableError(
@@ -533,6 +558,10 @@ def run_query(
 
     checks = _extract_checks(result.get("answer", ""))
     structured = fs_api._parse_structured_answer(result.get("answer", ""))
+
+    from . import trend_pairs
+
+    trend_data = trend_pairs.annotate(trend_captured) if trend_captured else []
 
     # The materiality legend travels with the answer rather than being left for
     # the model to remember. The requirement is that any flag or risk rating
@@ -546,6 +575,26 @@ def run_query(
             "markdown": materiality_mod.legend(threshold),
             **threshold.as_dict(),
         }
+
+    # A real per-turn latency benchmark, not a guess: `Orchestrator.answer()`
+    # already computes `total_elapsed_seconds`/`llm_stats`/`tool_calls_made`
+    # (see agent.py) but nothing before this logged them anywhere -- they
+    # only ever reached the HTTP response, which is not something anyone can
+    # grep a week of real usage out of. Logged HERE, not in router.py's
+    # `/query` handler, because `llm_stats` and the tool-call COUNT do not
+    # survive into the dict this function returns below (the response shape
+    # keeps `elapsed_seconds` only) -- this is the one place both the rich
+    # `result` dict and the final response still coexist.
+    logger.info(
+        "fs query latency: elapsed=%.2fs tool_calls=%d prompt_tokens=%s "
+        "completion_tokens=%s chunks_retrieved=%d has_upload=%s",
+        result.get("total_elapsed_seconds", round(time.perf_counter() - started, 2)),
+        len(result.get("tool_calls_made") or []),
+        (result.get("llm_stats") or {}).get("prompt_tokens"),
+        (result.get("llm_stats") or {}).get("completion_tokens"),
+        result.get("num_chunks_retrieved", 0),
+        bool(scope and scope.documents),
+    )
 
     return {
         "mode": MODE_ID,
@@ -566,6 +615,7 @@ def run_query(
         "uploaded_documents": [d.summary() for d in scope.documents] if scope else [],
         "upload_store_notice": upload_store_notice,
         "checks": checks,
+        "trend_data": trend_data,
     }
 
 

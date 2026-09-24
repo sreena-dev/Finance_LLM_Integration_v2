@@ -17,6 +17,8 @@ the browser as they happen.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
@@ -26,12 +28,16 @@ from . import (
     verify, vlm_read,
 )
 from .config import Config
-from .models import IngestResult, PageQuality
+from .models import IngestResult, PageQuality, RecoveryStats, StageDuration
 from .tables import parse_markdown_tables
 
 logger = logging.getLogger(__name__)
 
 Progress = Callable[[str, str, float], None]
+#: `doc_id`, the table records verified SO FAR (already `.as_dict()`-shaped,
+#: matching `IngestResult.tables`'s own serialization) -- see `run()`'s
+#: `on_partial` parameter and `Config.PARTIAL_RESULT_INTERVAL_SECONDS`.
+OnPartial = Callable[[str, list], None]
 
 #: Stage weights for the progress bar, summing to 1.0. Taken from measured
 #: proportions on a 25-page scan: OCR and table structure dominate everything
@@ -50,6 +56,61 @@ _STAGE_WEIGHTS = {
 
 def _noop(stage: str, message: str, fraction: float) -> None:
     return None
+
+
+#: Seconds/page used ONLY to ESTIMATE progress display during the single,
+#: unavoidably blocking `convert_mod.convert()` call below -- the same
+#: measurement `Config.DOCUMENT_TIMEOUT`'s own comment cites ("~8s/page with
+#: full-page OCR"). This is a display estimate, not a promise, and never
+#: drives real behaviour (the timeout itself is `Config.DOCUMENT_TIMEOUT`,
+#: untouched). Checked directly against the installed docling API before
+#: writing this, not assumed: `DocumentConverter.convert()` takes no
+#: progress callback and exposes no per-page hook, so real per-page
+#: confirmation genuinely is not available from outside that one call --
+#: this is the honest alternative to leaving the bar frozen on one message
+#: for the 10-20+ minutes `convert()` can take on a 100-200 page filing.
+_CONVERT_SECONDS_PER_PAGE_ESTIMATE = 8.0
+
+
+def _convert_with_progress(
+    kept_images: list, kept_qualities: list["PageQuality"], report_within_stage: Callable,
+) -> "convert_mod.Converted":
+    """Run `convert_mod.convert()` while ticking an ESTIMATED progress signal.
+
+    A background thread reports elapsed-time-based progress against
+    `_CONVERT_SECONDS_PER_PAGE_ESTIMATE` every 2 seconds while the main
+    thread blocks on the one real `convert()` call; stopped the moment that
+    call returns (or raises), whichever comes first, so it can never keep
+    reporting past the stage's actual end. Every message this emits says
+    "estimated" -- it is not a claim about which page docling is actually
+    on, only a clock converted into words so the connection doesn't look
+    dead.
+    """
+    page_count = max(1, len(kept_images))
+    estimated_total_seconds = page_count * _CONVERT_SECONDS_PER_PAGE_ESTIMATE
+    stop = threading.Event()
+    start = time.monotonic()
+
+    def _tick() -> None:
+        while not stop.wait(2.0):
+            elapsed = time.monotonic() - start
+            fraction = (elapsed / estimated_total_seconds) if estimated_total_seconds else 0.0
+            fraction = max(0.0, min(0.97, fraction))
+            estimated_page = min(page_count, int(fraction * page_count) + 1)
+            report_within_stage(
+                "convert",
+                f"Detecting layout and reading tables (page ~{estimated_page} of "
+                f"{page_count}, estimated)",
+                fraction,
+            )
+
+    ticker = threading.Thread(target=_tick, daemon=True)
+    ticker.start()
+    try:
+        return convert_mod.convert(kept_images, kept_qualities)
+    finally:
+        stop.set()
+        ticker.join(timeout=1.0)
 
 
 #: 20 characters mirrors the threshold `render.has_text_layer` uses for the
@@ -113,7 +174,7 @@ def _vlm_cap_note(prepared: list[dict], vlm_available: bool) -> str | None:
 
 def _place_confirmed_gap_fills(
     prepared: list[dict], vlm_available: bool, image_by_number: dict, notes: list[str],
-) -> None:
+) -> RecoveryStats:
     """Place proposed gap fills -- but ONLY those a second reader confirms.
 
     One bounded, DOCUMENT-WIDE wave (one shared budget, one bounded pool), for
@@ -186,16 +247,96 @@ def _place_confirmed_gap_fills(
             p["table"], ledger, col_bands, converted_table.ocr_lines, header_bottom,
         )
 
+    return RecoveryStats(
+        requested=len(all_fills),
+        attempted=len(fill_budget) if vlm_available else 0,
+        succeeded=sum(len(fills) for fills in confirmed_by_table.values()),
+    )
 
-def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestResult:
-    """Ingest one uploaded PDF and return everything known about it."""
+
+def _stage_progress(done: float, stage: str, stage_fraction: float) -> float:
+    """The overall fraction to report for a tick WITHIN `stage`, given
+    `done` -- the running total `run()`'s `advance()` closure maintains --
+    and `stage_fraction` (0..1, how much of THIS stage's own work is done,
+    not a fraction of the whole document). Pure function so the arithmetic
+    is directly unit-testable; `run()`'s `report_within_stage` closure below
+    is this plus the actual `report()` call.
+
+    `done` already includes THIS stage's own weight by the time any caller
+    can reach here: `advance(stage, ...)` reports the stage-start message
+    and THEN immediately adds the stage's weight to `done`, in preparation
+    for the NEXT `advance()` call -- so `done` is really "cumulative weight
+    through and including the current stage", not "weight of everything
+    before it". Subtracting the current stage's own weight back out
+    recovers its true starting baseline. Verified empirically, not just
+    derived: an earlier version without this subtraction reported 76.9% at
+    the very first tick inside `convert` (a stage that starts at 20% and is
+    capped at 75%) -- see `tests/test_pipeline_notes.py`.
+    """
+    weight = _STAGE_WEIGHTS.get(stage, 0.0)
+    stage_start = done - weight
+    fraction = max(0.0, min(1.0, stage_fraction))
+    return min(0.99, stage_start + weight * fraction)
+
+
+def run(
+    data: bytes, filename: str, progress: Progress | None = None,
+    on_partial: OnPartial | None = None,
+) -> IngestResult:
+    """Ingest one uploaded PDF and return everything known about it.
+
+    `on_partial`, if given, is called periodically (at most every
+    `Config.PARTIAL_RESULT_INTERVAL_SECONDS`, plus always once more for the
+    final table) with `(doc_id, tables_so_far)` while table records are
+    being verified -- `tables_so_far` is already `.as_dict()`-shaped,
+    matching `IngestResult.as_dict()["tables"]`. Deliberately TABLES ONLY:
+    a document's identification (entity, financial year, framework) and its
+    narrative text chunks are computed later, in the `identify` stage,
+    which runs AFTER every table -- there is no cheap way to know "what
+    company is this" any earlier, so a partial snapshot genuinely cannot
+    carry it. See `jobs.PartialResult`'s own docstring for the consumer
+    side of this.
+    """
     report = progress or _noop
     done = 0.0
+    # Structured observability (Config-free, always on -- pure bookkeeping,
+    # never gates anything): how long each stage actually took, timed from
+    # the SAME `advance()` transitions already driving the SSE progress bar,
+    # so this can never drift out of sync with what a caller was shown. See
+    # models.StageDuration.
+    stage_durations: list["StageDuration"] = []
+    _stage_start = time.monotonic()
+    _current_stage: str | None = None
 
     def advance(stage: str, message: str) -> None:
-        nonlocal done
+        nonlocal done, _stage_start, _current_stage
+        now = time.monotonic()
+        if _current_stage is not None:
+            stage_durations.append(StageDuration(_current_stage, round(now - _stage_start, 3)))
+        _current_stage = stage
+        _stage_start = now
         report(stage, message, min(0.99, done))
         done += _STAGE_WEIGHTS.get(stage, 0.0)
+
+    def report_within_stage(stage: str, message: str, stage_fraction: float) -> None:
+        """A progress tick WITHIN the stage `advance(stage, ...)` most recently
+        entered -- see `_stage_progress` for the arithmetic.
+
+        `advance()` alone gives one tick per stage, called at the stage's
+        START -- fine for the five short stages, dishonest for the two long
+        ones: `convert` (55% of the bar) and the whole-table VLM pass inside
+        the `vlm` stage below, each multi-minute, each otherwise a SINGLE
+        call from this function's point of view. Left as `advance()` alone,
+        the bar sits frozen at one message for the entire multi-minute
+        duration of either -- not wrong, but indistinguishable from a hang
+        to whoever is watching it, with nothing but a 15s SSE heartbeat
+        (`main.py`) to prove otherwise. This adds ticks WITHOUT moving
+        `done` past the current stage's own start -- `advance()` to the
+        NEXT stage still adds the FULL stage weight once, exactly as
+        before; this only fills in what happens between one `advance()`
+        call and the next.
+        """
+        report(stage, message, _stage_progress(done, stage, stage_fraction))
 
     # ---- render ----------------------------------------------------------
     advance("render", "Reading the PDF")
@@ -269,7 +410,7 @@ def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestR
 
     # ---- convert ---------------------------------------------------------
     advance("convert", "Detecting layout and reading tables")
-    converted = convert_mod.convert(kept_images, kept_qualities)
+    converted = _convert_with_progress(kept_images, kept_qualities, report_within_stage)
     notes.extend(converted.errors)
     notes.extend(converted.notes)
 
@@ -302,8 +443,17 @@ def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestR
         )
     advance("vlm", "Re-reading tables with the vision model" if vlm_available else "Skipping the second read")
 
-    # ---- verify ----------------------------------------------------------
-    advance("verify", "Checking that the figures add up")
+    # `advance("verify", ...)` is called LATER, after the whole-table VLM
+    # pass below (Pass 2) actually runs -- it used to fire here, before any
+    # of that ran, which meant the single biggest remaining chunk of real
+    # wall-clock time in the whole pipeline (measured: 5-10 minutes on a
+    # filing with 40+ tables) executed silently under the "verify" stage's
+    # label and 5% budget while still SHOWING "Re-reading tables with the
+    # vision model" from the `advance("vlm", ...)` above -- the progress bar
+    # would sit still through the vlm stage's own share, jump to ~verify's
+    # starting point, then sit still AGAIN for the whole VLM wave under the
+    # wrong label. Moved so the stage a user sees matches the work actually
+    # running underneath it.
     records = []
     page_by_number = {q.page_no: q for q in kept_qualities}
     image_by_number = {q.page_no: img for q, img in zip(kept_qualities, kept_images)}
@@ -404,7 +554,14 @@ def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestR
                 ): p["index"]
                 for p in to_transcribe
             }
-            for future, index in futures.items():
+            # REAL progress here, not estimated -- unlike `convert()`, this
+            # loop is this function's own code, so each `future.result()`
+            # returning is a genuine completion event, not a guess. `.items()`
+            # order is submission order, not completion order, so a slow
+            # early table can hold this loop at N-1/N for a while when a
+            # later one already finished -- the count is still exact at every
+            # point it's reported, just not evenly paced against wall time.
+            for completed, (future, index) in enumerate(futures.items(), 1):
                 try:
                     vlm_results[index] = future.result()
                 except Exception:
@@ -415,6 +572,17 @@ def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestR
                     # take the rest of the document down with it.
                     logger.exception("VLM transcription failed for table %d", index)
                     vlm_results[index] = None
+                report_within_stage(
+                    "vlm",
+                    f"Re-reading tables with the vision model ({completed} of "
+                    f"{len(to_transcribe)})",
+                    completed / len(to_transcribe),
+                )
+
+    # ---- verify ------------------------------------------------------
+    # Real work starts here, not at the earlier `advance("vlm", ...)` --
+    # see that call site's own comment for why the boundary moved.
+    advance("verify", "Checking that the figures add up")
 
     # Pass 2a: rejoin captions that wrapped onto a second printed line.
     # Deterministic and geometry-only -- it needs neither the vision model
@@ -457,6 +625,7 @@ def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestR
     # degrades to binding docling's OWN table against the ledger with no
     # candidate to compare against, which still powers gap filling and the
     # half-read report from OCR geometry alone.
+    gap_fill_stats = RecoveryStats()
     if Config.NUMBER_BINDING_ENABLED:
         for p in prepared:
             index = p["index"]
@@ -507,7 +676,7 @@ def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestR
                 if Config.NUMBER_BINDING_GAP_FILL else []
             )
 
-        _place_confirmed_gap_fills(prepared, vlm_available, image_by_number, notes)
+        gap_fill_stats = _place_confirmed_gap_fills(prepared, vlm_available, image_by_number, notes)
 
         # The half-read report, computed AFTER any fills so it describes the
         # table as it now stands.
@@ -870,12 +1039,85 @@ def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestR
                         continue
                     rescued_by_draft.setdefault(d_index, {})[(row, col)] = result
 
+    rescue_stats = RecoveryStats(
+        requested=len(all_requests) if vlm_available and Config.VLM_RESCUE_ENABLED else 0,
+        attempted=len(budget) if vlm_available and Config.VLM_RESCUE_ENABLED else 0,
+        succeeded=sum(
+            1 for by_cell in rescued_by_draft.values()
+            for result in by_cell.values() if result.text is not None
+        ),
+    )
+
+    # Pass 3b-2: closed-world resolution for every `readers_disagree` cell
+    # that already has two candidates (see verify.draft_table's
+    # disagreement_requests) -- force a choice between EXACTLY those two
+    # readings rather than trusting the VLM's reading directly. Same
+    # document-wide batching reasoning as Pass 3b: one shared budget, one
+    # bounded pool, not N independent pools each hitting the shared endpoint.
+    closed_world_by_draft: dict[int, dict[tuple[int, int], str | None]] = {}
+    if vlm_available and Config.VLM_DISAGREEMENT_RESOLUTION_ENABLED:
+        all_disagreements: list[tuple[int, int, int, str, str, str, str]] = [
+            (d_index, row, col, row_label, column_name, candidate_a, candidate_b)
+            for d_index, d in enumerate(drafts)
+            for (row, col, row_label, column_name, candidate_a, candidate_b)
+            in d["draft"].disagreement_requests
+        ]
+        disagreement_budget = all_disagreements[:Config.VLM_MAX_DISAGREEMENT_RESOLUTIONS]
+        if len(all_disagreements) > len(disagreement_budget):
+            notes.append(
+                f"{len(all_disagreements) - len(disagreement_budget)} cell(s) where two "
+                "readers disagreed were left with the vision model's own reading, "
+                "unconfirmed, for BUDGET reasons (the "
+                f"{Config.VLM_MAX_DISAGREEMENT_RESOLUTIONS}-per-document cap, "
+                "INGEST_VLM_MAX_DISAGREEMENT_RESOLUTIONS)."
+            )
+
+        def _run_disagreement(
+            d_index: int, row: int, col: int, row_label: str, column_name: str,
+            candidate_a: str, candidate_b: str,
+        ):
+            d = drafts[d_index]
+            image = next((p["crop"] for p in prepared if p["index"] == d["index"]), None)
+            if image is None:
+                return d_index, row, col, None
+            choice = vlm_read.resolve_disagreement(
+                image, row_label, column_name, [candidate_a, candidate_b],
+            )
+            return d_index, row, col, choice
+
+        if disagreement_budget:
+            with ThreadPoolExecutor(max_workers=Config.VLM_RESCUE_CONCURRENCY) as pool:
+                futures = [pool.submit(_run_disagreement, *request) for request in disagreement_budget]
+                for future in futures:
+                    try:
+                        d_index, row, col, choice = future.result()
+                    except Exception:
+                        logger.exception("VLM closed-world disagreement resolution failed")
+                        continue
+                    closed_world_by_draft.setdefault(d_index, {})[(row, col)] = choice
+
+    disagreement_stats = RecoveryStats(
+        requested=(
+            len(all_disagreements)
+            if vlm_available and Config.VLM_DISAGREEMENT_RESOLUTION_ENABLED else 0
+        ),
+        attempted=(
+            len(disagreement_budget)
+            if vlm_available and Config.VLM_DISAGREEMENT_RESOLUTION_ENABLED else 0
+        ),
+        succeeded=sum(
+            1 for by_cell in closed_world_by_draft.values()
+            for choice in by_cell.values() if choice is not None
+        ),
+    )
+
     # Pass 3c: resolve every table's recovery (arithmetic promotion first,
     # then whatever stays display-only), apply what got promoted, redact
     # what did not, and assemble records -- in ORIGINAL TABLE ORDER, not in
     # whatever order Pass 3b's futures happened to finish, since notes and
     # the eventual table list both need to read top-to-bottom the way the
     # document does.
+    last_partial_at = time.monotonic()
     for d_index, d in enumerate(drafts):
         index = d["index"]
         converted_table = d["converted_table"]
@@ -887,6 +1129,7 @@ def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestR
             alignment_grounded=d["alignment_grounded"],
             alignment_agreement=d["agreement"],
             rescued=rescued_by_draft.get(d_index, {}),
+            closed_world_choice=closed_world_by_draft.get(d_index, {}),
         )
         # Promoted figures' own text must be in the table BEFORE redact,
         # which only ever touches cells named in `findings` -- a promoted
@@ -904,6 +1147,20 @@ def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestR
                 "numbers, exactly like a cleanly-read figure."
             )
 
+        # Current/Previous-year column-order check -- a SIGNAL, never a fix
+        # (see structure_repair.detect_year_column_order's own docstring for
+        # why this refuses to reorder anything itself). Run after redact, not
+        # before: the check reads the table's own header text as it stands in
+        # the FINAL emitted record, not an intermediate draft that redaction
+        # might still change the shape of.
+        year_order_warning = structure_repair.detect_year_column_order(table)
+        if year_order_warning:
+            notes.append(
+                f"Table {index} on page {converted_table.page_no}: {year_order_warning}. "
+                "Figures are shown as extracted; verify the year columns against the "
+                "original scan before relying on this table's current/previous-year split."
+            )
+
         p = next((p for p in prepared if p["index"] == index), None)
         records.append(emit.build_table_record(
             table=table,
@@ -918,6 +1175,37 @@ def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestR
             source_file=filename,
             recovered=recovered,
         ))
+
+        # Throttled, not per-table: on a 60+ table filing this loop does no
+        # network I/O (the VLM/rescue calls that do already ran earlier), so
+        # WITHOUT a throttle this would fire an SSE frame per table -- needless
+        # traffic for a consumer that only wants "roughly how much is ready".
+        # The final table always fires regardless of the interval (`is_last`),
+        # so a caller never waits past the loop's own end for the complete set.
+        if on_partial is not None:
+            now = time.monotonic()
+            is_last = d_index == len(drafts) - 1
+            if is_last or (now - last_partial_at) >= Config.PARTIAL_RESULT_INTERVAL_SECONDS:
+                on_partial(doc_id, [r.as_dict() for r in records])
+                last_partial_at = now
+
+    # Cross-page continuation check -- a SIGNAL, never a merge (see
+    # structure_repair.detect_cross_page_continuation's own docstring). Run
+    # over `drafts` in document order, after every table's own redact/apply
+    # above, so it reads each table's FINAL shape. Adjacent in `drafts`
+    # means adjacent in reading order; the function itself refuses unless
+    # the two tables' page numbers are exactly consecutive.
+    for prev_d, next_d in zip(drafts, drafts[1:]):
+        continuation_warning = structure_repair.detect_cross_page_continuation(
+            prev_d["table"], next_d["table"],
+        )
+        if continuation_warning:
+            notes.append(
+                f"Table {prev_d['index']} on page {prev_d['converted_table'].page_no} / "
+                f"Table {next_d['index']} on page {next_d['converted_table'].page_no}: "
+                f"{continuation_warning}. Shown as two separate tables; verify any closing "
+                "total against both before relying on either one alone."
+            )
 
     # ---- page images -------------------------------------------------------
     #
@@ -958,6 +1246,14 @@ def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestR
         source_file=filename,
     )
 
+    # Close out the LAST stage's own duration -- `advance()` only records
+    # the PREVIOUS stage's duration when the NEXT one starts, so "identify"
+    # (the final stage) never gets one from `advance()` alone.
+    if _current_stage is not None:
+        stage_durations.append(
+            StageDuration(_current_stage, round(time.monotonic() - _stage_start, 3))
+        )
+
     report("done", "Finished", 1.0)
     return emit.build_result(
         doc_id=doc_id,
@@ -970,4 +1266,8 @@ def run(data: bytes, filename: str, progress: Progress | None = None) -> IngestR
         vlm_used=vlm_available,
         notes=notes,
         page_images=page_images,
+        stage_durations=stage_durations,
+        rescue_stats=rescue_stats,
+        disagreement_stats=disagreement_stats,
+        gap_fill_stats=gap_fill_stats,
     )

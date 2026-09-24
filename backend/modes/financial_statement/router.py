@@ -397,6 +397,50 @@ async def upload_events(job_id: str, user: CurrentUser = Depends(require_user)):
                     break
                 name, payload = item
 
+                if name == "partial":
+                    # Tables verified SO FAR -- see ingestion's
+                    # `jobs.PartialResult` for why identification/texts
+                    # cannot be included yet. Persisted through the SAME
+                    # `STORE.put()` the final result uses (idempotent by
+                    # `(user_id, conversation_id, doc_id)` -- see
+                    # `pgstore.save`'s own docstring), so this simply gets
+                    # superseded when the real "result" event arrives; a
+                    # user who never waits for that (closes the tab, or
+                    # starts chatting immediately) still gets SOMETHING
+                    # rather than nothing.
+                    partial_document = upload_store.UploadedDocument(
+                        doc_id=payload["doc_id"],
+                        user_id=user.user_id,
+                        conversation_id=conversation_id,
+                        filename=filename,
+                        document={
+                            "doc_id": payload["doc_id"],
+                            "filename": filename,
+                            "ingestion_status": "partial",
+                        },
+                        identification={},
+                        quality={},
+                        tables=payload.get("tables") or [],
+                        texts=[],
+                        pages=[],
+                    )
+                    try:
+                        await asyncio.to_thread(upload_store.STORE.put, partial_document)
+                    except upload_store.UploadStoreError as exc:
+                        # Not fatal -- a partial snapshot failing to persist
+                        # just means chat waits for the final "result"
+                        # event, same behaviour as before this existed.
+                        logger.warning(
+                            "could not persist partial snapshot for %s: %s",
+                            payload.get("doc_id"), exc,
+                        )
+                    yield "event: partial\ndata: " + json.dumps({
+                        "conversation_id": conversation_id,
+                        "doc_id": payload["doc_id"],
+                        "table_count": len(partial_document.tables),
+                    }) + "\n\n"
+                    continue
+
                 if name == "result":
                     document = upload_store.UploadedDocument(
                         doc_id=payload["document"]["doc_id"],

@@ -294,6 +294,8 @@ class CellFinding:
     confidence: str | None = None
     confidence_basis: list[str] = field(default_factory=list)
     #: Which tier produced the candidate: "vlm_only_row", "readers_disagree",
+    #: "readers_disagree_resolved" (a readers_disagree cell that was ALSO put
+    #: to a closed-world forced choice -- see vlm_read.resolve_disagreement),
     #: "rescue_read", or None for a plain withheld cell with no candidate at
     #: all. Diagnostic only -- nothing branches on it downstream.
     recovery_origin: str | None = None
@@ -324,6 +326,10 @@ class CellFinding:
 _RECOVERY_CAVEATS = {
     "vlm_only_row": "it is the only read of this cell",
     "readers_disagree": "the two readers disagreed and the arithmetic did not settle it",
+    "readers_disagree_resolved": (
+        "the two readers disagreed; a forced choice between exactly their two readings "
+        "picked this one, but the arithmetic did not independently settle it"
+    ),
     "rescue_read": "column total does not confirm it",
     "two_recovered_in_one_footing": "two recovered figures share one total, so neither is determined",
 }
@@ -557,6 +563,45 @@ class Identification:
 
 
 @dataclass
+class StageDuration:
+    """How long one pipeline stage actually took, for THIS document.
+
+    Populated from `pipeline.py`'s own `advance()` closure -- the exact
+    stage-transition points already driving the SSE progress bar -- not a
+    separate timing mechanism, so this can never drift out of sync with
+    what the user's progress bar showed. Wall-clock only: this reports what
+    happened, it does not itself gate or slow anything.
+    """
+    stage: str
+    duration_seconds: float
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class RecoveryStats:
+    """Document-wide counts for ONE recovery mechanism (per-cell rescue,
+    closed-world disagreement resolution, or OCR gap-fill confirmation).
+
+    Answers "how much of what happened, and did it work" in a form a caller
+    can actually query, where before this only free-text `notes` strings
+    could gesture at it. `requested` is every cell that COULD have used
+    this mechanism; `attempted` is how many actually got a call (the rest
+    were left for budget reasons -- see the matching note in `notes`);
+    `succeeded` is how many of those calls produced a result this pipeline
+    actually trusted (not every attempt succeeds -- a rescue can come back
+    unanchored, a disagreement resolution can come back UNCERTAIN).
+    """
+    requested: int = 0
+    attempted: int = 0
+    succeeded: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class DocumentQuality:
     pages: list[PageQuality] = field(default_factory=list)
     duplicate_pages: list[int] = field(default_factory=list)
@@ -576,6 +621,14 @@ class DocumentQuality:
     recovered_cells: list[dict[str, Any]] = field(default_factory=list)
     vlm_used: bool = False
     notes: list[str] = field(default_factory=list)
+    #: Structured processing observability -- see `StageDuration`/
+    #: `RecoveryStats`'s own docstrings. All optional/defaulted so every
+    #: existing caller (tests included) that builds a `DocumentQuality`
+    #: without them is unaffected.
+    stage_durations: list[StageDuration] = field(default_factory=list)
+    rescue_stats: RecoveryStats = field(default_factory=RecoveryStats)
+    disagreement_stats: RecoveryStats = field(default_factory=RecoveryStats)
+    gap_fill_stats: RecoveryStats = field(default_factory=RecoveryStats)
 
     @property
     def mean_score(self) -> float | None:
@@ -608,6 +661,10 @@ class DocumentQuality:
             "low_score": self.low_score,
             "grade": self.grade,
             "low_grade": self.low_grade,
+            "stage_durations": [s.as_dict() for s in self.stage_durations],
+            "rescue_stats": self.rescue_stats.as_dict(),
+            "disagreement_stats": self.disagreement_stats.as_dict(),
+            "gap_fill_stats": self.gap_fill_stats.as_dict(),
         }
 
 

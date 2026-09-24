@@ -396,3 +396,48 @@ def test_documents_are_scoped_to_their_own_user_and_conversation(uploaded):
 def test_deleting_a_conversation_drops_its_documents(uploaded):
     assert store.STORE.drop_conversation("u1", "c1") == 1
     assert store.STORE.list("u1", "c1") == []
+
+
+# --------------------------------------------------------------------------
+# Progressive/partial availability (Phase 2) -- a document the ingestion
+# service is still converting, published early via `router.py`'s
+# `/upload/{job_id}/events` "partial" branch.
+# --------------------------------------------------------------------------
+
+def test_ingestion_status_defaults_to_complete():
+    # Every document built before this feature existed, and every document
+    # built from a normal "result" event, has no "ingestion_status" key at
+    # all -- must read as complete, not crash or read as partial.
+    document = store.UploadedDocument(
+        doc_id="up_x", user_id="u1", conversation_id="c1", filename="a.pdf",
+        document={}, identification={}, quality={},
+    )
+    assert document.ingestion_status == "complete"
+
+
+def test_ingestion_status_reads_partial_from_the_document_dict():
+    document = store.UploadedDocument(
+        doc_id="up_x", user_id="u1", conversation_id="c1", filename="a.pdf",
+        document={"ingestion_status": "partial"}, identification={}, quality={},
+    )
+    assert document.ingestion_status == "partial"
+
+
+def test_document_header_is_unchanged_for_a_complete_document(uploaded):
+    header = bridge._document_header(uploaded)
+    assert "STILL BEING INGESTED" not in header
+    assert "doc_id=up_test" in header
+
+
+def test_document_header_warns_when_the_document_is_partial():
+    partial = store.UploadedDocument(
+        doc_id="up_partial", user_id="u1", conversation_id="c1",
+        filename="still-converting.pdf",
+        document={"ingestion_status": "partial"},
+        identification={}, quality={},
+        tables=[{"table_id": "up_partial_t1", "table_md": "| a |"}],
+    )
+    header = bridge._document_header(partial)
+    assert "STILL BEING INGESTED" in header
+    assert "1 table(s) extracted so far" in header
+    assert "doc_id=up_partial" in header

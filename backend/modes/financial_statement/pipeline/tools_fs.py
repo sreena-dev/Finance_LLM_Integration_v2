@@ -5122,10 +5122,7 @@ class TrendAnalysisTools:
                     "UNITS: none of these reports' tables declare a presentation scale. Amounts "
                     "are reproduced as filed — say the scale is not stated in the source."
                 )
-            return (
-                f"UNITS: every monetary amount below is in {label}, the scale all of these "
-                f"reports declare. Quote EVERY figure with '{label}' attached."
-            )
+            return f"UNITS: every monetary amount below is in {label}, the scale all of these reports declare."
 
         detail = "; ".join(f"{label}: {', '.join(ids)}" for label, ids in seen.items())
         return (
@@ -5325,9 +5322,7 @@ class UnitResolver:
         line = (
             f"UNITS: every monetary amount below is in {info['label']}"
             + (f" ({info['currency']})" if info["currency"] else "")
-            + ", the scale this document's own financial tables declare. Quote EVERY figure "
-            f"you take from this output with '{info['label']}' attached — a bare number is "
-            "wrong by orders of magnitude to the reader."
+            + ", the scale this document's own financial tables declare."
         )
         if info["mixed"]:
             line += (

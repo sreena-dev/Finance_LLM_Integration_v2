@@ -66,6 +66,17 @@ class Config:
     RESULT_CACHE_ENTRIES = _int("INGEST_RESULT_CACHE_ENTRIES", 8)
     MAX_UPLOAD_BYTES = _int("INGEST_MAX_UPLOAD_BYTES", 64 * 1024 * 1024)
     MAX_PAGES = _int("INGEST_MAX_PAGES", 400)
+    # How often (wall-clock seconds), at most, `pipeline.run`'s `on_partial`
+    # callback fires while table records are being verified -- see
+    # `Job.publish_partial` (jobs.py). Tables-so-far are cheap to build (no
+    # network call happens in that loop; the VLM/rescue calls that DO hit
+    # the network already ran earlier, in the `vlm`/`verify` stages), so
+    # this exists to bound EVENT volume on a large filing (60+ tables),
+    # not compute cost -- firing one SSE frame per table on a 100-table
+    # document is needless traffic for a consumer that only wants "roughly
+    # how much is ready", and the LAST table always fires one regardless of
+    # this interval, so nothing is ever more than one throttle-window stale.
+    PARTIAL_RESULT_INTERVAL_SECONDS = _float("INGEST_PARTIAL_RESULT_INTERVAL_SECONDS", 3.0)
 
     # ---- rasterisation ---------------------------------------------------
     # The corpus is 200 DPI (measured: 1654x2338 on A4 across every sample).
@@ -249,6 +260,21 @@ class Config:
     # reply may contain several rows, but still far less than a whole-table
     # transcription (VLM_MAX_TOKENS).
     VLM_BAND_MAX_TOKENS = _int("INGEST_VLM_BAND_MAX_TOKENS", 800)
+
+    # ---- VLM closed-world disagreement resolution -------------------------
+    # A THIRD pass, distinct from both rescues above: for a cell where
+    # docling's own reading and the whole-table VLM's own reading already
+    # disagree (`readers_disagree`), force a choice between EXACTLY those
+    # two candidates rather than trusting the VLM's reading directly (the
+    # previous behaviour) or asking for a free re-read (which could in
+    # principle answer with a THIRD value neither reader produced). See
+    # vlm_read.resolve_disagreement's own docstring for why this is a
+    # meaningfully different, stronger guarantee than a free rescue.
+    VLM_DISAGREEMENT_RESOLUTION_ENABLED = _bool(
+        "INGEST_VLM_DISAGREEMENT_RESOLUTION_ENABLED", True
+    )
+    # Per-DOCUMENT cap, same reasoning as VLM_MAX_RESCUES.
+    VLM_MAX_DISAGREEMENT_RESOLUTIONS = _int("INGEST_VLM_MAX_DISAGREEMENT_RESOLUTIONS", 40)
 
     # ---- Structural-risk reporting (vlm_read.assess_structural_risk) ------
     # Purely a REPORTING signal since number binding took over deciding

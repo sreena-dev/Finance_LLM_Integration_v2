@@ -483,3 +483,71 @@ def test_an_unreachable_or_illegible_second_read_confirms_nothing(monkeypatch):
 def test_the_confirmation_tolerance_matches_the_rest_of_the_pipeline(monkeypatch):
     assert _confirm(monkeypatch, 100.005) is True       # within max(0.01, ...)
     assert _confirm(monkeypatch, 100.02) is False
+
+
+# ---------------------------------------------------------------------------
+# build_number_ledger: footnote-marker vs. real-figure disambiguation
+# ---------------------------------------------------------------------------
+
+def test_a_short_small_line_next_to_normal_height_lines_is_dropped_as_a_marker():
+    lines = [
+        _line("Revenue", 0.0, 100.0, 200.0, 118.0),       # height 18 (normal)
+        _line("100.00", 250.0, 100.0, 350.0, 118.0),       # height 18 (normal)
+        # A lone "1" detected as its OWN small OCR region, well under the
+        # region's median line height -- the footnote-marker signature.
+        _line("1", 355.0, 102.0, 362.0, 110.0),            # height 8
+    ]
+    ledger = sr.build_number_ledger(lines)
+    values = sorted(t.value for t in ledger)
+    assert values == [100.0], "the marker's '1' must not appear as a figure"
+
+
+def test_a_normal_height_short_number_is_kept_as_a_real_figure():
+    # Same shape, but the short line is the SAME height as everything else
+    # -- a real one- or two-digit figure (e.g. a Note column), not a marker.
+    lines = [
+        _line("Revenue", 0.0, 100.0, 200.0, 118.0),
+        _line("4", 210.0, 100.0, 220.0, 118.0),            # height 18, normal
+        _line("100.00", 250.0, 100.0, 350.0, 118.0),
+    ]
+    ledger = sr.build_number_ledger(lines)
+    values = sorted(t.value for t in ledger)
+    assert values == [4.0, 100.0]
+
+
+def test_a_multidigit_short_line_is_never_treated_as_a_marker():
+    # The marker filter is deliberately narrow: 1-2 digits only. A small but
+    # multi-digit figure (a real, if oddly-scaled, OCR box) is left alone.
+    lines = [
+        _line("Revenue", 0.0, 100.0, 200.0, 118.0),
+        _line("100.00", 250.0, 100.0, 350.0, 118.0),
+        _line("123", 355.0, 102.0, 375.0, 110.0),          # 3 digits, short box
+    ]
+    ledger = sr.build_number_ledger(lines)
+    values = sorted(t.value for t in ledger)
+    assert values == [100.0, 123.0]
+
+
+def test_a_footnote_marker_sharing_its_line_with_a_real_figure_is_not_caught():
+    # Documented limitation: no font-size data exists for a marker MERGED
+    # into the same OCR line as its neighbouring figure -- this is
+    # deliberately left untouched rather than guessed at (see
+    # `_looks_like_footnote_marker`'s own comment). Confirms this stays
+    # honestly unhandled, not silently "working" by accident.
+    lines = [_line("Revenue 100.00 1", 0.0, 100.0, 400.0, 118.0)]
+    ledger = sr.build_number_ledger(lines)
+    values = sorted(t.value for t in ledger)
+    assert values == [1.0, 100.0]
+
+
+def test_looks_like_footnote_marker_directly():
+    short = OcrLine(text="1", confidence=0.99, bbox=(0.0, 0.0, 10.0, 8.0))
+    normal = OcrLine(text="1", confidence=0.99, bbox=(0.0, 0.0, 10.0, 18.0))
+    two_digit_short = OcrLine(text="12", confidence=0.99, bbox=(0.0, 0.0, 10.0, 8.0))
+    three_digit_short = OcrLine(text="123", confidence=0.99, bbox=(0.0, 0.0, 10.0, 8.0))
+
+    assert sr._looks_like_footnote_marker(short, median_line_height=18.0) is True
+    assert sr._looks_like_footnote_marker(normal, median_line_height=18.0) is False
+    assert sr._looks_like_footnote_marker(two_digit_short, median_line_height=18.0) is True
+    assert sr._looks_like_footnote_marker(three_digit_short, median_line_height=18.0) is False
+    assert sr._looks_like_footnote_marker(short, median_line_height=0.0) is False

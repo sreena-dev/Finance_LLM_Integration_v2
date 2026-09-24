@@ -59,6 +59,36 @@ class Event:
 
 
 @dataclass
+class PartialResult:
+    """A snapshot of table records verified SO FAR, sent periodically during
+    a long-running job so a consumer (the FS gateway) can start using a
+    document before the whole conversion finishes -- see `pipeline.run`'s
+    `on_partial` callback.
+
+    Deliberately tables-only, not a partial `IngestResult`: a document's
+    identification (entity name, financial year, framework) and narrative
+    text chunks are only computed in the `identify` stage, which runs AFTER
+    every table is verified -- there is no cheap way to know "what company
+    is this" any earlier, so a partial snapshot genuinely cannot carry it.
+    `doc_id` is the one exception: computed once at the very start of
+    `run()` (a content hash), it is stable and known before the first
+    partial snapshot is possible.
+
+    A SEPARATE type from `Event`, not a repurposed one: a progress event is
+    tiny and safe to keep hundreds of for subscriber replay; this carries a
+    growing table list and must never be confused with -- or accidentally
+    treated as -- the terminal `result`, which only `job.status == "done"`
+    may set.
+    """
+    doc_id: str
+    tables: list[dict[str, Any]]
+    at: float = field(default_factory=time.time)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"doc_id": self.doc_id, "tables": self.tables, "complete": False}
+
+
+@dataclass
 class Job:
     job_id: str
     filename: str
@@ -68,9 +98,18 @@ class Job:
     created: float = field(default_factory=time.time)
     finished: float | None = None
     events: list[Event] = field(default_factory=list)
-    #: One queue per live subscriber. A list rather than a single queue so two
-    #: browser tabs watching the same upload both see every event.
-    subscribers: list["queue.Queue[Event | None]"] = field(default_factory=list)
+    #: The most recent partial-result snapshot, if the pipeline has
+    #: published one -- see `PartialResult`. Kept separately from `events`:
+    #: only the LATEST snapshot is ever meaningful (each one supersedes the
+    #: last, same as `result`), unlike progress events, where every one
+    #: matters for a late subscriber's replay of what stage happened when.
+    partial: PartialResult | None = None
+    #: One queue per live subscriber, each holding `(kind, payload)` pairs
+    #: -- `kind` is "progress" or "partial", `payload` an `Event` or a
+    #: `PartialResult` respectively -- or `None` as the stream's end marker.
+    #: A list rather than a single queue so two browser tabs watching the
+    #: same upload both see every item.
+    subscribers: list["queue.Queue[tuple[str, Any] | None]"] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def publish(self, event: Event) -> None:
@@ -79,9 +118,27 @@ class Job:
             subscribers = list(self.subscribers)
         for subscriber in subscribers:
             try:
-                subscriber.put_nowait(event)
+                subscriber.put_nowait(("progress", event))
             except Exception:
                 # A subscriber that has gone away must never stall the pipeline.
+                pass
+
+    def publish_partial(self, partial: PartialResult) -> None:
+        """A snapshot of every table verified so far -- see `PartialResult`.
+
+        Overwrites `self.partial` (only the latest is ever useful to a NEW
+        subscriber replaying history) but is still queued to every LIVE
+        subscriber for each call, so a browser already watching the stream
+        sees the table count grow over time rather than jumping straight to
+        whatever was current when it connected.
+        """
+        with self.lock:
+            self.partial = partial
+            subscribers = list(self.subscribers)
+        for subscriber in subscribers:
+            try:
+                subscriber.put_nowait(("partial", partial))
+            except Exception:
                 pass
 
     def close(self) -> None:
@@ -94,18 +151,23 @@ class Job:
             except Exception:
                 pass
 
-    def subscribe(self) -> "queue.Queue[Event | None]":
+    def subscribe(self) -> "queue.Queue[tuple[str, Any] | None]":
         """Attach a listener, replaying what it missed.
 
         The replay matters: the browser opens the event stream on the response
         to the upload request, by which time rendering and precheck have usually
         already run. Without it the progress bar starts at whatever stage
-        happens to be next and appears to skip the beginning.
+        happens to be next and appears to skip the beginning. The latest
+        partial snapshot (if any) replays too, for the same reason -- a
+        subscriber connecting mid-run should see tables already extracted,
+        not wait for the next one to be published.
         """
-        subscriber: "queue.Queue[Event | None]" = queue.Queue()
+        subscriber: "queue.Queue[tuple[str, Any] | None]" = queue.Queue()
         with self.lock:
             for event in self.events:
-                subscriber.put_nowait(event)
+                subscriber.put_nowait(("progress", event))
+            if self.partial is not None:
+                subscriber.put_nowait(("partial", self.partial))
             if self.status in ("done", "error"):
                 subscriber.put_nowait(None)
             else:
@@ -125,6 +187,8 @@ class Job:
             "error": self.error,
             "progress": self.events[-1].as_dict() if self.events else None,
         }
+        if self.partial is not None:
+            payload["partial"] = self.partial.as_dict()
         if include_result and self.status == "done":
             payload["result"] = self.result
         return payload
@@ -263,7 +327,13 @@ class Registry:
                 job.status = "done"
                 return
 
-            result = run(data, job.filename, progress=lambda s, m, f: job.publish(Event(s, m, f)))
+            result = run(
+                data, job.filename,
+                progress=lambda s, m, f: job.publish(Event(s, m, f)),
+                on_partial=lambda doc_id, tables: job.publish_partial(
+                    PartialResult(doc_id, tables)
+                ),
+            )
             job.result = result.as_dict()
             self._remember(digest, job.result)
             job.status = "done"

@@ -28,16 +28,38 @@ from fastapi.responses import StreamingResponse
 # directly with uvicorn on a host it is not: nothing else loads it, so
 # LLM_BASE_URL is unset, the VLM capability probe never runs, and the service
 # reports `vlm_configured: false` while the endpoint is sitting there configured
-# in .env. That looks like a broken vision model rather than an unloaded file.
+# in .env. That looks like a broken vision model rather than an unloaded file --
+# confirmed live: a document converted this way came back with "A second
+# independent read by the vision model was not available" on every table, while
+# the exact same endpoint answered fine when the vars were exported by hand.
 #
-# Searched most-specific first and never with override, so a variable already
-# exported in the shell keeps winning -- the same rule and the same reasoning as
-# backend/app/main.py.
+# BOTH candidates are loaded, not just the first found -- this used to `break`
+# after ingestion/.env, which meant the shared root .env (where LLM_BASE_URL /
+# LLM_MODEL_NAME / GENERATION_API_KEY live) was NEVER read on a bare `uvicorn`
+# run, because ingestion/.env already exists in this repo for its own
+# offline-cache settings. Searched most-specific first and never with
+# override, so ingestion/.env's own values win on any name both files define,
+# and a variable already exported in the shell beats either file -- the same
+# rule and the same reasoning as backend/app/main.py.
+
+
+def _load_env_files(service_dir: Path) -> list[Path]:
+    """Load every ``.env`` found among ``service_dir/.env`` and
+    ``service_dir.parent/.env``, most-specific first, returning which ones
+    it actually loaded. A standalone function so the "loads both, not just
+    the first" behaviour is directly testable without spinning up the
+    service -- see ``tests/test_env_loading.py``.
+    """
+    loaded = []
+    for candidate in (service_dir / ".env", service_dir.parent / ".env"):
+        if candidate.is_file():
+            load_dotenv(candidate, override=False)
+            loaded.append(candidate)
+    return loaded
+
+
 _SERVICE_DIR = Path(__file__).resolve().parent.parent
-for _candidate in (_SERVICE_DIR / ".env", _SERVICE_DIR.parent / ".env"):
-    if _candidate.is_file():
-        load_dotenv(_candidate, override=False)
-        break
+_load_env_files(_SERVICE_DIR)
 
 from .config import Config  # noqa: E402
 from .jobs import REGISTRY  # noqa: E402
@@ -244,13 +266,23 @@ async def events(job_id: str):
         try:
             while True:
                 try:
-                    event = await loop.run_in_executor(None, subscriber.get, True, 15.0)
+                    item = await loop.run_in_executor(None, subscriber.get, True, 15.0)
                 except Exception:
                     yield ": keep-alive\n\n"
                     continue
-                if event is None:
+                if item is None:
                     break
-                yield f"event: progress\ndata: {json.dumps(event.as_dict())}\n\n"
+                # `subscriber` now carries two DIFFERENT kinds of item --
+                # ordinary progress events and, less often, a partial-result
+                # snapshot (`jobs.Job.publish_partial`) -- so the SSE event
+                # NAME has to come from the item itself rather than being
+                # hardcoded to "progress" for everything queued before the
+                # terminal result. A consumer that only cares about progress
+                # can keep listening for `event: progress` exactly as
+                # before; one that wants early tables listens for
+                # `event: partial` too.
+                kind, payload = item
+                yield f"event: {kind}\ndata: {json.dumps(payload.as_dict())}\n\n"
 
             if job.status == "done":
                 yield f"event: result\ndata: {json.dumps(job.result)}\n\n"
