@@ -51,7 +51,8 @@ backend/modes/output/
 # in the app reads it.
 backend/fs_entities.json
 
-FIN_LLM/
+# FDR IGNORES
+documentation/
 
 # A separately-cloned copy of the docling library's own repo, left sitting in
 # this project's folder (it has its own .git, .claude, .codex dirs). Nothing
