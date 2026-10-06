@@ -54,6 +54,25 @@ class TrendThresholds:
     DEPRECIATION_DRIFT_THRESHOLD: float = 0.15       # PPE growth outpacing depreciation expense by > 15%
 
 
-# Default global instance
-THRESHOLDS = TrendThresholds()
+_DEFAULTS = TrendThresholds()
+_FIELDS = frozenset(f for f in TrendThresholds.__dataclass_fields__)
+
+
+class _LiveThresholds:
+    """The global instance the trend code reads. Attribute access resolves at call time:
+    an auditor's override (xbrl_threshold_store) if one is set, else the dataclass default
+    above. A plain `TrendThresholds()` would be frozen at import - and because the trend
+    functions bind it as a default argument, an override saved from the UI would never be
+    seen. Tests that need fixed values still construct `TrendThresholds(...)` explicitly."""
+
+    def __getattr__(self, name: str) -> float:
+        if name not in _FIELDS:
+            raise AttributeError(name)
+        from . import xbrl_threshold_store as STORE   # local: keeps this module import-light
+        ov = STORE.override(f"trend.{name}")
+        return ov if ov is not None else getattr(_DEFAULTS, name)
+
+
+# Default global instance (live: honours overrides, falls back to the defaults above)
+THRESHOLDS = _LiveThresholds()
 

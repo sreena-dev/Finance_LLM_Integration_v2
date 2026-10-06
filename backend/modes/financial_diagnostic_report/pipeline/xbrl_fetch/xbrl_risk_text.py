@@ -99,7 +99,7 @@ def lint_risk_clusters(data: dict[str, Any]) -> dict[str, Any]:
     def _clean_str(val: str) -> str:
         s = val
         for phrase, rep in _PROHIBITED_REPLACEMENTS.items():
-            s = re.sub(re.escape(phrase), rep, s, flags=re.IGNORECASE)
+            s = re.sub(rf"(?<!\w){re.escape(phrase)}(?!\w)", rep, s, flags=re.IGNORECASE)
         return s
 
     clusters = data.get("risk_clusters") or []

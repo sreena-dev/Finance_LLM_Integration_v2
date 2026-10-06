@@ -28,8 +28,9 @@ from .xbrl_risk_text import (
     lint_risk_clusters,
 )
 from .xbrl_risk_signals import detect_signals_and_metrics, evaluate_risk_interactions
-from .xbrl_risk_deterministic import deterministic_risk_clusters
+from .xbrl_risk_deterministic import deterministic_risk_clusters, unraised_reason
 from . import xbrl_risk_concepts as C
+from . import xbrl_position as POS
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,10 @@ def build_risk_clusters(
                 {"role": "system", "content": P.SYSTEM_PROMPT},
                 {"role": "user", "content": user_turn},
             ]
-            raw_response = chat_fn(messages, max_tokens=1500, temperature=0.0)
+            # Sized for the worst case: six raised clusters (~13 fields each) plus
+            # interactions. A cap that cuts the JSON off mid-object forces the
+            # deterministic fallback on exactly the filings with the most risk.
+            raw_response = chat_fn(messages, max_tokens=6000, temperature=0.0)
 
             # Strip possible markdown code fences ```json ... ```
             clean_json = re.sub(r'^```(?:json)?\s*', '', raw_response.strip())
@@ -142,7 +146,7 @@ def build_risk_clusters(
                 "id": cid,
                 "theme": C.CLUSTER_NAMES[cid],
                 "raised": False,
-                "reason": C.UNRAISED_REASONS.get(cid, "No contributing anomaly signals detected in reported figures or disclosures."),
+                "reason": unraised_reason(cid, lookup),
                 "contributing_signals": [],
                 "alt_explanations": [],
                 "affected_assertions": list(C.CLUSTER_ASSERTIONS[cid]),
@@ -156,7 +160,7 @@ def build_risk_clusters(
                 },
                 "specialist_referral": "None",
                 "evidence_request": "Routine audit lead schedules under standard audit plan.",
-                "diagnostic_confidence": "high",
+                "diagnostic_confidence": ("low" if cid == "RC04" and lookup.get("leverage_status") == POS.MISSING else "high"),
                 "priority_rank": None,
                 "priority_reasoning": "Not raised; financial indicators and disclosures remain within normal operational parameters.",
             })

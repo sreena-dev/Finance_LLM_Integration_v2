@@ -53,6 +53,7 @@ backend/fs_entities.json
 
 # FDR IGNORES
 documentation/
+eval/
 
 # A separately-cloned copy of the docling library's own repo, left sitting in
 # this project's folder (it has its own .git, .claude, .codex dirs). Nothing
@@ -97,3 +98,6 @@ data.zip
 # `git add -A` without anyone noticing.
 agent_chats/
 chats/
+
+# FDR auditor-set threshold overrides (runtime data, per deployment)
+/backend/data/

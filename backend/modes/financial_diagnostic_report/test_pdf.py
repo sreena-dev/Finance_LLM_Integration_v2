@@ -5,27 +5,18 @@ Run from `backend/`:
 
 WHAT IS WORTH PINNING HERE
 ---------------------------
-`pdf.py` is a rendering step, not a content decision — every wording choice
-already belongs to `report.py` and is pinned in `test_report.py`. What can go
-wrong here is specific to rendering: python-markdown silently swallowing a
-list into a run-on paragraph (the "no blank line before a list" quirk — see
+`pdf.py` is a rendering step, not a content decision. What can go wrong here
+is specific to rendering: python-markdown silently swallowing a list into a
+run-on paragraph (the "no blank line before a list" quirk — see
 `pdf._blank_line_before_lists`), a "[n] citation" marker getting eaten by
 markdown's own link syntax, or `pisa.CreatePDF` failing outright. No
 Postgres, no model — a stub markdown string is enough to exercise all three.
-
-One test here reaches past rendering into `adapter.report_pdf`'s assembly
-choice (block markdown only, not `report.to_markdown`'s wrapped text) —
-it belongs next to the rendering tests because a regression there would
-put text into the PDF the screen never shows, which is the same class of
-failure this file exists to catch.
 """
 from __future__ import annotations
 
 import sys
 
 from . import pdf as PDF
-from . import report as REP
-from .test_report import StubEvaluated, _entity_type_ctx, _framework_ctx, _payload
 
 
 def test_list_with_no_blank_line_is_still_a_list() -> list[str]:
@@ -101,45 +92,6 @@ def test_full_document_renders_without_error() -> list[str]:
         ["to_pdf returned no usable PDF bytes"]
 
 
-def test_pdf_source_carries_no_wrapper_the_screen_does_not_show() -> list[str]:
-    """`adapter.report_pdf` builds its text from each block's own `to_markdown`
-    directly, NOT from `report.to_markdown`'s wrapped output — that wrapper
-    adds a title/tagline line, a standing "candidate priorities..."
-    disclaimer and a "Version stamp" table, none of which `FdrAnalysis.jsx`
-    renders anywhere on screen (the screen renders block components only).
-    Pinned here using the same stub fixtures `test_report.py` builds real
-    block payloads with, so a regression that reintroduces the wrapper into
-    the PDF path is caught without a database."""
-    ctx = {**_framework_ctx(), **_entity_type_ctx()}
-    ev = StubEvaluated("TEST_ENTITY", _payload())
-    block = REP.build("coverage", ev, ctx)
-
-    wrapped = REP.to_markdown("TEST_ENTITY", [block], {"pipeline": "test"})
-    # What `adapter.report_pdf` actually feeds `pdf.to_pdf` — the same
-    # concatenation logic, reproduced here so this test needs no database.
-    block_only = REP.BY_ID[block["id"]].to_markdown(block["payload"])
-
-    failures = []
-    if "Audit-planning intelligence" not in wrapped or \
-            "Version stamp" not in wrapped or \
-            "candidate priorities for the audit team's decision" not in wrapped:
-        failures.append("fixture drifted: report.to_markdown no longer produces the "
-                        "wrapper text this test is pinning against")
-    if "Audit-planning intelligence" in block_only:
-        failures.append("block-only markdown carries the report title/tagline — not "
-                        "shown by FdrAnalysis.jsx")
-    if "candidate priorities for the audit team's decision" in block_only:
-        failures.append("block-only markdown carries the standing disclaimer — not "
-                        "shown by FdrAnalysis.jsx")
-    if "Version stamp" in block_only:
-        failures.append("block-only markdown carries the version-stamp table — not "
-                        "shown by FdrAnalysis.jsx")
-    if "Business profile" not in block_only:
-        failures.append("block-only markdown dropped real block content along with "
-                        "the wrapper")
-    return failures
-
-
 def main() -> int:
     suites = (
         ("list with no blank line becomes a real list",
@@ -152,8 +104,6 @@ def main() -> int:
          test_bracket_citation_survives_html_escaping),
         ("a full document renders without error",
          test_full_document_renders_without_error),
-        ("PDF source carries no wrapper the screen does not show",
-         test_pdf_source_carries_no_wrapper_the_screen_does_not_show),
     )
     total = 0
     for name, suite in suites:

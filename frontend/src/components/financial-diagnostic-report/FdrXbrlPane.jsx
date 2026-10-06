@@ -80,11 +80,7 @@ function XbrlTileDetails({ tile }) {
 
 /**
  * Block 1: Company Overview — entity identity, statement flavour, reporting
- * framework. Reuses the same `.fdr-cov__facts` row markup the fs_db path's
- * `CoverageBlock` (FdrReportBlocks.jsx) already draws, since both are reading
- * the same visual pattern for the same kind of fact — but built and styled as
- * its own component so this XBRL-direct path never depends on, or risks
- * changing the look of, that other path.
+ * framework.
  */
 export function XbrlCompanyOverviewCard({ overviewData, overviewState }) {
   if (overviewState === 'loading') {
@@ -508,49 +504,49 @@ export function XbrlTrendsCard({ trendsData, trendsState }) {
                     <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
                       <td style={{ padding: '4px 6px', fontWeight: 500 }}>Property, Plant &amp; Equipment (%)</td>
                       {common_size_schedule.map((p, idx) => (
-                        <td key={idx} style={{ padding: '4px 6px' }}>{(p.asset_mix?.ppe_share || 0).toFixed(1)}%</td>
+                        <td key={idx} style={{ padding: '4px 6px' }}>{p.asset_mix?.ppe_share == null ? 'n/a' : `${p.asset_mix.ppe_share.toFixed(1)}%`}</td>
                       ))}
                     </tr>
                     <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
                       <td style={{ padding: '4px 6px', fontWeight: 500 }}>Capital WIP (%)</td>
                       {common_size_schedule.map((p, idx) => (
-                        <td key={idx} style={{ padding: '4px 6px' }}>{(p.asset_mix?.cwip_share || 0).toFixed(1)}%</td>
+                        <td key={idx} style={{ padding: '4px 6px' }}>{p.asset_mix?.cwip_share == null ? 'n/a' : `${p.asset_mix.cwip_share.toFixed(1)}%`}</td>
                       ))}
                     </tr>
                     <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
                       <td style={{ padding: '4px 6px', fontWeight: 500 }}>Trade Receivables (%)</td>
                       {common_size_schedule.map((p, idx) => (
-                        <td key={idx} style={{ padding: '4px 6px' }}>{(p.asset_mix?.receivables_share || 0).toFixed(1)}%</td>
+                        <td key={idx} style={{ padding: '4px 6px' }}>{p.asset_mix?.receivables_share == null ? 'n/a' : `${p.asset_mix.receivables_share.toFixed(1)}%`}</td>
                       ))}
                     </tr>
                     <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
                       <td style={{ padding: '4px 6px', fontWeight: 500 }}>Cash &amp; Bank Balances (%)</td>
                       {common_size_schedule.map((p, idx) => (
-                        <td key={idx} style={{ padding: '4px 6px' }}>{(p.asset_mix?.cash_bank_share || 0).toFixed(1)}%</td>
+                        <td key={idx} style={{ padding: '4px 6px' }}>{p.asset_mix?.cash_bank_share == null ? 'n/a' : `${p.asset_mix.cash_bank_share.toFixed(1)}%`}</td>
                       ))}
                     </tr>
                     <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
                       <td style={{ padding: '4px 6px', fontWeight: 500 }}>Other Non-Current Assets (%)</td>
                       {common_size_schedule.map((p, idx) => (
-                        <td key={idx} style={{ padding: '4px 6px' }}>{(p.asset_mix?.other_noncur_share || 0).toFixed(1)}%</td>
+                        <td key={idx} style={{ padding: '4px 6px' }}>{p.asset_mix?.other_noncur_share == null ? 'n/a' : `${p.asset_mix.other_noncur_share.toFixed(1)}%`}</td>
                       ))}
                     </tr>
                     <tr style={{ borderBottom: '1px solid #f1f5f9', background: '#f8fafc' }}>
                       <td style={{ padding: '4px 6px', fontWeight: 500 }}>Equity / Net Worth (%)</td>
                       {common_size_schedule.map((p, idx) => (
-                        <td key={idx} style={{ padding: '4px 6px' }}>{(p.funding_mix?.equity_share || 0).toFixed(1)}%</td>
+                        <td key={idx} style={{ padding: '4px 6px' }}>{p.funding_mix?.equity_share == null ? 'n/a' : `${p.funding_mix.equity_share.toFixed(1)}%`}</td>
                       ))}
                     </tr>
                     <tr style={{ borderBottom: '1px solid #f1f5f9', background: '#f8fafc' }}>
                       <td style={{ padding: '4px 6px', fontWeight: 500 }}>Total Borrowings (%)</td>
                       {common_size_schedule.map((p, idx) => (
-                        <td key={idx} style={{ padding: '4px 6px' }}>{(p.funding_mix?.borrowings_share || 0).toFixed(1)}%</td>
+                        <td key={idx} style={{ padding: '4px 6px' }}>{p.funding_mix?.borrowings_share == null ? 'n/a' : `${p.funding_mix.borrowings_share.toFixed(1)}%`}</td>
                       ))}
                     </tr>
                     <tr style={{ borderBottom: '1px solid #f1f5f9', background: '#f8fafc' }}>
                       <td style={{ padding: '4px 6px', fontWeight: 500 }}>Trade Payables (%)</td>
                       {common_size_schedule.map((p, idx) => (
-                        <td key={idx} style={{ padding: '4px 6px' }}>{(p.funding_mix?.payables_share || 0).toFixed(1)}%</td>
+                        <td key={idx} style={{ padding: '4px 6px' }}>{p.funding_mix?.payables_share == null ? 'n/a' : `${p.funding_mix.payables_share.toFixed(1)}%`}</td>
                       ))}
                     </tr>
                   </tbody>
@@ -819,11 +815,10 @@ export function XbrlRiskClustersCard({ riskData, riskState }) {
 
 
 /**
- * The XBRL Direct tab's own filing picker — keyed by doc_id against as_db,
- * not by entity_id against fs_db, so it cannot reuse `EntityBar`. Rendered in
- * the fixed header row alongside the Query/Report tabs' `EntityBar`, not
- * inside the scrollable panel body, so switching to this tab does not move
- * the picker to a different vertical position on screen.
+ * The XBRL Direct tab's own filing picker — keyed by doc_id against as_db.
+ * Rendered in the fixed header row, not inside the scrollable panel body, so
+ * switching to this tab does not move the picker to a different vertical
+ * position on screen.
  */
 export function XbrlFilingBar({ entities, docId, onChange, state, error, onRetry }) {
   if (state === 'error') {
@@ -898,8 +893,11 @@ export function XbrlDownloadButton({ docId }) {
 
   if (!docId) return null;
 
+  // Same label / control / hint column as every other control in the bar, so the button
+  // shares their baseline and height instead of floating at the row's vertical centre.
   return (
-    <div className="fdr-xbrl-dl">
+    <div className="fdr-field fdr-xbrl-dl">
+      <span className="fdr-field__label">&nbsp;</span>
       <button
         type="button"
         className="fdr-btn fdr-btn--primary"
@@ -908,12 +906,12 @@ export function XbrlDownloadButton({ docId }) {
       >
         {downloading ? 'Preparing…' : 'Download PDF'}
       </button>
-      {downloadError && <span className="fdr-xbrl-dl__err">{downloadError}</span>}
+      <span className="fdr-field__hint fdr-xbrl-dl__err">{downloadError || ' '}</span>
     </div>
   );
 }
 
-export function XbrlPane({ docId }) {
+export function XbrlPane({ docId, thresholdsVersion = 0 }) {
   const [overviewData, setOverviewData] = useState(null);
   const [overviewState, setOverviewState] = useState('idle'); // idle | loading | ready | error
 
@@ -1028,7 +1026,7 @@ export function XbrlPane({ docId }) {
     return () => {
       live = false;
     };
-  }, [docId]);
+  }, [docId, thresholdsVersion]);
 
   return (
     <div style={{ width: '100%' }}>

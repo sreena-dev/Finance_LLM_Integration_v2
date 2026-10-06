@@ -20,6 +20,8 @@ import re
 from typing import Any, Callable
 
 from .xbrl_trend_thresholds import THRESHOLDS, TrendThresholds
+from . import xbrl_position as POS
+from . import xbrl_threshold_registry as RT
 from .xbrl_trend_concepts import (
     SIGNAL_IDS,
     SIGNAL_TITLES,
@@ -42,6 +44,7 @@ _PROHIBITED_REPLACEMENTS: dict[str, str] = {
     "guaranteed": "suggested",
     "is fraudulent": "warrants audit corroboration",
     "fraud": "reporting divergence",
+    "fraudulent": "divergent",
     "will fail": "exhibits liquidity pressure",
     "insolvent": "under capital constraint",
     "falsified": "divergent",
@@ -77,7 +80,7 @@ def _format_pct(val: float) -> str:
 def _clean_str(text: str) -> str:
     s = text
     for phrase, rep in _PROHIBITED_REPLACEMENTS.items():
-        s = re.sub(re.escape(phrase), rep, s, flags=re.IGNORECASE)
+        s = re.sub(rf"(?<!\w){re.escape(phrase)}(?!\w)", rep, s, flags=re.IGNORECASE)
     return s
 
 
@@ -239,21 +242,27 @@ def compute_common_size_and_drift(
         assets = p["assets"] or 0.0
         rev = p["revenue"] or 0.0
 
+        # A period with no assets fact (typically an opening-balance-only year) has NO
+        # common-size shares. They are None - not 0.0 - so such a period can never be
+        # mistaken for a base year in which every item was nil.
+        def _share(num: float | None, _assets: float = assets) -> float | None:
+            return _safe_div(num, _assets) * 100 if _assets > 0 else None
+
         asset_mix = {
-            "ppe_share": _safe_div(p["ppe"], assets) * 100,
-            "cwip_share": _safe_div(p["cwip"], assets) * 100,
-            "investments_share": _safe_div(p["investments"], assets) * 100,
-            "receivables_share": _safe_div(p["receivables"], assets) * 100,
-            "cash_bank_share": _safe_div(p["cash_and_bank"], assets) * 100,
-            "other_noncur_share": _safe_div(p["other_noncur"], assets) * 100,
-            "other_cur_share": _safe_div(p["other_cur"], assets) * 100,
+            "ppe_share": _share(p["ppe"]),
+            "cwip_share": _share(p["cwip"]),
+            "investments_share": _share(p["investments"]),
+            "receivables_share": _share(p["receivables"]),
+            "cash_bank_share": _share(p["cash_and_bank"]),
+            "other_noncur_share": _share(p["other_noncur"]),
+            "other_cur_share": _share(p["other_cur"]),
         }
 
         funding_mix = {
-            "equity_share": _safe_div(p["equity"], assets) * 100,
-            "borrowings_share": _safe_div(p["total_borrowings"], assets) * 100,
-            "payables_share": _safe_div(p["trade_payables"], assets) * 100,
-            "provisions_share": _safe_div(p["provisions"], assets) * 100,
+            "equity_share": _share(p["equity"]),
+            "borrowings_share": _share(p["total_borrowings"]),
+            "payables_share": _share(p["trade_payables"]),
+            "provisions_share": _share(p["provisions"]),
         }
 
         cost_mix = {
@@ -266,6 +275,7 @@ def compute_common_size_and_drift(
 
         periods_data.append({
             "period_date": p["period_date"],
+            "defined": assets > 0,
             "asset_mix": asset_mix,
             "funding_mix": funding_mix,
             "cost_mix": cost_mix,
@@ -273,10 +283,15 @@ def compute_common_size_and_drift(
 
     drifts: dict[str, float] = {}
     highlights: list[dict[str, Any]] = []
+    drift_base_period: str | None = None
+    drift_end_period: str | None = None
+    drift_note = ""
 
-    if series_years >= 2:
-        t0 = periods_data[-1]
-        t_base = periods_data[0]
+    defined = [pd for pd in periods_data if pd["defined"]]
+    if series_years >= 2 and len(defined) >= 2:
+        t0 = defined[-1]
+        t_base = defined[0]
+        drift_base_period, drift_end_period = t_base["period_date"], t0["period_date"]
 
         # Asset mix drifts (percentage points)
         for k in ("ppe_share", "cwip_share", "investments_share", "receivables_share", "cash_bank_share", "other_noncur_share"):
@@ -299,7 +314,7 @@ def compute_common_size_and_drift(
                 "drift_pp": round(cwip_drift, 2),
                 "direction": direction,
                 "narrative": (
-                    f"CWIP share of total assets drifted {cwip_drift:+.2f} pp across the reporting horizon, "
+                    f"CWIP share of total assets drifted {cwip_drift:+.2f} pp between {drift_base_period} and {drift_end_period}, "
                     f"indicating significant capital expenditure accumulation."
                 ),
             })
@@ -333,9 +348,16 @@ def compute_common_size_and_drift(
                 ),
             })
 
+    elif series_years >= 2:
+        drift_note = ("Structural drift not computed: fewer than two reporting periods carry a "
+                      "total-assets figure, so a like-for-like common-size comparison is not possible.")
+
     return {
         "periods": periods_data,
         "drifts": drifts,
+        "drift_base_period": drift_base_period,
+        "drift_end_period": drift_end_period,
+        "drift_note": drift_note,
         "highlights": highlights,
     }
 
@@ -358,10 +380,25 @@ def compute_dupont_decomposition(
         rev = p["revenue"] or 0.0
         pat = p["pat"] or 0.0
 
-        net_margin = _safe_div(pat, rev) if rev > 0 else 0.0
-        asset_turnover = _safe_div(rev, assets) if assets > 0 else 0.0
-        equity_multiplier = _safe_div(assets, equity) if equity > 0 else 0.0
-        roe = net_margin * asset_turnover * equity_multiplier
+        # Each component is None when it is undefined - never a 0.0 that reads as a
+        # value. The multiplier is SIGNED: negative equity gives a negative multiplier,
+        # which is true and is shown; ROE is not meaningful on non-positive equity.
+        net_margin = (pat / rev) if rev > 0 else None
+        asset_turnover = (rev / assets) if assets > 0 else None
+        # Assets absent from a period (an opening-balance-only year) is undefined, not 0.
+        equity_multiplier = POS.equity_multiplier(assets if assets > 0 else None, equity)
+        meaningful = (equity > 0 and net_margin is not None
+                      and asset_turnover is not None and equity_multiplier is not None)
+        roe = (net_margin * asset_turnover * equity_multiplier) if meaningful else None
+
+        if meaningful:
+            roe_note = ""
+        elif equity < 0:
+            roe_note = "ROE not meaningful: negative net worth"
+        elif equity == 0:
+            roe_note = "ROE not meaningful: nil equity"
+        else:
+            roe_note = "ROE not meaningful: revenue or assets not positive"
 
         periods_dupont.append({
             "period_date": p["period_date"],
@@ -369,11 +406,12 @@ def compute_dupont_decomposition(
             "asset_turnover": asset_turnover,
             "equity_multiplier": equity_multiplier,
             "roe": roe,
-            "margin_display": f"{net_margin * 100:.2f}%",
-            "turnover_display": f"{asset_turnover:.2f}×",
-            "multiplier_display": f"{equity_multiplier:.2f}×",
-            "roe_display": f"{roe * 100:.2f}%",
-            # Raw bound figures each ratio was divided from — carried through so
+            "margin_display": f"{net_margin * 100:.2f}%" if net_margin is not None else POS.NOT_MEANINGFUL,
+            "turnover_display": f"{asset_turnover:.2f}×" if asset_turnover is not None else POS.NOT_MEANINGFUL,
+            "multiplier_display": POS.fmt_multiplier(equity_multiplier),
+            "roe_display": f"{roe * 100:.2f}%" if roe is not None else f"{POS.NOT_MEANINGFUL} (negative net worth)" if equity < 0 else POS.NOT_MEANINGFUL,
+            "roe_note": roe_note,
+            # Raw bound figures each ratio was divided from - carried through so
             # the UI can show the actual arithmetic, not just its result.
             "raw_pat": pat,
             "raw_revenue": rev,
@@ -382,38 +420,47 @@ def compute_dupont_decomposition(
         })
 
     attribution: dict[str, Any] = {}
+    attribution_note = ""
     leverage_dominated = False
 
     if series_years >= 2:
         t0 = periods_dupont[-1]
         t_prev = periods_dupont[-2]
 
-        delta_roe = t0["roe"] - t_prev["roe"]
-        delta_margin = t0["net_margin"] - t_prev["net_margin"]
-        delta_turnover = t0["asset_turnover"] - t_prev["asset_turnover"]
-        delta_mult = t0["equity_multiplier"] - t_prev["equity_multiplier"]
+        # A sequential decomposition needs a meaningful ROE at BOTH ends. If either
+        # period is not (negative net worth, no revenue), attributing the "change" would
+        # be arithmetic on undefined terms, so it is withheld with the reason stated.
+        if t0["roe"] is None or t_prev["roe"] is None:
+            attribution_note = ("ΔROE attribution withheld: ROE is not meaningful in "
+                                f"{'the latest' if t0['roe'] is None else 'the prior'} period "
+                                f"({(t0 if t0['roe'] is None else t_prev)['roe_note']}).")
+        else:
+            delta_roe = t0["roe"] - t_prev["roe"]
+            delta_margin = t0["net_margin"] - t_prev["net_margin"]
+            delta_turnover = t0["asset_turnover"] - t_prev["asset_turnover"]
+            delta_mult = t0["equity_multiplier"] - t_prev["equity_multiplier"]
 
-        # Logarithmic or sequential decomposition
-        # ΔROE = (ΔMargin)*Turnover_prev*Multiplier_prev + Margin_t0*(ΔTurnover)*Multiplier_prev + Margin_t0*Turnover_t0*(ΔMultiplier)
-        margin_contrib = delta_margin * t_prev["asset_turnover"] * t_prev["equity_multiplier"]
-        turnover_contrib = t0["net_margin"] * delta_turnover * t_prev["equity_multiplier"]
-        leverage_contrib = t0["net_margin"] * t0["asset_turnover"] * delta_mult
+            # ΔROE = (ΔMargin)*Turnover_prev*Multiplier_prev + Margin_t0*(ΔTurnover)*Multiplier_prev + Margin_t0*Turnover_t0*(ΔMultiplier)
+            margin_contrib = delta_margin * t_prev["asset_turnover"] * t_prev["equity_multiplier"]
+            turnover_contrib = t0["net_margin"] * delta_turnover * t_prev["equity_multiplier"]
+            leverage_contrib = t0["net_margin"] * t0["asset_turnover"] * delta_mult
 
-        attribution = {
-            "delta_roe": delta_roe,
-            "margin_contrib": margin_contrib,
-            "turnover_contrib": turnover_contrib,
-            "leverage_contrib": leverage_contrib,
-        }
+            attribution = {
+                "delta_roe": delta_roe,
+                "margin_contrib": margin_contrib,
+                "turnover_contrib": turnover_contrib,
+                "leverage_contrib": leverage_contrib,
+            }
 
-        # Check leverage dominance (Spec §8.2, Signal S13)
-        if delta_roe > thresholds.MIN_MEANINGFUL_ROE_DELTA:
-            if leverage_contrib > (delta_roe * thresholds.DUPONT_LEVERAGE_DOMINANCE) and (delta_margin <= 0 or delta_turnover <= 0):
-                leverage_dominated = True
+            # Check leverage dominance (Spec §8.2, Signal S13)
+            if delta_roe > thresholds.MIN_MEANINGFUL_ROE_DELTA:
+                if leverage_contrib > (delta_roe * thresholds.DUPONT_LEVERAGE_DOMINANCE) and (delta_margin <= 0 or delta_turnover <= 0):
+                    leverage_dominated = True
 
     return {
         "periods": periods_dupont,
         "attribution": attribution,
+        "attribution_note": attribution_note,
         "leverage_dominated": leverage_dominated,
     }
 
@@ -583,17 +630,24 @@ def evaluate_trend_signals(
     # -----------------------------------------------------------------------
     # Structural Drift Signals (S09 CWIP, S10 Non-Current Other, S02 Payables)
     # -----------------------------------------------------------------------
+    # The pp drifts are measured between common_size's base and end periods, so the
+    # amounts quoted beside them must come from those same two periods - not from the
+    # adjacent (t-1, t0) pair used by the year-on-year signals above.
+    by_period = {pd_["period_date"]: pd_ for pd_ in panel}
+    d_base = by_period.get(common_size.get("drift_base_period"))
+    d_end = by_period.get(common_size.get("drift_end_period"))
+
     # CWIP Drift (S09)
     cwip_drift_pp = common_size.get("drifts", {}).get("asset_cwip_share", 0.0)
-    if cwip_drift_pp >= (thresholds.CWIP_DRIFT_THRESHOLD * 100):
+    if d_base and d_end and cwip_drift_pp >= (thresholds.CWIP_DRIFT_THRESHOLD * 100):
         signals.append({
             "signal_id": "S09",
             "title": SIGNAL_TITLES["S09"],
             "drift_type": "capital_accumulation",
-            "severity": "high" if cwip_drift_pp >= 10.0 else "medium",
+            "severity": "high" if cwip_drift_pp >= RT.value("trend.S09_HIGH_PP") else "medium",
             "observation": (
                 f"Capital Work-in-Progress share of assets expanded by {cwip_drift_pp:+.2f} pp "
-                f"({_format_inr(t_prev['cwip'])} → {_format_inr(t0['cwip'])})."
+                f"({d_base['period_date']} {_format_inr(d_base['cwip'])} → {d_end['period_date']} {_format_inr(d_end['cwip'])})."
             ),
             "audit_lead": "Sustained CWIP expansion flags potential project delays, cost overruns, or idle assets.",
             "evidence_lead": "Project milestone reports, physical inspection certificates, and capitalization schedule.",
@@ -601,7 +655,7 @@ def evaluate_trend_signals(
 
     # Non-Current Other Drift (S10)
     other_nc_pp = common_size.get("drifts", {}).get("asset_other_noncur_share", 0.0)
-    if abs(other_nc_pp) >= (thresholds.NON_CURRENT_OTHER_DRIFT_THRESHOLD * 100):
+    if d_base and d_end and abs(other_nc_pp) >= (thresholds.NON_CURRENT_OTHER_DRIFT_THRESHOLD * 100):
         signals.append({
             "signal_id": "S10",
             "title": SIGNAL_TITLES["S10"],
@@ -609,7 +663,7 @@ def evaluate_trend_signals(
             "severity": "medium",
             "observation": (
                 f"Other non-current assets share shifted by {other_nc_pp:+.2f} pp "
-                f"({_format_inr(t_prev['other_noncur'])} → {_format_inr(t0['other_noncur'])})."
+                f"({d_base['period_date']} {_format_inr(d_base['other_noncur'])} → {d_end['period_date']} {_format_inr(d_end['other_noncur'])})."
             ),
             "audit_lead": "Rapid growth in residual asset categories requires verification of underlying advances.",
             "evidence_lead": "Contractual advance ledgers, dispute schedules, and recovery confirmations.",
@@ -738,8 +792,14 @@ def deterministic_trends(
             f"Latest ROE stands at {latest['roe_display']} (Net Margin {latest['margin_display']} × "
             f"Asset Turnover {latest['turnover_display']} × Equity Multiplier {latest['multiplier_display']}). "
         )
-        if dupont.get("leverage_dominated"):
+        if latest["roe"] is None:
+            dupont_narrative += (f"{latest['roe_note']}; the equity multiplier is shown as computed and no "
+                                 "profitability-driver conclusion is drawn from the decomposition. "
+                                 "Solvency, not performance, is the planning lead.")
+        elif dupont.get("leverage_dominated"):
             dupont_narrative += "Decomposition indicates ROE expansion is predominantly leverage-driven rather than operating margin expansion."
+        elif dupont.get("attribution_note"):
+            dupont_narrative += dupont["attribution_note"]
         else:
             dupont_narrative += "Profitability drivers reflect operating margin and asset productivity alignment."
     else:
@@ -808,14 +868,33 @@ def build_key_trends(
     elif use_llm:
         try:
             # Build structured context blocks
-            cs_lines = [
-                f"- Period {p['period_date']}: Asset Mix (PPE: {p['asset_mix']['ppe_share']:.1f}%, "
-                f"CWIP: {p['asset_mix']['cwip_share']:.1f}%, Rec: {p['asset_mix']['receivables_share']:.1f}%, "
-                f"Cash: {p['asset_mix']['cash_bank_share']:.1f}%, Other Non-Current: {p['asset_mix']['other_noncur_share']:.1f}%) | "
-                f"Funding Mix (Equity: {p['funding_mix']['equity_share']:.1f}%, Debt: {p['funding_mix']['borrowings_share']:.1f}%, "
-                f"Payables: {p['funding_mix']['payables_share']:.1f}%)"
-                for p in common_size.get("periods", [])
-            ]
+            def _pct(v: float | None) -> str:
+                return f"{v:.1f}%" if v is not None else "n/a"
+
+            cs_lines = []
+            for p in common_size.get("periods", []):
+                if not p["defined"]:
+                    cs_lines.append(f"- Period {p['period_date']}: no total-assets figure reported; common-size shares not computable")
+                    continue
+                am, fm = p["asset_mix"], p["funding_mix"]
+                cs_lines.append(
+                    f"- Period {p['period_date']}: Asset Mix (PPE: {_pct(am['ppe_share'])}, "
+                    f"CWIP: {_pct(am['cwip_share'])}, Rec: {_pct(am['receivables_share'])}, "
+                    f"Cash: {_pct(am['cash_bank_share'])}, Other Non-Current: {_pct(am['other_noncur_share'])}) | "
+                    f"Funding Mix (Equity: {_pct(fm['equity_share'])}, Debt: {_pct(fm['borrowings_share'])}, "
+                    f"Payables: {_pct(fm['payables_share'])})"
+                )
+            # The engine's own pp drifts, so the model quotes them rather than deriving its own.
+            if common_size.get("drifts"):
+                dr = common_size["drifts"]
+                cs_lines.append(
+                    f"- Drift in percentage points, {common_size['drift_base_period']} to {common_size['drift_end_period']} "
+                    f"(use these figures verbatim): PPE {dr['asset_ppe_share']:+.2f}, CWIP {dr['asset_cwip_share']:+.2f}, "
+                    f"Receivables {dr['asset_receivables_share']:+.2f}, Cash {dr['asset_cash_bank_share']:+.2f}, "
+                    f"Other non-current {dr['asset_other_noncur_share']:+.2f}, Borrowings share {dr['funding_borrowings_share']:+.2f}"
+                )
+            elif common_size.get("drift_note"):
+                cs_lines.append(f"- {common_size['drift_note']}")
             common_size_block = "COMMON-SIZE STRUCTURE & DRIFT:\n" + "\n".join(cs_lines)
 
             dup_lines = [

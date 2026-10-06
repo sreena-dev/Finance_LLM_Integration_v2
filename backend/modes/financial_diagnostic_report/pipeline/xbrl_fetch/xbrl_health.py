@@ -17,6 +17,8 @@ import logging
 import re
 from typing import Any
 
+from . import xbrl_position as POS
+from . import xbrl_threshold_registry as RT
 from . import xbrl_health_prompt as P
 
 logger = logging.getLogger(__name__)
@@ -230,27 +232,27 @@ def compute_health_metrics(
     ca_share = _safe_div(ca, assets) * 100
 
     # Determine what genuinely dominates the asset base
-    if producing_props > 0 and (producing_props > ppe or producing_share >= 25.0):
+    if producing_props > 0 and (producing_props > ppe or producing_share >= RT.value("health.PRODUCING_PROPS_SHARE")):
         dominant_type = "producing_props"
         dominant_label = "oil & gas assets"
         dominant_val = producing_props
         dominant_share = producing_share
-    elif cwip > ppe and (cwip_share >= 35.0 or (assets > 0 and cwip > assets * 0.4)):
+    elif cwip > ppe and (cwip_share >= RT.value("health.CWIP_HEAVY_SHARE") or (assets > 0 and cwip > assets * RT.value("health.CWIP_VS_ASSETS"))):
         dominant_type = "cwip"
         dominant_label = "capital work-in-progress"
         dominant_val = cwip
         dominant_share = cwip_share
-    elif ppe >= cwip and ppe_share >= 20.0:
+    elif ppe >= cwip and ppe_share >= RT.value("health.PPE_HEAVY_SHARE"):
         dominant_type = "ppe"
         dominant_label = "property, plant and equipment"
         dominant_val = ppe
         dominant_share = ppe_share
-    elif inv_share >= 40.0:
+    elif inv_share >= RT.value("health.INV_HEAVY_SHARE"):
         dominant_type = "investments"
         dominant_label = "non-current investments"
         dominant_val = inv
         dominant_share = inv_share
-    elif ca_share >= 50.0:
+    elif ca_share >= RT.value("health.CA_HEAVY_SHARE"):
         dominant_type = "current_assets"
         dominant_label = "current assets"
         dominant_val = ca
@@ -274,8 +276,11 @@ def compute_health_metrics(
     borr_cur = raw_t0.get("BorrowingsCurrent", 0.0)
     total_borr = borr_nc + borr_cur
     total_cap = equity + total_borr
-    equity_share = _safe_div(equity, total_cap) * 100
-    debt_share = _safe_div(total_borr, total_cap) * 100
+    lev = POS.classify_leverage(equity, total_borr)
+    # Capital-mix percentages only exist when equity is positive; on negative/nil equity
+    # "equity is -207% of capital" is arithmetic, not information.
+    equity_share = _safe_div(equity, total_cap) * 100 if equity > 0 else 0.0
+    debt_share = _safe_div(total_borr, total_cap) * 100 if equity > 0 else 0.0
 
     # 2. Performance Decomposition (t0 vs t_prev)
     rev_t0 = raw_t0.get("RevenueFromOperations", 0.0)
@@ -334,6 +339,7 @@ def compute_health_metrics(
             "equity": equity,
             "borrowings": total_borr,
             "total_cap": total_cap,
+            "leverage_status": lev.status,
             "equity_share": equity_share,
             "debt_share": debt_share,
         },
@@ -403,7 +409,7 @@ def deterministic_health_summary(
         else:
             dom_desc += " with no commissioned operational fixed assets"
 
-        if st["investments"] > 0 and st["inv_share"] >= 1.0:
+        if st["investments"] > 0 and st["inv_share"] >= RT.value("health.INV_MENTION_SHARE"):
             dom_desc += f" and a {_format_amount(st['investments'], scale)} non-current investment book (≈{st['inv_share']:.0f}% of assets)."
         else:
             dom_desc += "."
@@ -423,7 +429,7 @@ def deterministic_health_summary(
         elif st["cwip"] > 0 and st["cwip"] / scale_div >= 0.01:
             dom_desc += f" plus capital work-in-progress of {_format_amount(st['cwip'], scale)}"
 
-        if st["investments"] > 0 and st["inv_share"] >= 1.0:
+        if st["investments"] > 0 and st["inv_share"] >= RT.value("health.INV_MENTION_SHARE"):
             dom_desc += f" and a {_format_amount(st['investments'], scale)} non-current investment book (≈{st['inv_share']:.0f}% of assets)."
         else:
             dom_desc += "."
@@ -443,7 +449,7 @@ def deterministic_health_summary(
         elif st["cwip"] > 0 and st["cwip"] / scale_div >= 0.01:
             dom_desc += f" plus capital work-in-progress of {_format_amount(st['cwip'], scale)}"
 
-        if st["investments"] > 0 and st["inv_share"] >= 1.0:
+        if st["investments"] > 0 and st["inv_share"] >= RT.value("health.INV_MENTION_SHARE"):
             dom_desc += f" and a {_format_amount(st['investments'], scale)} non-current investment book (≈{st['inv_share']:.0f}% of assets)."
         else:
             dom_desc += "."
@@ -465,7 +471,13 @@ def deterministic_health_summary(
 
     # Funding Mix
     eq_str = _format_amount(st["equity"], scale)
-    if st["borrowings"] == 0 or (st["total_cap"] > 0 and st["debt_share"] < 5.0):
+    if st["leverage_status"] in (POS.NEGATIVE_NET_WORTH, POS.NIL_EQUITY):
+        word = "negative net worth" if st["leverage_status"] == POS.NEGATIVE_NET_WORTH else "nil equity"
+        str_parts.append(
+            f"The entity has {word} (equity {eq_str}) against total borrowings of "
+            f"{_format_amount(st['borrowings'], scale)}; debt-to-equity and capital-mix percentages are not meaningful."
+        )
+    elif st["borrowings"] == 0 or (st["total_cap"] > 0 and st["debt_share"] < RT.value("health.DEBT_IMMATERIAL_SHARE")):
         str_parts.append(
             "Funding is overwhelmingly equity and internal accruals; borrowings are immaterial to the capital structure."
         )
@@ -590,7 +602,9 @@ def build_health_summary(
             f"- CWIP: {_format_amount(st['cwip'], scale)} (Facilities: {_format_amount(st['facilities_prog'], scale)}, Exploratory: {_format_amount(st['exploratory_wells'], scale)}, Dev: {_format_amount(st['development_wells'], scale)})",
             f"- Investments: {_format_amount(st['investments'], scale)} ({st['inv_share']:.1f}% of assets)",
             f"- Current Assets: {_format_amount(st['ca'], scale)} vs Current Liabilities: {_format_amount(st['cl'], scale)} (Net WC: {_format_amount(st['net_wc'], scale)})",
-            f"- Capital Funding: Equity {_format_amount(st['equity'], scale)} ({st['equity_share']:.1f}%), Debt {_format_amount(st['borrowings'], scale)} ({st['debt_share']:.1f}%)",
+            (f"- Capital Funding: Equity {_format_amount(st['equity'], scale)} ({st['equity_share']:.1f}%), Debt {_format_amount(st['borrowings'], scale)} ({st['debt_share']:.1f}%)"
+             if st["leverage_status"] == POS.OK else
+             f"- Capital Funding: Equity {_format_amount(st['equity'], scale)} ({st['leverage_status'].replace('_', ' ').upper()}), Debt {_format_amount(st['borrowings'], scale)}; D/E and capital-mix percentages are NOT meaningful - do not quote them"),
         ]
         perf_lines = [
             f"- Profit for period: {_format_amount(pf['pat_prev'], scale)} → {_format_amount(pf['pat_t0'], scale)} ({pf['pct_pat']:+.1f}%)",

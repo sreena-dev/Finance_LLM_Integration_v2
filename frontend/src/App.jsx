@@ -161,8 +161,20 @@ export default function App() {
         // Probed in parallel and after first paint: probing imports pipelines
         // and opens DB connections, which is far too slow to block the UI on.
         list.forEach(async (mode) => {
-          const res = await probeMode(mode);
+          let res = await probeMode(mode);
           if (!cancelled) setHealth((prev) => ({ ...prev, [mode.id]: res }));
+          // One probe is a poor verdict: a backend that is restarting, or a database
+          // still connecting, fails it once and then recovers - but the result is kept
+          // for the whole session, so a healthy mode would read "Unavailable" until a
+          // manual refresh. Re-check an unavailable integrated mode a few times, with
+          // growing gaps, and update the badge as soon as it answers.
+          for (const gap of [2000, 5000, 12000]) {
+            if (cancelled || res.available || !mode.integrated) break;
+            await new Promise((resolve) => setTimeout(resolve, gap));
+            if (cancelled) break;
+            res = await probeMode(mode);
+            if (!cancelled) setHealth((prev) => ({ ...prev, [mode.id]: res }));
+          }
         });
       } catch (err) {
         if (!cancelled) setBootError(err.message);

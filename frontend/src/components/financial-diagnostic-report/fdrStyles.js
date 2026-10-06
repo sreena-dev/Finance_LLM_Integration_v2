@@ -46,14 +46,16 @@ export const CSS = `
 }
 .fdr-topbar__inner{display:flex; align-items:flex-start; gap:20px; flex-wrap:wrap; padding:10px 32px 12px;}
 
-.fdr-seg{display:inline-flex; gap:3px; padding:3px; background:var(--ink-100); border-radius:var(--radius);}
+/* One control height across the whole bar (segmented toggle, picker, Thresholds, Download). */
+.fdr-root{--fdr-ctl-h:40px;}
+.fdr-seg{display:inline-flex; align-items:stretch; gap:3px; padding:3px; height:var(--fdr-ctl-h); background:var(--ink-100); border-radius:var(--radius);}
 /* Compounded with the parent .fdr-seg on purpose: the generic
    ".fdr-root button{color:inherit}" reset below is a type+class selector,
    which outranks a bare ".fdr-seg__btn" class selector on specificity alone
    — the inherited ink-800 would win over this color regardless of source
    order. Same reasoning applies to every other button/select color rule in
    this sheet, which is why each one is compounded with its parent's class. */
-.fdr-seg .fdr-seg__btn{position:relative; padding:7px 20px; background:none; border:none;
+.fdr-seg .fdr-seg__btn{position:relative; display:inline-flex; align-items:center; padding:0 20px; background:none; border:none;
   border-radius:var(--radius-sm); font-size:13px; font-weight:550; color:var(--ink-600);
   cursor:pointer; transition:color .18s var(--ease);}
 .fdr-seg__btn.is-on{color:var(--navy-900);}
@@ -73,7 +75,7 @@ export const CSS = `
    to push the header down and knock the Query/Report control out of line. */
 .fdr-field__hint{display:block; min-height:16px; font-size:11.5px; line-height:16px;
   color:var(--ink-400); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-.fdr-field .fdr-select{appearance:none; -webkit-appearance:none; width:100%; padding:9px 32px 9px 12px;
+.fdr-field .fdr-select{appearance:none; -webkit-appearance:none; width:100%; height:var(--fdr-ctl-h); padding:0 32px 0 12px;
   background:var(--surface)
     url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2397a3b0' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>")
     no-repeat right 10px center;
@@ -99,10 +101,9 @@ export const CSS = `
 
 /* The XBRL tab's own download control, docked to the right of the topbar row
    rather than stretched full-width by the shared .fdr-field column layout. */
-.fdr-xbrl-dl{display:flex; flex-direction:column; align-items:flex-end; gap:4px;
-  flex:0 0 auto; margin-left:auto; align-self:center;}
-.fdr-xbrl-dl .fdr-btn--primary{padding:7px 16px; font-size:12.5px;}
-.fdr-xbrl-dl__err{font-size:11px; color:var(--red-600);}
+.fdr-field.fdr-xbrl-dl{flex:0 0 auto; min-width:0; margin-left:auto; align-items:flex-end;}
+.fdr-xbrl-dl .fdr-btn--primary{padding:0 20px; font-size:13.5px; height:var(--fdr-ctl-h);}
+.fdr-xbrl-dl__err{color:var(--red-600); text-align:right;}
 
 .fdr-scroll{flex:1; min-height:0; overflow-y:auto;}
 .fdr-panel{min-height:100%; display:flex; flex-direction:column; padding:14px 24px 20px;}
@@ -296,8 +297,8 @@ export const CSS = `
 }
 
 /* Block 2 — executive dashboard */
-.fdr-dash__lede{margin:0 0 16px; font-size:13px; line-height:1.6; color:var(--ink-600);
-  max-width:66ch;}
+.fdr-dash__lede{margin:0 0 16px; font-size:13px; line-height:1.7; color:var(--ink-600);
+  width:100%; text-align:justify; text-justify:inter-word;}
 .fdr-dash__grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr));
   gap:10px;}
 .fdr-tile{background:var(--ink-50); border:1px solid var(--border); border-radius:var(--radius);
@@ -522,5 +523,122 @@ export const CSS = `
   .fdr-report__actions{width:100%;}
   .fdr-field{min-width:0;}
   .fdr-entitybar{max-width:none;}
+}
+/* ---------------------------------------------------------------------------
+   Thresholds: topbar button + centred dialog. Tokens only - no new colours or fonts.
+   --------------------------------------------------------------------------- */
+.fdr-field.fdr-field--thr{flex:0 0 auto; min-width:0;}
+.fdr-btn.fdr-thr__open{position:relative; padding:0 16px; gap:8px; height:var(--fdr-ctl-h); color:var(--navy-700);}
+.fdr-btn.fdr-thr__open:hover:not(:disabled){background:var(--navy-50); border-color:var(--navy-600);}
+.fdr-thr__badge{display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px;
+  padding:0 6px; border-radius:100px; background:var(--navy-700); color:var(--white);
+  font-family:var(--font-mono); font-size:11px; font-weight:650; line-height:1;}
+.fdr-thr__loaderr{color:var(--red-600);}
+
+.fdr-thr__overlay{position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center;
+  padding:48px; background:rgba(11,24,54,.38); backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px);}
+.fdr-thr{display:flex; flex-direction:column; width:min(880px, 100%); max-height:100%; min-height:0;
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-xl);
+  box-shadow:0 24px 64px rgba(11,24,54,.28), 0 4px 14px rgba(11,24,54,.12); overflow:hidden;}
+
+.fdr-thr__head{display:flex; align-items:flex-start; justify-content:space-between; gap:20px;
+  padding:22px 26px 14px; border-bottom:1px solid var(--border);}
+.fdr-thr__title{margin:0; font-size:19px; font-weight:650; color:var(--navy-900); letter-spacing:-.005em;}
+.fdr-thr__sub{margin:5px 0 0; font-size:12.5px; line-height:1.5; color:var(--ink-500); max-width:62ch;}
+.fdr-thr .fdr-thr__x{flex:none; display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px;
+  background:none; border:1px solid transparent; border-radius:var(--radius); color:var(--ink-500); cursor:pointer;
+  transition:background .18s var(--ease), color .18s var(--ease);}
+.fdr-thr .fdr-thr__x:hover:not(:disabled){background:var(--ink-100); color:var(--ink-900);}
+
+.fdr-thr__tools{display:flex; align-items:center; gap:10px; padding:12px 26px; background:var(--ink-50);
+  border-bottom:1px solid var(--border);}
+.fdr-thr__search{flex:1; display:flex; align-items:center; gap:8px; padding:0 12px; height:36px;
+  background:var(--surface); border:1px solid var(--border-strong); border-radius:var(--radius); color:var(--ink-400);
+  transition:border-color .18s var(--ease), box-shadow .18s var(--ease);}
+.fdr-thr__search:focus-within{border-color:var(--navy-600);}
+.fdr-thr__search input{flex:1; min-width:0; border:none; outline:none; background:transparent; font:inherit;
+  font-size:13.5px; color:var(--ink-900);}
+.fdr-thr__search input,.fdr-thr__search input:focus,.fdr-thr__search input:focus-visible{outline:none; box-shadow:none; -webkit-appearance:none; appearance:none;}
+.fdr-thr__search input::-webkit-search-cancel-button,.fdr-thr__search input::-webkit-search-decoration{-webkit-appearance:none; display:none;}
+.fdr-thr__search input::placeholder{color:var(--ink-400);}
+.fdr-thr__count{font-family:var(--font-mono); font-size:11.5px; color:var(--ink-400); white-space:nowrap;}
+
+/* About seven rows are visible; the rest scroll. */
+.fdr-thr__list{flex:0 1 520px; min-height:0; overflow-y:auto; overscroll-behavior:contain;
+  scroll-behavior:smooth; padding:0 26px 8px;}
+.fdr-thr__empty{margin:36px 0; text-align:center; font-size:13px; color:var(--ink-500);}
+.fdr-thr__ghead{position:sticky; top:0; z-index:2;
+  margin:0; padding:14px 0 8px; background:var(--surface); font-size:11.5px; font-weight:650; letter-spacing:.05em;
+  text-transform:uppercase; color:var(--navy-700); border-bottom:1px solid var(--border);}
+.fdr-thr__rows{list-style:none; margin:0; padding:0;}
+
+.fdr-thr__row{display:grid; grid-template-columns:minmax(0,1fr) 270px 108px; align-items:center; gap:22px;
+  min-height:74px; padding:12px 10px 12px 12px; margin-left:-12px; border-bottom:1px solid var(--ink-100);
+  border-left:3px solid transparent; transition:background .2s var(--ease), border-color .2s var(--ease);}
+.fdr-thr__row:hover{background:var(--ink-50);}
+.fdr-thr__row.is-pending{background:var(--navy-50); border-left-color:var(--navy-600);}
+.fdr-thr__label{display:flex; align-items:center; flex-wrap:wrap; gap:8px; font-size:13.5px; font-weight:600; color:var(--ink-900);}
+.fdr-thr__tag{padding:1px 8px; border-radius:100px; background:var(--indigo-50); border:1px solid var(--indigo-border);
+  font-family:var(--font-mono); font-size:10.5px; font-weight:550; color:var(--indigo-600);}
+.fdr-thr__hint{margin:3px 0 0; font-size:12px; line-height:1.45; color:var(--ink-500);
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;}
+
+.fdr-thr__ctl{min-width:0;}
+.fdr-thr__slider{display:flex; align-items:center; gap:14px;}
+.fdr-thr__track{position:relative; flex:1; height:20px; display:flex; align-items:center;}
+.fdr-thr__range{position:relative; z-index:1; -webkit-appearance:none; appearance:none; width:100%; height:20px; margin:0; background:transparent; cursor:pointer;}
+.fdr-thr__range:focus-visible{outline:2px solid var(--navy-600); outline-offset:3px; border-radius:100px;}
+.fdr-thr__range::-webkit-slider-runnable-track{height:6px; border-radius:100px;
+  background:linear-gradient(to right, var(--navy-600) calc(9px + (100% - 18px) * var(--p)), var(--ink-200) calc(9px + (100% - 18px) * var(--p)));}
+.fdr-thr__range::-moz-range-track{height:6px; border-radius:100px; background:var(--ink-200);}
+.fdr-thr__range::-moz-range-progress{height:6px; border-radius:100px; background:var(--navy-600);}
+.fdr-thr__range::-webkit-slider-thumb{-webkit-appearance:none; appearance:none; width:18px; height:18px; margin-top:-6px;
+  border-radius:50%; background:var(--surface); border:2px solid var(--navy-600); box-shadow:var(--shadow-md);
+  transition:transform .15s var(--ease), box-shadow .15s var(--ease);}
+.fdr-thr__range::-moz-range-thumb{width:14px; height:14px; border-radius:50%; background:var(--surface);
+  border:2px solid var(--navy-600); box-shadow:var(--shadow-md);}
+.fdr-thr__range:hover::-webkit-slider-thumb{transform:scale(1.12);}
+.fdr-thr__range:active::-webkit-slider-thumb{transform:scale(1.18); box-shadow:0 0 0 5px var(--navy-100);}
+/* The shipped default, marked on the track so any change is read against it. */
+.fdr-thr__tick{position:absolute; top:50%; left:calc(9px + (100% - 18px) * var(--pd)); width:2px; height:14px;
+  background:var(--amber-600); border-radius:1px; transform:translate(-50%,-50%); pointer-events:none; opacity:.9; z-index:0;}
+.fdr-thr__readout,.fdr-thr__stepval{font-family:var(--font-mono); font-size:13px; font-weight:650; color:var(--navy-900);
+  font-variant-numeric:tabular-nums; white-space:nowrap;}
+.fdr-thr__readout{min-width:64px; text-align:right;}
+.fdr-thr__unit{margin-left:3px; font-family:var(--font-sans); font-size:11px; font-weight:500; color:var(--ink-500);}
+
+.fdr-thr__stepper{display:inline-flex; align-items:stretch; height:34px; border:1px solid var(--border-strong);
+  border-radius:var(--radius); background:var(--surface); overflow:hidden;}
+.fdr-thr .fdr-thr__stepbtn{width:34px; border:none; background:var(--ink-50); font-size:17px; line-height:1; color:var(--navy-700);
+  cursor:pointer; transition:background .15s var(--ease);}
+.fdr-thr .fdr-thr__stepbtn:hover:not(:disabled){background:var(--navy-100);}
+.fdr-thr .fdr-thr__stepbtn:disabled{color:var(--ink-300); cursor:not-allowed;}
+.fdr-thr__stepval{display:flex; align-items:center; justify-content:center; min-width:104px; padding:0 10px;
+  border-left:1px solid var(--border); border-right:1px solid var(--border);}
+
+.fdr-thr__meta{display:flex; flex-direction:column; align-items:flex-end; gap:4px;}
+.fdr-thr__default{font-size:11.5px; color:var(--ink-400); white-space:nowrap;}
+.fdr-thr .fdr-thr__reset{display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border:none; border-radius:100px;
+  background:none; font-size:11.5px; font-weight:600; color:var(--navy-700); cursor:pointer;}
+.fdr-thr .fdr-thr__reset:hover{background:var(--navy-100);}
+
+.fdr-thr__foot{display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 26px;
+  border-top:1px solid var(--border); background:var(--ink-50);}
+.fdr-thr__status{font-size:12.5px; color:var(--ink-600);}
+.fdr-thr__who{color:var(--ink-400);}
+.fdr-thr__err{color:var(--red-600); font-weight:550;}
+.fdr-thr__actions{display:flex; align-items:center; gap:10px;}
+.fdr-thr .fdr-btn--ghost{padding:8px 16px; font-size:13px;}
+
+@media (max-width:900px){
+  .fdr-thr__overlay{padding:20px;}
+  .fdr-thr__row{grid-template-columns:minmax(0,1fr); gap:10px;}
+  .fdr-thr__meta{flex-direction:row; align-items:center; justify-content:space-between;}
+  .fdr-thr__foot{flex-direction:column; align-items:stretch;}
+  .fdr-thr__actions{justify-content:flex-end; flex-wrap:wrap;}
+}
+@media (prefers-reduced-motion:reduce){
+  .fdr-thr__list{scroll-behavior:auto;}
+  .fdr-thr__row,.fdr-thr__range::-webkit-slider-thumb{transition:none;}
 }
 `;

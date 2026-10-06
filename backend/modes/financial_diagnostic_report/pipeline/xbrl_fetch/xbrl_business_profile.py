@@ -22,6 +22,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from . import xbrl_position as POS
 from . import xbrl_profile_concepts as C
 from . import xbrl_profile_prompt as P
 
@@ -39,7 +40,7 @@ PROHIBITED_WORDS = (
 class GroundedFigure:
     id: str
     label: str
-    value: float
+    value: float | None   # None: undefined, never a stand-in number
     display: str
     unit: str
     concepts: tuple[str, ...]
@@ -102,21 +103,16 @@ def extract_grounded_figures(rows: list[dict[str, Any]]) -> tuple[list[GroundedF
             C.CURRENCY, ("BorrowingsCurrent", "BorrowingsNoncurrent")
         ))
 
-    # P03: Debt-to-Equity Ratio
-    if eq is not None and borrowings is not None:
-        if eq > 0:
-            de_ratio = borrowings / eq
-            lookup["debt_equity"] = de_ratio
-            figures.append(GroundedFigure(
-                "P03", "Debt-equity ratio", de_ratio, f"{de_ratio:.2f}x",
-                C.RATIO, ("BorrowingsCurrent", "BorrowingsNoncurrent", "Equity")
-            ))
-        elif eq < 0:
-            lookup["debt_equity"] = -1.0
-            figures.append(GroundedFigure(
-                "P03", "Debt-equity ratio", -1.0, "Negative net worth",
-                C.RATIO, ("BorrowingsCurrent", "BorrowingsNoncurrent", "Equity")
-            ))
+    # P03: Debt-to-Equity Ratio. Undefined on negative/nil equity: the figure carries
+    # value=None and says why, rather than a sentinel number the LLM could quote.
+    lev = POS.classify_leverage(eq, borrowings)
+    lookup["leverage_status"] = lev.status
+    if lev.status != POS.MISSING:
+        lookup["debt_equity"] = lev.de_ratio   # None unless status == "ok"
+        figures.append(GroundedFigure(
+            "P03", "Debt-equity ratio", lev.de_ratio, lev.de_display(),
+            C.RATIO, ("BorrowingsCurrent", "BorrowingsNoncurrent", "Equity")
+        ))
 
     # P04: Depreciation, Depletion & Amortisation
     dda = get_latest_sum(("DepreciationDepletionAndAmortisationExpense",))
@@ -330,7 +326,7 @@ def lint_business_profile(fields: dict[str, str], grounded_figures: list[Grounde
     for key, text in fields.items():
         val = text
         for phrase, replacement in _PROHIBITED_REPLACEMENTS.items():
-            val = re.sub(re.escape(phrase), replacement, val, flags=re.IGNORECASE)
+            val = re.sub(rf"(?<!\w){re.escape(phrase)}(?!\w)", replacement, val, flags=re.IGNORECASE)
         cleaned[key] = val
     return cleaned
 
@@ -353,7 +349,11 @@ def deterministic_profile_synthesis(
     eq_str = _format_inr(eq)
     borr = lookup.get("borrowings")
     borr_str = _format_inr(borr)
-    de_str = f"{lookup['debt_equity']:.2f}x" if "debt_equity" in lookup and lookup["debt_equity"] >= 0 else "N/A"
+    lev_status = lookup.get("leverage_status", POS.MISSING)
+    de_val = lookup.get("debt_equity")
+    de_str = (f"{de_val:.2f}x" if de_val is not None
+              else "n/m (negative net worth)" if lev_status == POS.NEGATIVE_NET_WORTH
+              else "n/m (nil equity)" if lev_status == POS.NIL_EQUITY else "N/A")
     dda = lookup.get("depreciation")
     dda_str = _format_inr(dda)
     inv = lookup.get("investments")
@@ -427,8 +427,10 @@ def deterministic_profile_synthesis(
                 f"{eq_str} equity share capital (holding company / promoter equity support)."
             )
         else:
-            stance = ("Equity-dominant" if lookup.get("debt_equity", 1) < 0.5
-                      else "Leveraged" if lookup.get("debt_equity", 0) >= 0 else "Negative net worth")
+            stance = ("Negative net worth" if lev_status == POS.NEGATIVE_NET_WORTH
+                      else "Nil equity" if lev_status == POS.NIL_EQUITY
+                      else "Equity-dominant" if (de_val is not None and de_val < 0.5)
+                      else "Leveraged")
             financing_text = (
                 f"{stance}. Total equity of {eq_str} against total borrowings of {borr_str} "
                 f"(debt-equity ratio: {de_str})."
@@ -502,7 +504,11 @@ def build_business_profile(
     passages_block, citations = assemble_evidence_passages(disclosure_rows)
 
     # Format grounded figures block for prompt
-    grounded_lines = [f"- {f.label}: {f.display} (Raw: {f.value:,.2f} {f.unit})" for f in figures]
+    grounded_lines = [
+        f"- {f.label}: {f.display} (Raw: {f.value:,.2f} {f.unit})" if f.value is not None
+        else f"- {f.label}: {f.display} (undefined - do not quote a numeric ratio)"
+        for f in figures
+    ]
     grounded_block = (
         "GROUNDED AUDITED FIGURES:\n" + "\n".join(grounded_lines)
         if grounded_lines else "GROUNDED AUDITED FIGURES: (None bound in filing)"

@@ -1,32 +1,42 @@
-"""HTTP clients for the embedding and generation endpoints.
+"""HTTP client for the generation endpoint (OpenAI-compatible `/v1/chat/completions`).
 
-Deliberately built on `urllib` rather than an SDK. Both services speak the
-OpenAI-compatible shape, the calls are two POSTs, and the gateway already has
-enough dependencies — an SDK here would add a version to manage for no
-capability this mode uses.
+Built on `urllib` on purpose: this mode makes one kind of call, and an SDK would
+add a dependency to manage for no capability it uses.
 
 FAILURE IS LOUD AND SPECIFIC
 ---------------------------
-Every failure raises `EndpointError` carrying which endpoint failed and why, and
-the caller turns that into a 503 with that text. This matters more than usual on
-this mode: the deterministic path answers with no model at all, so "the LLM is
-down" must never be reported as "the filings do not say" — those are opposite
-statements about the entity and they must never be confusable.
+Every failure raises `EndpointError` naming what failed and why. Callers (the
+narrative blocks) catch it and fall back to the deterministic path, logging the
+reason - so "the model was down" is never confusable with "the model said nothing".
+
+THE API KEY NEVER LEAVES THIS FILE
+----------------------------------
+It is attached as an `Authorization` header and nowhere else. Error details are
+built from status codes and exception *types* - never from request headers or the
+server's response body - and every message passes through `_redact` as a final
+guard before it can reach a log line, an exception or an HTTP response.
 """
 
 from __future__ import annotations
 
 import json
-import os
+import socket
+import time
 import urllib.error
 import urllib.request
-from typing import Any, Iterator
+from typing import Any
 
 from . import config as CFG
 
+# Transient: worth retrying. A 4xx other than 408/429 means the request itself is
+# wrong (bad key, bad model) and repeating it cannot help.
+_RETRY_STATUS = frozenset({408, 429, 500, 502, 503, 504})
+_BACKOFF_SECONDS = 0.5
+_PROBE_TIMEOUT_SECONDS = 5.0
+
 
 class EndpointError(RuntimeError):
-    """A model endpoint failed. Carries text fit to show an operator."""
+    """The generation endpoint failed. Carries text fit to show an operator."""
 
     def __init__(self, what: str, detail: str):
         self.what = what
@@ -34,175 +44,91 @@ class EndpointError(RuntimeError):
         super().__init__(f"{what}: {detail}")
 
 
-def _generation_headers() -> dict[str, str]:
-    """Headers for the GENERATION endpoint only.
-
-    That server authenticates; the embedding and reranker servers are separate
-    hosts on the same network and neither asks for a key, so the header is not
-    sent to them -- an unexpected bearer token is a thing a server is entitled to
-    reject. The key is omitted entirely when unset rather than sent empty, which
-    is what the other modes already do (see agent._make_llm_client).
-
-    Without this the whole retrieval path failed with "unreachable
-    (Unauthorized)": the diagnostics still answered, so the mode looked healthy,
-    while every narrative question 401'd.
-    """
-    headers = {"Content-Type": "application/json"}
-    key = (os.environ.get("GENERATION_API_KEY") or "").strip()
+def _fail(settings: CFG.Settings, detail: str) -> EndpointError:
+    key = settings.llm_api_key
     if key:
-        headers["Authorization"] = f"Bearer {key}"
+        detail = detail.replace(key, "***")
+    return EndpointError("generation endpoint", detail)
+
+
+def _headers(settings: CFG.Settings) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if settings.llm_api_key:
+        headers["Authorization"] = f"Bearer {settings.llm_api_key}"
     return headers
 
 
-def _post(url: str, payload: dict, timeout: float,
-          headers: dict[str, str] | None = None) -> dict:
+def _post_once(settings: CFG.Settings, payload: dict, timeout: float) -> dict:
     request = urllib.request.Request(
-        url, data=json.dumps(payload).encode("utf-8"),
-        headers=headers or {"Content-Type": "application/json"}, method="POST")
+        f"{settings.llm_url}/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=_headers(settings), method="POST")
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.load(response)
 
 
-def embed(text: str) -> list[float]:
-    """One query embedding from the bge-m3 endpoint.
-
-    The corpus vectors were built with bge-m3 at 1024 dimensions, so this must
-    stay the same model: an embedding from a different model is not merely
-    worse, it is meaningless against these vectors. The dimension is checked for
-    exactly that reason.
-    """
-    settings = CFG.load()
-    if not settings.embedding_url:
-        raise EndpointError("embedding endpoint", "not configured (set EMBEDDING_BASE_URL)")
-    try:
-        body = _post(f"{settings.embedding_url.rstrip('/')}/v1/embeddings",
-                     {"model": settings.embedding_model, "input": text},
-                     settings.embedding_timeout)
-        vector = body["data"][0]["embedding"]
-    except urllib.error.URLError as exc:
-        raise EndpointError("embedding endpoint", f"unreachable ({exc.reason})") from exc
-    except (KeyError, IndexError, ValueError) as exc:
-        raise EndpointError("embedding endpoint", f"unexpected response ({exc})") from exc
-
-    if len(vector) != 1024:
-        raise EndpointError(
-            "embedding endpoint",
-            f"returned {len(vector)} dimensions; the corpus vectors are 1024-dim bge-m3, "
-            f"so this model cannot be compared against them")
-    return vector
-
-
-def embed_many(texts: list[str]) -> list[list[float]]:
-    """Embed several query phrasings in ONE round trip.
-
-    Expansion multiplies the number of vectors needed per question, and issuing
-    them one at a time turned a 0.3s stage into a multi-second one for no reason
-    — the endpoint accepts a list. Same dimension check as `embed`, applied to
-    the first vector.
-    """
-    if not texts:
-        return []
-    settings = CFG.load()
-    if not settings.embedding_url:
-        raise EndpointError("embedding endpoint", "not configured (set EMBEDDING_BASE_URL)")
-    try:
-        body = _post(f"{settings.embedding_url.rstrip('/')}/v1/embeddings",
-                     {"model": settings.embedding_model, "input": texts},
-                     settings.embedding_timeout)
-        # `data` is not guaranteed to come back in request order, so it is
-        # re-sorted by the index the API returns rather than trusted as-is.
-        rows = sorted(body["data"], key=lambda d: d.get("index", 0))
-        vectors = [r["embedding"] for r in rows]
-    except urllib.error.URLError as exc:
-        raise EndpointError("embedding endpoint", f"unreachable ({exc.reason})") from exc
-    except (KeyError, IndexError, ValueError) as exc:
-        raise EndpointError("embedding endpoint", f"unexpected response ({exc})") from exc
-
-    if vectors and len(vectors[0]) != 1024:
-        raise EndpointError(
-            "embedding endpoint",
-            f"returned {len(vectors[0])} dimensions; the corpus vectors are 1024-dim "
-            f"bge-m3, so this model cannot be compared against them")
-    return vectors
-
-
-def to_pgvector(vector: list[float]) -> str:
-    """pgvector's text input form. Cast `::vector` at the call site."""
-    return "[" + ",".join(f"{v:.7f}" for v in vector) + "]"
-
-
 def chat(messages: list[dict], *, max_tokens: int | None = None,
-         temperature: float = 0.0) -> str:
-    """One completion. Temperature 0 by default — on an audit surface the same
-    question and the same evidence should give the same answer."""
-    settings = CFG.load()
-    if not settings.llm_url:
-        raise EndpointError("generation endpoint", "not configured (set GENERATION_BASE_URL)")
-    try:
-        body = _post(
-            f"{settings.llm_url.rstrip('/')}/v1/chat/completions",
-            {"model": settings.llm_model, "messages": messages,
-             "max_tokens": max_tokens or settings.llm_max_tokens,
-             "temperature": temperature},
-            settings.llm_timeout, headers=_generation_headers())
-        return body["choices"][0]["message"]["content"] or ""
-    except urllib.error.URLError as exc:
-        raise EndpointError("generation endpoint", f"unreachable ({exc.reason})") from exc
-    except (KeyError, IndexError, ValueError) as exc:
-        raise EndpointError("generation endpoint", f"unexpected response ({exc})") from exc
+         temperature: float = 0.0, timeout: float | None = None,
+         retries: int | None = None) -> str:
+    """One completion. Temperature 0 by default: on an audit surface the same
+    evidence should give the same answer.
 
-
-def chat_stream(messages: list[dict], *, max_tokens: int | None = None,
-                temperature: float = 0.0) -> Iterator[str]:
-    """Token deltas as the model produces them.
-
-    THIS is where streaming is real. The deterministic path has nothing to
-    stream because its answer is computed whole; a generated answer genuinely
-    arrives a piece at a time, so the pieces are passed straight through.
+    Retries transient failures (timeouts, connection errors, 408/429/5xx) with
+    exponential backoff; anything else fails immediately. A completion cut off at
+    `max_tokens` raises rather than returning half a JSON document.
     """
     settings = CFG.load()
     if not settings.llm_url:
-        raise EndpointError("generation endpoint", "not configured (set GENERATION_BASE_URL)")
+        raise _fail(settings, "not configured (set GENERATION_BASE_URL)")
+    if not settings.llm_model:
+        raise _fail(settings, "not configured (set GENERATION_MODEL)")
 
     payload = {"model": settings.llm_model, "messages": messages,
                "max_tokens": max_tokens or settings.llm_max_tokens,
-               "temperature": temperature, "stream": True}
-    request = urllib.request.Request(
-        f"{settings.llm_url.rstrip('/')}/v1/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers=_generation_headers(), method="POST")
+               "temperature": temperature}
 
-    try:
-        with urllib.request.urlopen(request, timeout=settings.llm_timeout) as response:
-            for raw in response:
-                line = raw.decode("utf-8", "replace").strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    return
-                try:
-                    delta = json.loads(data)["choices"][0].get("delta", {})
-                except (KeyError, IndexError, ValueError):
-                    continue
-                piece = delta.get("content")
-                if piece:
-                    yield piece
-    except urllib.error.URLError as exc:
-        raise EndpointError("generation endpoint", f"unreachable ({exc.reason})") from exc
+    attempts = (settings.llm_retries if retries is None else retries) + 1
+    wait = settings.llm_timeout if timeout is None else timeout
+    for attempt in range(1, attempts + 1):
+        try:
+            body = _post_once(settings, payload, wait)
+        except urllib.error.HTTPError as exc:
+            if exc.code in _RETRY_STATUS and attempt < attempts:
+                time.sleep(_BACKOFF_SECONDS * 2 ** (attempt - 1))
+                continue
+            hint = " - check GENERATION_API_KEY" if exc.code in (401, 403) else ""
+            raise _fail(settings, f"HTTP {exc.code}{hint}") from None
+        except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError) as exc:
+            if attempt < attempts:
+                time.sleep(_BACKOFF_SECONDS * 2 ** (attempt - 1))
+                continue
+            reason = getattr(exc, "reason", exc)
+            raise _fail(settings, f"unreachable ({type(reason).__name__})") from None
+        except ValueError:
+            raise _fail(settings, "response was not valid JSON") from None
+
+        try:
+            choice = body["choices"][0]
+            content = choice["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            raise _fail(settings, "unexpected response shape") from None
+        if choice.get("finish_reason") == "length":
+            raise _fail(settings, f"output truncated at max_tokens={payload['max_tokens']}")
+        return content
+
+    raise _fail(settings, "exhausted retries")
 
 
 def probe() -> dict[str, Any]:
-    """Reachability of both endpoints, for the health route. Never raises."""
-    out: dict[str, Any] = {}
+    """Reachability of the generation endpoint, for the health route. Never raises
+    and never returns more than a reachable flag and a redacted reason."""
     try:
-        embed("ping")
-        out["embedding"] = {"reachable": True, "reason": None}
+        # A health check must answer quickly whether or not the model does: a short
+        # timeout and no retries, unlike a report build, which waits for the model.
+        chat([{"role": "user", "content": "Reply with exactly: ok"}], max_tokens=16,
+             timeout=_PROBE_TIMEOUT_SECONDS, retries=0)
+        return {"reachable": True, "reason": None}
+    except EndpointError as exc:
+        return {"reachable": False, "reason": exc.detail}
     except Exception as exc:  # noqa: BLE001
-        out["embedding"] = {"reachable": False, "reason": str(exc)}
-    try:
-        chat([{"role": "user", "content": "ok"}], max_tokens=4)
-        out["generation"] = {"reachable": True, "reason": None}
-    except Exception as exc:  # noqa: BLE001
-        out["generation"] = {"reachable": False, "reason": str(exc)}
-    return out
+        return {"reachable": False, "reason": type(exc).__name__}

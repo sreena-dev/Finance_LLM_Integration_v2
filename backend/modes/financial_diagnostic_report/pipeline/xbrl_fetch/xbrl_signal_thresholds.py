@@ -17,8 +17,10 @@ an absolute rupee figure, which would mean one thing for a small entity and anot
 a large PSU.
 """
 from __future__ import annotations
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from typing import Any
+
+from . import xbrl_threshold_store as _STORE
 
 VERSION = "xbrl-signal-thresholds-1.0.0"
 
@@ -104,6 +106,11 @@ _T: tuple[Threshold, ...] = (
               "More than 60% of a period's ROE attributable to the equity-multiplier "
               "term of the 3-stage DuPont decomposition, rather than margin or turnover."),
 
+    # ---- RC04 leverage screen (Block 6 signal SIG_LEVERAGE_HIGH) ---------------------
+    Threshold("leverage_de_ceiling", 1.0, "x",
+              "Debt-to-equity above 1.0x raises the RC04 leverage lead. Undefined on "
+              "negative/nil equity, where borrowings alone raise SIG_NEGATIVE_NET_WORTH."),
+
     # ---- S14 short-term funding of long-term assets ----------------------------------
     Threshold("short_term_debt_share", 0.40, "ratio",
               "Short-term borrowings exceeding 40% of total borrowings."),
@@ -166,11 +173,21 @@ if len(_BY_KEY) != len(_T):
     raise RuntimeError("duplicate threshold key in xbrl_signal_thresholds")
 
 
+def default_value(key: str) -> float:
+    """The value written in this file, ignoring any auditor override."""
+    return _BY_KEY[key].value
+
+
 def get(key: str) -> Threshold:
+    """The threshold in force: the auditor's override (set from the UI, see
+    xbrl_threshold_store) if there is one, else the default declared above. The returned
+    object is a copy carrying the effective value; the declared defaults are never mutated."""
     try:
-        return _BY_KEY[key]
+        base = _BY_KEY[key]
     except KeyError:
         raise KeyError(f"no threshold registered for {key!r}") from None
+    ov = _STORE.override(f"signal.{key}")
+    return base if ov is None else replace(base, value=ov)
 
 
 def all_thresholds() -> tuple[Threshold, ...]:

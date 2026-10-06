@@ -1,147 +1,19 @@
 """Request/response contracts for the Financial Diagnostic Report mode.
 
-Defined here rather than added to `app/schemas.py` because this mode's query is
-not the shared chat shape: it is scoped to an entity the operator selected, and
-its response carries the provenance of the read and the classified intent, both
-of which the generic `QueryResponse` has nowhere to put. Keeping them local also
-means this mode can evolve its contract without touching a file three other
-modes depend on.
+This mode answers only from as_db, the hosted Postgres of parsed MCA XBRL
+filings. Models are scoped per filing (`doc_id`), not per multi-year entity:
+as_db's multi-filing CINs are same-year standalone/consolidated pairs, not a
+history.
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
-
-
-def _normalise(value: str) -> str:
-    """Strip trailing whitespace per line, not just from the whole string.
-
-    Same normalisation, and for the same measured reason, as
-    `app.schemas.QueryRequest`: an invisible space before a newline survives
-    `.strip()` and changes downstream tokenisation. This path has no LLM in it,
-    but the text is matched against derived vocabularies where a stray token is
-    equally capable of shifting a score across the margin.
-    """
-    return "\n".join(line.rstrip() for line in value.splitlines()).strip()
-
-
-class FDRQueryRequest(BaseModel):
-    """One question about one entity.
-
-    `entity_id` is required and is never inferred from the question text. The UI
-    has an entity picker, so the entity is a selection rather than a guess —
-    which removes the entire class of failure where one entity's figures are
-    served under another's name.
-    """
-
-    entity_id: str = Field(..., min_length=1, max_length=200)
-    query: str = Field(..., min_length=1, max_length=2000)
-    # Bypass the in-process latency cache and re-read the filings. For the case
-    # where the corpus changed under a long-lived process.
-    refresh: bool = False
-
-    @field_validator("query")
-    @classmethod
-    def _clean_query(cls, value: str) -> str:
-        return _normalise(value)
-
-    @field_validator("entity_id")
-    @classmethod
-    def _clean_entity(cls, value: str) -> str:
-        return value.strip()
-
-
-class FDRQueryResponse(BaseModel):
-    mode: str
-    entity_id: str
-    query: str
-    # overview | cluster | signal | figure | coverage | blocked
-    # | ambiguous | refused | unsupported
-    kind: str
-    answer: str
-    rows: list[dict] = []
-    # Where the figures came from and how old the read is. Present on every
-    # answer that touched the corpus, so a stale read is visible in the response
-    # rather than inferred from its absence.
-    provenance: dict = {}
-    # Numbered sources behind a generated answer, each with the filing, the
-    # chunk it came from, its page and its rerank score. Empty on the
-    # deterministic path, which cites the statement inside its own prose.
-    sources: list[dict] = []
-    # The classified subject, its closed reason code, and the evidence it was
-    # read from — so a wrong answer can be diagnosed as a wrong reading rather
-    # than guessed at.
-    intent: dict = {}
-    elapsed_seconds: float = 0.0
-
-
-class FDRReportRequest(BaseModel):
-    """Build the report for one entity.
-
-    Deliberately smaller than `FDRQueryRequest`: a report has no question in it.
-    The entity is the whole input, and it is a selection rather than free text.
-    """
-
-    entity_id: str = Field(..., min_length=1, max_length=200)
-    refresh: bool = False
-
-    @field_validator("entity_id")
-    @classmethod
-    def _clean_entity(cls, value: str) -> str:
-        return value.strip()
-
-
-class FDRReportBlock(BaseModel):
-    """One block. `payload` is shaped by the block's own builder, so it is left
-    open rather than modelled per block — the alternative is a schema change in
-    this file every time a block gains a field, for no validation gained."""
-
-    id: str
-    number: int
-    title: str
-    payload: dict | None = None
-    report_version: str = ""
-    # Present only when the block failed. The report still returns; this section
-    # says what went wrong in its place.
-    error: str = ""
-
-
-class FDRReportResponse(BaseModel):
-    mode: str
-    entity_id: str
-    blocks: list[FDRReportBlock] = []
-    provenance: dict = {}
-    versions: dict = {}
-    report_version: str = ""
-    elapsed_seconds: float = 0.0
-
-
-class FDRReportManifestResponse(BaseModel):
-    blocks: list[dict] = []
-    report_version: str = ""
-
-
-class FDREntity(BaseModel):
-    entity_id: str
-    filings: int
-    first_fy: int | None = None
-    last_fy: int | None = None
-    first_fy_label: str = ""
-    last_fy_label: str = ""
-    trend_capable: bool = False
-    min_trend_years: int = 3
-
-
-class FDREntitiesResponse(BaseModel):
-    entities: list[FDREntity]
-    count: int
-
+from pydantic import BaseModel
 
 # --- XBRL direct-fetch path (as_db) -----------------------------------------------
-# Separate models from the fs_db-backed ones above on purpose: an XbrlEntity is one
-# FILING (`doc_id`), not one entity with a multi-year filing count, because as_db's
-# 48 multi-filing CINs are same-year standalone/consolidated pairs, not a history —
-# collapsing them the way FDREntity does would hide a real choice.
+# An XbrlEntity is one FILING (`doc_id`), not one entity with a multi-year
+# filing count: as_db's 48 multi-filing CINs are same-year
+# standalone/consolidated pairs, not a history.
 
 class XbrlEntity(BaseModel):
     doc_id: str
@@ -195,7 +67,7 @@ class XbrlProfileField(BaseModel):
 class XbrlGroundedFigure(BaseModel):
     id: str
     label: str
-    value: float
+    value: float | None = None   # None: undefined (e.g. D/E on negative equity), not zero
     display: str
     unit: str
 
@@ -395,3 +267,39 @@ class XbrlTrendsResponse(BaseModel):
     reason: str = ""
 
 
+
+
+# --- Auditor-tunable thresholds ---------------------------------------------------------
+
+class XbrlThresholdItem(BaseModel):
+    key: str
+    label: str
+    group: str
+    used_in: str
+    unit: str
+    control: str           # "slider" | "stepper"
+    min: float
+    max: float
+    step: float
+    default: float
+    value: float
+    overridden: bool
+    hint: str = ""
+
+
+class XbrlThresholdsResponse(BaseModel):
+    version: int
+    updated_at: str | None = None
+    updated_by: str | None = None
+    groups: list[str]
+    items: list[XbrlThresholdItem]
+    overridden_count: int
+
+
+class XbrlThresholdUpdate(BaseModel):
+    # key -> value in the units the UI shows (e.g. 25 for 25 %), never the code's units.
+    values: dict[str, float]
+
+
+class XbrlThresholdReset(BaseModel):
+    keys: list[str] | None = None    # None / empty -> reset everything

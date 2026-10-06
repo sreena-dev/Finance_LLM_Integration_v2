@@ -12,6 +12,8 @@ from typing import Any
 
 from .xbrl_risk_text import _format_inr, _extract_qualification_snippet
 from . import xbrl_signal_thresholds as TH
+from . import xbrl_threshold_registry as RT
+from . import xbrl_position as POS
 
 # Substantive qualification/reservation language — required before ANY disclosure
 # passage is treated as an auditor qualification, regardless of which concept it
@@ -102,7 +104,15 @@ def detect_signals_and_metrics(
 
     wc_net = (ca - cl) if (ca is not None and cl is not None) else None
     current_ratio = (ca / cl) if (ca is not None and cl is not None and cl > 0) else None
-    de_ratio = (total_borr / eq) if eq > 0 else (0.0 if total_borr == 0 else None)
+    # Leverage status comes from the shared helper, from the filing's OWN figures: an
+    # absent Equity or borrowings fact is "missing", not a zero that would read as a
+    # debt-free or zero-equity balance sheet.
+    _borr_concepts = ("BorrowingsCurrent", "BorrowingsNoncurrent")
+    lev = POS.classify_leverage(
+        facts.get("Equity"),
+        total_borr if any(c in facts for c in _borr_concepts) else None,
+    )
+    de_ratio = lev.de_ratio
     cwip_ratio = (cwip / (ppe + cwip)) if (ppe + cwip) > 0 else 0.0
     inv_ratio = (total_inv / assets) if (assets is not None and assets > 0) else 0.0
 
@@ -118,6 +128,7 @@ def detect_signals_and_metrics(
         "dda": dda, "impairment": impairment,
         "equity": eq, "borrowings": total_borr, "borrowings_curr": borr_curr,
         "borrowings_noncurr": borr_noncurr, "de_ratio": de_ratio, "fin_costs": fin_costs,
+        "leverage_status": lev.status, "de_display": lev.de_display(),
         "other_income": other_income, "pbt": pbt, "provisions": provisions, "grants": grants,
         "total_income": total_income, "grant_share": grant_share,
     }
@@ -155,44 +166,57 @@ def detect_signals_and_metrics(
     # Signal 3: Revenue & Receivables Decoupling / Overconcentration
     if rev is not None and rev > 0 and trade_rec > 0:
         rec_rev_ratio = trade_rec / rev
-        if rec_rev_ratio > 0.25:  # Over 90 days outstanding equivalent
+        if rec_rev_ratio > RT.value("risk.rec_rev_flag"):  # Over 90 days outstanding equivalent
             signals.append({
                 "id": "SIG_REC_CONCENTRATION",
                 "cluster_id": "RC02",
                 "signal": f"Trade receivables of {_format_inr(trade_rec)} constitute {rec_rev_ratio:.1%} of revenue",
                 "source_trace": "financial_facts: TradeReceivablesCurrent vs RevenueFromOperations",
-                "severity": "high" if rec_rev_ratio > 0.40 else "medium",
+                "severity": "high" if rec_rev_ratio > RT.value("risk.rec_rev_high") else "medium",
             })
 
     # Signal 4: Capital Work-in-Progress Concentration
-    if cwip > 0 and cwip_ratio > 0.20:
+    if cwip > 0 and cwip_ratio > RT.value("risk.cwip_flag"):
         signals.append({
             "id": "SIG_CWIP_CONCENTRATION",
             "cluster_id": "RC03",
             "signal": f"Capital Work-in-Progress of {_format_inr(cwip)} represents {cwip_ratio:.1%} of total capital assets",
             "source_trace": "financial_facts: CapitalWorkInProgress vs PropertyPlantAndEquipment",
-            "severity": "high" if cwip_ratio > 0.40 else "medium",
+            "severity": "high" if cwip_ratio > RT.value("risk.cwip_high") else "medium",
         })
 
     # Signal 4b: Investment Portfolio Concentration / Valuation Risk (RC03)
     if total_inv > 0 and assets and assets > 0:
-        if inv_ratio > 0.30 or (total_inv > 1e8 and ppe == 0 and cwip == 0):
+        if inv_ratio > RT.value("risk.inv_flag") or (total_inv > RT.value("risk.inv_min_nonoperating") and ppe == 0 and cwip == 0):
             signals.append({
                 "id": "SIG_INVESTMENT_CONCENTRATION",
                 "cluster_id": "RC03",
                 "signal": f"Investment portfolio of {_format_inr(total_inv)} represents {inv_ratio:.1%} of total assets ({_format_inr(assets)})",
                 "source_trace": "financial_facts: NoncurrentInvestments/CurrentInvestments vs Assets",
-                "severity": "high" if inv_ratio > 0.50 else "medium",
+                "severity": "high" if inv_ratio > RT.value("risk.inv_high") else "medium",
             })
 
     # Signal 5: Leverage & Debt Exposure
-    if total_borr > 0 and de_ratio is not None and de_ratio > 1.0:
+    if total_borr > 0 and lev.impaired_equity:
+        # D/E is undefined, but borrowings against negative/nil net worth is a stronger
+        # solvency lead than any D/E above 1.0x - it must not fall silent just because
+        # the ratio cannot be computed.
+        _word = "Negative net worth" if lev.status == POS.NEGATIVE_NET_WORTH else "Nil equity"
+        signals.append({
+            "id": "SIG_NEGATIVE_NET_WORTH",
+            "cluster_id": "RC04",
+            "signal": (f"{_word}: equity of {_format_inr(eq)} against total borrowings of "
+                       f"{_format_inr(total_borr)} (D/E not meaningful)"),
+            "source_trace": "financial_facts: Equity, BorrowingsCurrent + BorrowingsNoncurrent",
+            "severity": "high",
+        })
+    elif total_borr > 0 and de_ratio is not None and de_ratio > TH.get('leverage_de_ceiling').value:
         signals.append({
             "id": "SIG_LEVERAGE_HIGH",
             "cluster_id": "RC04",
             "signal": f"Elevated leverage with total borrowings of {_format_inr(total_borr)} (D/E ratio: {de_ratio:.2f}x)",
             "source_trace": "financial_facts: Borrowings vs Equity",
-            "severity": "high" if de_ratio > 2.0 else "medium",
+            "severity": "high" if de_ratio > RT.value("risk.de_high") else "medium",
         })
     elif total_borr == 0 and eq > 0:
         # Debt-free mitigating signal
@@ -208,13 +232,13 @@ def detect_signals_and_metrics(
     if other_income > 0 and pbt is not None:
         if pbt > 0:
             oi_ratio = other_income / pbt
-            if oi_ratio > 0.30:
+            if oi_ratio > RT.value("risk.oi_flag"):
                 signals.append({
                     "id": "SIG_OTHER_INCOME_HIGH",
                     "cluster_id": "RC05",
                     "signal": f"Other income of {_format_inr(other_income)} represents {oi_ratio:.1%} of profit before tax ({_format_inr(pbt)})",
                     "source_trace": "financial_facts: OtherIncome vs ProfitBeforeTax",
-                    "severity": "high" if oi_ratio > 0.50 else "medium",
+                    "severity": "high" if oi_ratio > RT.value("risk.oi_high") else "medium",
                 })
         elif pbt < 0:
             op_loss = pbt - other_income

@@ -9,6 +9,8 @@ from typing import Any
 
 from . import xbrl_risk_concepts as C
 from . import xbrl_signal_thresholds as TH
+from . import xbrl_threshold_registry as RT
+from . import xbrl_position as POS
 from .xbrl_risk_text import _format_inr
 
 
@@ -43,7 +45,7 @@ def _rc02_metrics(lookup: dict[str, Any]) -> list[dict[str, str]]:
         {"label": "Trade receivables", "value": _inr_or_na(trade_rec)},
         {"label": "Revenue from operations", "value": _inr_or_na(rev)},
         {"label": "Receivables as share of revenue", "value": f"{rec_rev_ratio:.1%}" if rec_rev_ratio is not None else "n/a"},
-        {"label": "Threshold", "value": ">25%"},
+        {"label": "Threshold", "value": f">{RT.value('risk.rec_rev_flag') * 100:g}%"},
     ]
 
 
@@ -59,8 +61,27 @@ def _rc03_metrics(lookup: dict[str, Any]) -> list[dict[str, str]]:
         {"label": "CWIP share of capital assets (PPE + CWIP)", "value": f"{cwip_ratio:.1%}" if cwip_ratio is not None else "n/a"},
         {"label": "Investment portfolio", "value": _inr_or_na(total_inv)},
         {"label": "Investments share of total assets", "value": f"{inv_ratio:.1%}" if inv_ratio is not None else "n/a"},
-        {"label": "Thresholds", "value": "CWIP >20% · Investments >30%"},
+        {"label": "Thresholds", "value": f"CWIP >{RT.value('risk.cwip_flag') * 100:g}% · Investments >{RT.value('risk.inv_flag') * 100:g}%"},
     ]
+
+
+def unraised_reason(cid: str, lookup: dict[str, Any]) -> str:
+    """Why a cluster was not raised. RC04's wording is built from the filing's own
+    leverage figures - a fixed sentence asserting "conservative leverage / nil
+    borrowings" is only ever true for some filings, and a risk report must not say
+    it for the others."""
+    if cid != "RC04":
+        return C.UNRAISED_REASONS.get(cid, "No contributing anomaly signals detected in reported figures or disclosures.")
+    status = lookup.get("leverage_status")
+    if status == POS.MISSING:
+        return ("Not assessed: equity or borrowings were not reported in the filing's tagged "
+                "facts, so leverage could not be evaluated.")
+    de = lookup.get("de_ratio")
+    if status == POS.OK and de is not None:
+        return (f"Leverage signal not triggered: total borrowings of {_format_inr(lookup.get('borrowings'))} "
+                f"against equity of {_format_inr(lookup.get('equity'))} give a debt-to-equity ratio of "
+                f"{de:.2f}x, within the {TH.get('leverage_de_ceiling').value:.2f}x screening threshold.")
+    return C.UNRAISED_REASONS["RC04"]
 
 
 def _rc04_metrics(lookup: dict[str, Any]) -> list[dict[str, str]]:
@@ -71,8 +92,8 @@ def _rc04_metrics(lookup: dict[str, Any]) -> list[dict[str, str]]:
     return [
         {"label": "Total borrowings", "value": _inr_or_na(total_borr)},
         {"label": "Equity capital", "value": _inr_or_na(eq)},
-        {"label": "Debt-to-equity ratio", "value": f"{de_ratio:.2f}x" if de_ratio is not None else "n/a"},
-        {"label": "Threshold", "value": ">1.00x"},
+        {"label": "Debt-to-equity ratio", "value": lookup.get("de_display") or "n/a"},
+        {"label": "Threshold", "value": f">{TH.get('leverage_de_ceiling').value:.2f}x"},
     ]
 
 
@@ -89,7 +110,7 @@ def _rc05_metrics(lookup: dict[str, Any]) -> list[dict[str, str]]:
         {"label": "Profit before tax", "value": _inr_or_na(pbt)},
         {"label": "Other income share of PBT", "value": f"{oi_ratio:.1%}" if oi_ratio is not None else "n/a"},
         {"label": "Provisions (current + non-current)", "value": _inr_or_na(provisions)},
-        {"label": "Threshold", "value": ">30%"},
+        {"label": "Threshold", "value": f">{RT.value('risk.oi_flag') * 100:g}%"},
     ]
 
 
@@ -247,7 +268,7 @@ def deterministic_risk_clusters(
 
     # 3. RC03: Asset and Capitalisation Risk
     s_rc03 = cluster_signals["RC03"]
-    has_inv_risk = any(s["id"] == "SIG_INVESTMENT_CONCENTRATION" for s in s_rc03) or lookup.get("inv_ratio", 0) > 0.30
+    has_inv_risk = any(s["id"] == "SIG_INVESTMENT_CONCENTRATION" for s in s_rc03) or lookup.get("inv_ratio", 0) > RT.value("risk.inv_flag")
     has_cwip_risk = any(s["id"] == "SIG_CWIP_CONCENTRATION" for s in s_rc03) or lookup.get("cwip", 0) > 0
 
     if s_rc03 or has_inv_risk or has_cwip_risk:
@@ -312,8 +333,8 @@ def deterministic_risk_clusters(
                 ],
                 "metrics": _rc03_metrics(lookup),
                 "affected_assertions": list(C.CLUSTER_ASSERTIONS["RC03"]),
-                "inherent_risk": "high" if cwip_val > 1e10 else "medium",
-                "significant_risk": cwip_val > 1e10,
+                "inherent_risk": "high" if cwip_val > RT.value("risk.cwip_significant_amount") else "medium",
+                "significant_risk": cwip_val > RT.value("risk.cwip_significant_amount"),
                 "control_implications": "Verify controls over project milestone inspection, capitalization approvals, and borrowing cost cut-off.",
                 "recommended_response": {
                     "nature": "Physical inspection of project sites and technical milestone audit",
@@ -323,7 +344,7 @@ def deterministic_risk_clusters(
                 "specialist_referral": C.CLUSTER_SPECIALISTS["RC03"],
                 "evidence_request": "Requisition: (1) CWIP ageing schedule by project, (2) Engineers' milestone completion certificates, (3) Board approvals for project cost revisions.",
                 "diagnostic_confidence": "high",
-                "priority_rank": 1 if cwip_val > 1e10 else 3,
+                "priority_rank": 1 if cwip_val > RT.value("risk.cwip_significant_amount") else 3,
                 "priority_reasoning": "High capital commitment in execution phase; requires physical and technical verification.",
             })
 
@@ -364,13 +385,18 @@ def deterministic_risk_clusters(
                 "raised": True,
                 "reason": "",
                 "contributing_signals": [{"signal": s["signal"], "source_trace": s["source_trace"]} for s in s_rc04],
-                "alt_explanations": [
-                    "Leverage is structured via long-term project loans matched to asset life cycles."
-                ],
+                "alt_explanations": (
+                    ["Accumulated losses or sponsor-funded project loans may explain the net-worth "
+                     "position; support from the promoter or government, or a restructuring, may be "
+                     "in place - to be evidenced, not assumed."]
+                    if lookup.get("leverage_status") in (POS.NEGATIVE_NET_WORTH, POS.NIL_EQUITY) else
+                    ["Leverage is structured via long-term project loans matched to asset life cycles."]
+                ),
                 "metrics": _rc04_metrics(lookup),
                 "affected_assertions": list(C.CLUSTER_ASSERTIONS["RC04"]),
                 "inherent_risk": "high",
-                "significant_risk": (lookup.get("de_ratio") or 0) > 1.5,
+                "significant_risk": ((lookup.get("de_ratio") or 0) > RT.value("risk.de_significant")
+                                     or lookup.get("leverage_status") in (POS.NEGATIVE_NET_WORTH, POS.NIL_EQUITY)),
                 "control_implications": "Review treasury controls over debt covenant monitoring, limit sanctions, and debt service escrow accounts.",
                 "recommended_response": {
                     "nature": "Bank loan circularisation and debt covenant compliance audit",
@@ -381,7 +407,11 @@ def deterministic_risk_clusters(
                 "evidence_request": "Requisition: (1) Bank sanction letters, (2) Covenant compliance certificates, (3) Loan repayment schedules for upcoming 24 months.",
                 "diagnostic_confidence": "high",
                 "priority_rank": 2,
-                "priority_reasoning": "Prioritised due to elevated gearing and debt service requirements.",
+                "priority_reasoning": (
+                    "Prioritised because borrowings are outstanding against negative or nil net worth, "
+                    "which D/E cannot express; debt service capacity and covenant position need audit attention."
+                    if lookup.get("leverage_status") in (POS.NEGATIVE_NET_WORTH, POS.NIL_EQUITY) else
+                    "Prioritised due to elevated gearing and debt service requirements."),
             })
 
     # 5. RC05: Estimate and Reporting-Quality Risk
@@ -484,7 +514,7 @@ def deterministic_risk_clusters(
                 "id": cid,
                 "theme": C.CLUSTER_NAMES[cid],
                 "raised": False,
-                "reason": C.UNRAISED_REASONS.get(cid, "No contributing anomaly signals detected in reported figures or disclosures."),
+                "reason": unraised_reason(cid, lookup),
                 "contributing_signals": [],
                 "alt_explanations": [],
                 "metrics": _cluster_metrics(cid, lookup),
@@ -499,7 +529,7 @@ def deterministic_risk_clusters(
                 },
                 "specialist_referral": "None",
                 "evidence_request": "Routine audit lead schedules under standard audit plan.",
-                "diagnostic_confidence": "high",
+                "diagnostic_confidence": "low" if (cid == "RC04" and lookup.get("leverage_status") == POS.MISSING) else "high",
                 "priority_rank": None,
                 "priority_reasoning": "Not raised; financial indicators and disclosures remain within normal operational parameters.",
             })
