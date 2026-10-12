@@ -101,3 +101,22 @@ chats/
 
 # FDR auditor-set threshold overrides (runtime data, per deployment)
 /backend/data/
+
+# Runtime data: sessions, logs, generated output and local databases. These hold
+# client data, wherever the backend happened to be started from; none of it is source.
+**/sessions/
+**/session_logs/
+**/logs/
+**/output/
+**/outputs/
+*.log.*
+*.sqlite
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.db-journal
+*.jsonl
+# backups of .env, whatever their suffix (real credentials)
+.env.bak*
+.env.backup*
